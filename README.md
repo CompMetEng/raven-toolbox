@@ -109,6 +109,12 @@ Optional:
 - **Disable automatic downloads** (air-gapped / conda-only setups): set
   `RAVEN_PYTHON_AUTOFETCH=0`.
 
+**SuppOrth (optional):** homology reconstruction can also start from the consensus
+orthologs of [SuppOrth](https://github.com/fma91/SuppOrth). `hits_from_supporth` reads an
+existing `suppOrth.tsv` and needs nothing extra. `run_supporth` needs the `suppOrth`
+command, which is not downloaded automatically and runs on Linux and macOS:
+`pip install 'git+https://github.com/fma91/SuppOrth.git@stand_alone'`, then `suppOrth install`.
+
 **Windows:** homology reconstruction and the KEGG species model work as-is. To
 *build* the KEGG HMM libraries (needs MAFFT/CD-HIT), use **WSL2**.
 

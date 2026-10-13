@@ -296,6 +296,13 @@ def get_model_from_homology(
         )
     bidirectional, best_hits_only = _strictness_to_flags(strictness)
     validate_hits(hits)
+    if review_identity is not None and hits.attrs.get("source") == "SuppOrth":
+        warnings.warn(
+            "review_identity has no effect on SuppOrth hits: their identity is a placeholder "
+            "of 100, so no reaction is a candidate. Filter on SuppOrth's own identity with "
+            "hits_from_supporth(min_identity=...) instead.",
+            stacklevel=2,
+        )
 
     model_by_id = {m.id: m for m in models}
     model_ids = list(model_by_id)
