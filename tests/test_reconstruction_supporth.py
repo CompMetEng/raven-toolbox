@@ -233,75 +233,142 @@ def test_review_identity_warns(tmp_path):
     assert res.candidates.empty
 
 
+def test_pickle_map_rejected(tmp_path):
+    with pytest.raises(ValueError, match="pickle"):
+        hits_from_supporth(_write(tmp_path), "bug", protein_to_gene=tmp_path / "map.pkl")
+
+
+def test_supported_by_order(tmp_path):
+    rows = [
+        "templateGEM\tbug\ttg1\tng1.1\t1\tB\t0\t0\t1\t60.0\t1e-60\t250.0",
+        "templateGEM\tbug\ttg1\tng1.2\t1\tF\t1\t0\t0\t75.0\t1e-90\t350.0",
+    ]
+    hits = hits_from_supporth(_write(tmp_path, rows), "bug",
+                              protein_to_gene={"ng1.1": "ng1", "ng1.2": "ng1", "tg1": "tg1"})
+    assert set(hits.supported_by) == {"F,B"}
+
+
 # --- run_supporth ----------------------------------------------------------------
+
+def _fasta(path, ids):
+    path.write_text("".join(f">{i} some description\nMKV\n" for i in ids), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def fastas(tmp_path):
+    return {
+        "bug": _fasta(tmp_path / "bug.faa", ["ng1", "ng2"]),
+        "templateGEM": _fasta(tmp_path / "t.faa", ["tg1", "tg2", "tg3"]),
+        "other": _fasta(tmp_path / "o.faa", ["o1", "o2"]),
+    }
+
 
 @pytest.fixture
 def fake_run(monkeypatch):
     """Replace the subprocess call: record the command, write a table, return a code."""
     monkeypatch.setattr(sys, "platform", "linux")
-    calls = {"returncode": 0}
+    calls = {"returncode": 0, "rows": ROWS}
 
     def run(cmd, capture_output, text):
         calls["cmd"] = cmd
         outdir = Path(cmd[cmd.index("-o") + 1])
         outdir.mkdir(parents=True, exist_ok=True)
-        _write(outdir)
-        return subprocess.CompletedProcess(cmd, calls["returncode"], "", "stage broccoli failed")
+        _write(outdir, calls["rows"])
+        return subprocess.CompletedProcess(cmd, calls["returncode"], "log line",
+                                           "stage broccoli failed")
 
     monkeypatch.setattr(supporth_mod.subprocess, "run", run)
     return calls
 
 
-def test_run_supporth_command(fake_run, tmp_path):
-    hits = run_supporth("bug", "bug.faa", ["templateGEM", "other"], ["t.faa", "o.faa"],
-                        tmp_path / "out", tools=["orthofinder"], threads=2,
-                        extra_args=["--resume"], supporth="/opt/suppOrth", min_support=2)
+def test_run_supporth_command(fake_run, fastas, tmp_path):
+    hits = run_supporth("bug", fastas["bug"], ["templateGEM", "other"],
+                        [fastas["templateGEM"], fastas["other"]], tmp_path / "out",
+                        tools=["orthofinder"], threads=2, extra_args=["--resume"],
+                        supporth="/opt/suppOrth", min_support=2)
     cmd = fake_run["cmd"]
-    assert cmd[:5] == ["/opt/suppOrth", "run", "bug.faa", "t.faa", "o.faa"]
+    assert cmd[:5] == ["/opt/suppOrth", "run", str(fastas["bug"]), str(fastas["templateGEM"]),
+                       str(fastas["other"])]
     assert cmd[cmd.index("--labels") + 1] == "bug,templateGEM,other"
     assert cmd[cmd.index("--tools") + 1] == "orthofinder"
     assert cmd[cmd.index("--supportLv") + 1] == "1"  # one tool: support cannot exceed 1
     assert cmd[cmd.index("-t") + 1] == "2"
     assert cmd[-1] == "--resume"
     assert _pairs(hits, "bug", "templateGEM") == {("ng1", "tg1"), ("ng2", "tg2")}
+    assert not (tmp_path / "out" / "prefixed_inputs").exists()
 
 
-def test_run_supporth_default_support(fake_run, tmp_path):
-    run_supporth("bug", "bug.faa", ["templateGEM"], ["t.faa"], tmp_path / "out",
+def test_run_supporth_default_support(fake_run, fastas, tmp_path):
+    run_supporth("bug", fastas["bug"], "templateGEM", fastas["templateGEM"], tmp_path / "out",
                  supporth="suppOrth")
     cmd = fake_run["cmd"]
+    assert cmd[cmd.index("--labels") + 1] == "bug,templateGEM"
     assert cmd[cmd.index("--supportLv") + 1] == "3"
-    assert cmd[cmd.index("--tools") + 1] == "all"
+    assert cmd[cmd.index("--tools") + 1] == "orthofinder,sonicparanoid,broccoli"
 
 
-def test_run_supporth_failure_not_read(fake_run, tmp_path):
+def test_run_supporth_tools_string(fake_run, fastas, tmp_path):
+    run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
+                 tmp_path / "out", tools="orthofinder, broccoli", supporth="suppOrth")
+    cmd = fake_run["cmd"]
+    assert cmd[cmd.index("--tools") + 1] == "orthofinder,broccoli"
+    assert cmd[cmd.index("--supportLv") + 1] == "2"
+
+
+def test_run_supporth_support_above_tools_warns(fake_run, fastas, tmp_path):
+    with pytest.warns(UserWarning, match="more than the 1 predictor"):
+        run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
+                     tmp_path / "out", tools="orthofinder", support_lv=3, supporth="s")
+
+
+def test_run_supporth_shared_ids_prefixed(fake_run, tmp_path):
+    bug = _fasta(tmp_path / "bug.faa", ["ng1", "ng2"])
+    t1 = _fasta(tmp_path / "t1.faa", ["tg1", "tg2"])
+    t2 = _fasta(tmp_path / "t2.faa", ["tg1", "tg2"])  # same species, same gene ids
+    fake_run["rows"] = [
+        "t1\tbug\tt1__tg1\tbug__ng1\t3\tF,S,B\t1\t1\t1\t85.0\t1e-150\t500.0",
+        "t2\tbug\tt2__tg2\tbug__ng2\t2\tF,S\t1\t1\t0\t60.0\t1e-80\t300.0",
+    ]
+    hits = run_supporth("bug", bug, ["t1", "t2"], [t1, t2], tmp_path / "out", supporth="s")
+    inputs = tmp_path / "out" / "prefixed_inputs"
+    assert fake_run["cmd"][2:5] == [str(inputs / f"{x}.faa") for x in ("bug", "t1", "t2")]
+    assert (inputs / "t2.faa").read_text(encoding="utf-8").startswith(">t2__tg1 some description\n")
+    assert _pairs(hits, "bug", "t1") == {("ng1", "tg1")}
+    assert _pairs(hits, "bug", "t2") == {("ng2", "tg2")}
+
+
+def test_run_supporth_failure_not_read(fake_run, fastas, tmp_path):
     fake_run["returncode"] = 1
-    with pytest.raises(RuntimeError, match="exited with code 1.*\n.*stage broccoli failed"):
-        run_supporth("bug", "bug.faa", ["templateGEM"], ["t.faa"], tmp_path / "out",
-                     supporth="suppOrth")
+    with pytest.raises(RuntimeError, match="exited with code 1.*\nlog line\nstage broccoli failed"):
+        run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
+                     tmp_path / "out", supporth="suppOrth")
 
 
-@pytest.mark.parametrize("bad", ["a,b", ".", "x/y", ""])
-def test_run_supporth_bad_labels(fake_run, tmp_path, bad):
+@pytest.mark.parametrize("bad", ["a,b", ".", "x/y", "", " lead"])
+def test_run_supporth_bad_labels(fake_run, fastas, tmp_path, bad):
     with pytest.raises(ValueError, match="cannot be a SuppOrth species label"):
-        run_supporth("bug", "bug.faa", [bad], ["t.faa"], tmp_path / "out", supporth="s")
+        run_supporth("bug", fastas["bug"], [bad], [fastas["templateGEM"]], tmp_path / "out",
+                     supporth="s")
 
 
-def test_run_supporth_duplicate_labels(fake_run, tmp_path):
+def test_run_supporth_duplicate_labels(fake_run, fastas, tmp_path):
     with pytest.raises(ValueError, match="distinct"):
-        run_supporth("bug", "bug.faa", ["bug"], ["t.faa"], tmp_path / "out", supporth="s")
+        run_supporth("bug", fastas["bug"], ["bug"], [fastas["templateGEM"]], tmp_path / "out",
+                     supporth="s")
 
 
-def test_run_supporth_not_found(fake_run, monkeypatch, tmp_path):
+def test_run_supporth_not_found(fake_run, fastas, monkeypatch, tmp_path):
     monkeypatch.delenv("RAVEN_SUPPORTH", raising=False)
     monkeypatch.setattr(supporth_mod.shutil, "which", lambda name: None)
     with pytest.raises(FileNotFoundError, match="suppOrth install"):
-        run_supporth("bug", "bug.faa", ["templateGEM"], ["t.faa"], tmp_path / "out")
+        run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
+                     tmp_path / "out")
 
 
-def test_run_supporth_env_var(fake_run, monkeypatch, tmp_path):
+def test_run_supporth_env_var(fake_run, fastas, monkeypatch, tmp_path):
     monkeypatch.setenv("RAVEN_SUPPORTH", "/env/suppOrth")
-    run_supporth("bug", "bug.faa", ["templateGEM"], ["t.faa"], tmp_path / "out")
+    run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]], tmp_path / "out")
     assert fake_run["cmd"][0] == "/env/suppOrth"
 
 
@@ -309,3 +376,5 @@ def test_run_supporth_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "win32")
     with pytest.raises(NotImplementedError, match="WSL"):
         run_supporth("bug", "bug.faa", ["templateGEM"], ["t.faa"], tmp_path / "out")
+
+

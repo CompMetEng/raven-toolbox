@@ -15,6 +15,7 @@ here imports it. Install it with
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shutil
@@ -34,6 +35,8 @@ _REQUIRED = ["Species1", "Species2", "Protein1", "Protein2", "Lv_support", "Supp
 _ALIGNMENT = ["Identity", "e_val", "Bitscore"]
 _DEFAULT_TOOLS = ("orthofinder", "sonicparanoid", "broccoli")
 _EXTRA_COLUMNS = ["support", "supported_by", "identity_raw", "evalue_raw", "bitscore_raw"]
+_LABEL_ORDER = ("F", "S", "B", "O")
+_PREFIX_SEP = "__"
 _ENV_VAR = "RAVEN_SUPPORTH"
 _INSTALL_HINT = (
     "Install it with `pip install 'git+https://github.com/fma91/SuppOrth.git@stand_alone'` "
@@ -78,6 +81,11 @@ def _load_gene_map(protein_to_gene) -> dict[str, str]:
     if isinstance(protein_to_gene, Mapping):
         return {str(k): str(v) for k, v in protein_to_gene.items()}
     path = Path(protein_to_gene)
+    if path.suffix.lower() in (".pkl", ".pickle"):
+        raise ValueError(
+            f"{path}: pickle maps are not read; pass a dict, a JSON file or a two-column "
+            "tab-separated file."
+        )
     if path.suffix.lower() == ".json":
         with open(path, encoding="utf-8") as fh:
             return {str(k): str(v) for k, v in json.load(fh).items()}
@@ -94,13 +102,10 @@ def _load_gene_map(protein_to_gene) -> dict[str, str]:
 
 
 def _join_labels(labels: pd.Series) -> str:
-    seen: list[str] = []
-    for text in labels:
-        for label in text.split(","):
-            label = label.strip()
-            if label and label not in seen:
-                seen.append(label)
-    return ",".join(seen)
+    """Union of comma-separated predictor labels, in SuppOrth's F, S, B, O order."""
+    found = {lb.strip() for text in labels for lb in text.split(",") if lb.strip()}
+    rank = {lb: i for i, lb in enumerate(_LABEL_ORDER)}
+    return ",".join(sorted(found, key=lambda lb: (rank.get(lb, len(rank)), lb)))
 
 
 def hits_from_supporth(
@@ -131,7 +136,9 @@ def hits_from_supporth(
     Parameters
     ----------
     source
-        Path to ``suppOrth.tsv``, or the table as a DataFrame.
+        Path to ``suppOrth.tsv``, or the table as a DataFrame. A DataFrame read with
+        pandas defaults has protein ids such as ``NA`` turned into NaN; read it with
+        ``keep_default_na=False`` or pass the path.
     organism_id
         SuppOrth species label of the organism to build a model for: the FASTA file
         name without extension, or the ``--labels`` value. It becomes ``from_id`` /
@@ -154,7 +161,9 @@ def hits_from_supporth(
         Protein id to model gene id, as a dict, a JSON file, or a two-column
         tab-separated file (lines starting with ``#`` are skipped). Proteins missing
         from the map keep their id, and their number is reported in a warning. A gene
-        pair takes the highest support over its protein pairs.
+        pair takes the highest support over its protein pairs, the union of their
+        predictors, the highest identity and bitscore, and the lowest e-value; these
+        values can come from different protein pairs.
 
     Returns
     -------
@@ -270,13 +279,45 @@ def _resolve_supporth(supporth: str | os.PathLike | None) -> str:
 def _check_labels(organism_id: str, model_ids: list[str]) -> None:
     ids = [organism_id, *model_ids]
     for label in ids:
-        if not label or label in (".", "..") or any(ch in label for ch in ",/\\"):
+        if (not label or label in (".", "..") or label != label.strip()
+                or any(ch in label for ch in ",/\\")):
             raise ValueError(
                 f"{label!r} cannot be a SuppOrth species label: it must be non-empty, not "
-                "'.' or '..', and contain no ',', '/' or '\\'."
+                "'.' or '..', have no leading or trailing space, and contain no ',', '/' "
+                "or '\\'."
             )
     if len(set(ids)) != len(ids):
         raise ValueError(f"organism_id and model_ids must be distinct, got {ids}")
+
+
+def _open_fasta(path: Path):
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, encoding="utf-8")
+
+
+def _fasta_ids(path: Path) -> list[str]:
+    """Sequence ids as SuppOrth reads them: the first word of each header line."""
+    with _open_fasta(path) as fh:
+        return [line[1:].split(maxsplit=1)[0] for line in fh
+                if line.startswith(">") and line[1:].strip()]
+
+
+def _write_prefixed(src: Path, dest: Path, prefix: str) -> None:
+    with _open_fasta(src) as fin, open(dest, "w", encoding="utf-8") as fout:
+        for line in fin:
+            fout.write(">" + prefix + line[1:] if line.startswith(">") else line)
+
+
+def _strip_prefixes(table: pd.DataFrame) -> pd.DataFrame:
+    """Remove the ``<label>__`` prefix that :func:`run_supporth` added to protein ids."""
+    table = table.copy()
+    for species, protein in (("Species1", "Protein1"), ("Species2", "Protein2")):
+        table[protein] = [
+            p[len(s) + len(_PREFIX_SEP):] if p.startswith(s + _PREFIX_SEP) else p
+            for s, p in zip(table[species], table[protein], strict=True)
+        ]
+    return table
 
 
 def run_supporth(
@@ -309,6 +350,12 @@ def run_supporth(
     appended to the command, for example ``["--resume"]`` or
     ``["--oma", "path/to/Output"]``. Output is written to ``outdir``.
 
+    SuppOrth requires protein ids to be unique over all proteomes. When two FASTA
+    files share an id (for example two templates of the same species), every id is
+    given a ``<label>__`` prefix in copies written to ``outdir/prefixed_inputs``, and
+    the prefix is removed from the returned hits. ``outdir/suppOrth.tsv`` then
+    contains the prefixed ids.
+
     Remaining keyword arguments go to :func:`hits_from_supporth`.
 
     Requires the ``suppOrth`` command, found from ``supporth``, then the
@@ -322,7 +369,7 @@ def run_supporth(
             "a Linux host, and read suppOrth.tsv with hits_from_supporth()."
         )
     organism_id = str(organism_id)
-    model_ids = [str(m) for m in model_ids]
+    model_ids = [model_ids] if isinstance(model_ids, str) else [str(m) for m in model_ids]
     ref_fastas = [ref_fastas] if isinstance(ref_fastas, (str, Path)) else list(ref_fastas)
     if len(model_ids) != len(ref_fastas):
         raise ValueError("model_ids and ref_fastas must have the same length.")
@@ -330,21 +377,54 @@ def run_supporth(
         raise ValueError("At least one template is needed.")
     _check_labels(organism_id, model_ids)
 
-    tool_list = list(_DEFAULT_TOOLS) if tools == "all" else (
-        [tools] if isinstance(tools, str) else list(tools))
+    if isinstance(tools, str):
+        tool_list = [t.strip() for t in tools.split(",") if t.strip()]
+    else:
+        tool_list = [str(t) for t in tools]
+    if tool_list == ["all"]:
+        tool_list = list(_DEFAULT_TOOLS)
     if support_lv is None:
         support_lv = min(3, len(tool_list))
     if not 1 <= support_lv <= 4:
         raise ValueError(f"support_lv must be between 1 and 4, got {support_lv}")
+    if support_lv > len(tool_list) and "--oma" not in extra_args:
+        warnings.warn(
+            f"support_lv={support_lv} is more than the {len(tool_list)} predictor(s) "
+            f"selected; SuppOrth then keeps only pairs above identity_filter "
+            f"({identity_filter} %).",
+            stacklevel=2,
+        )
 
     exe = _resolve_supporth(supporth)
     outdir = Path(outdir)
+    labels = [organism_id, *model_ids]
+    fastas = [Path(fasta), *(Path(f) for f in ref_fastas)]
+
+    # SuppOrth requires protein ids to be unique over all proteomes. Templates of the
+    # same species often share gene ids, so in that case every id gets a
+    # "<label>__" prefix in a copy of its FASTA, and the prefix is removed again below.
+    seen: dict[str, str] = {}
+    shared = set()
+    for label, path in zip(labels, fastas, strict=True):
+        for pid in _fasta_ids(path):
+            if seen.setdefault(pid, label) != label:
+                shared.add(pid)
+    if shared:
+        inputs = outdir / "prefixed_inputs"
+        inputs.mkdir(parents=True, exist_ok=True)
+        prefixed = []
+        for label, path in zip(labels, fastas, strict=True):
+            dest = inputs / f"{label}.faa"
+            _write_prefixed(path, dest, label + _PREFIX_SEP)
+            prefixed.append(dest)
+        fastas = prefixed
+
     cmd = [
         exe, "run",
-        str(fasta), *(str(f) for f in ref_fastas),
-        "--labels", ",".join([organism_id, *model_ids]),
+        *(str(f) for f in fastas),
+        "--labels", ",".join(labels),
         "-o", str(outdir),
-        "--tools", "all" if tools == "all" else ",".join(tool_list),
+        "--tools", ",".join(tool_list),
         "--supportLv", str(support_lv),
         "--identity_filter", str(identity_filter),
         "--alignment", alignment,
@@ -353,9 +433,13 @@ def run_supporth(
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        tail = "\n".join((proc.stderr or proc.stdout).strip().splitlines()[-20:])
+        output = "\n".join(s.strip() for s in (proc.stdout, proc.stderr) if s and s.strip())
+        tail = "\n".join(output.splitlines()[-20:])
         raise RuntimeError(
             f"suppOrth exited with code {proc.returncode}; its output in {outdir} is "
             f"incomplete and was not read.\n{tail}"
         )
-    return hits_from_supporth(outdir / "suppOrth.tsv", organism_id, **reader_kwargs)
+    table = _read_table(outdir / "suppOrth.tsv")
+    if shared:
+        table = _strip_prefixes(table)
+    return hits_from_supporth(table, organism_id, **reader_kwargs)
