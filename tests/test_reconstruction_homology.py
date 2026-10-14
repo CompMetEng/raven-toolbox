@@ -130,6 +130,23 @@ def test_max_evalue_is_exclusive():
     assert "R_single" in {r.id for r in res.model.reactions}
 
 
+def test_evalue_at_the_cutoff_is_parsed_exactly():
+    from raven_toolbox.reconstruction.homology.blast import _parse_tabular
+
+    hits = _parse_tabular("ng1\ttg1\t1e-30\t100\t1000\t300\t100\n", "bug", "templateGEM", "\t")
+    assert hits.evalue.iloc[0] == 1e-30
+
+
+def test_only_genes_in_models_uses_the_template_gene():
+    # A new-organism gene that shares its id with a template gene ("tg2") must not
+    # keep a hit to a gene the template lacks, which would be its best hit.
+    hits = make_ortholog_hits([("tg1", "tg2"), ("tgX", "tg2")], "templateGEM", "bug")
+    hits.loc[hits.to_gene == "tgX", "bitscore"] = 2000.0
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3,
+                                  only_genes_in_models=True)
+    assert res.model.reactions.get_by_id("R_single").gene_reaction_rule == "tg2"
+
+
 def test_one_directional_non_reciprocal():
     # build hits with only the new->old direction present
     hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")

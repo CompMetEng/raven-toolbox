@@ -30,7 +30,10 @@ def _parse_tabular(text: str, from_id: str, to_id: str, sep: str) -> pd.DataFram
     """Parse one BLAST/DIAMOND tabular output into hit rows for one direction."""
     if not text.strip():
         return pd.DataFrame(columns=HIT_COLUMNS)
-    df = pd.read_csv(io.StringIO(text), sep=sep, names=_OUTFMT_FIELDS, dtype={0: str, 1: str})
+    # round_trip parses each number exactly, as RAVEN does: the default parser can read
+    # an e-value printed as 1e-30 as 9.999999999999999e-31, which passes max_evalue=1e-30.
+    df = pd.read_csv(io.StringIO(text), sep=sep, names=_OUTFMT_FIELDS, dtype={0: str, 1: str},
+                     float_precision="round_trip")
     df = df.rename(columns=_FIELD_TO_HIT)
     df["from_id"] = from_id
     df["to_id"] = to_id
@@ -163,6 +166,7 @@ def blast_from_table(source: str | Path | pd.DataFrame) -> pd.DataFrame:
     # Force gene-id columns to str: an all-numeric gene-id column (e.g. Entrez ids)
     # would otherwise be read as int64 and never match the string gene ids in a model.
     df = (source if isinstance(source, pd.DataFrame)
-          else pd.read_csv(source, dtype={"from_gene": str, "to_gene": str}))
+          else pd.read_csv(source, dtype={"from_gene": str, "to_gene": str},
+                           float_precision="round_trip"))
     validate_hits(df)
     return df[HIT_COLUMNS].copy()

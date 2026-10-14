@@ -327,7 +327,9 @@ def get_model_from_homology(
             )
 
     if only_genes_in_models:
-        hits = hits[hits.from_gene.isin(all_model_genes) | hits.to_gene.isin(all_model_genes)]
+        # The template-side gene of each hit, as in RAVEN.
+        template_gene = hits.to_gene.where(hits.from_id == model_for, hits.from_gene)
+        hits = hits[template_gene.isin(all_model_genes)]
 
     ortho = _ortholog_map(
         hits, model_for, model_ids, bidirectional=bidirectional, best_hits_only=best_hits_only,

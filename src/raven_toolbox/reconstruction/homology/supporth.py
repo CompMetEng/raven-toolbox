@@ -52,7 +52,7 @@ def _read_table(source: str | Path | pd.DataFrame) -> pd.DataFrame:
         # Protein ids such as "NA" stay strings; only empty alignment fields become NaN.
         df = pd.read_csv(
             source, sep="\t", keep_default_na=False,
-            na_values={c: [""] for c in _ALIGNMENT},
+            na_values={c: [""] for c in _ALIGNMENT}, float_precision="round_trip",
             dtype={c: str for c in ("Species1", "Species2", "Protein1", "Protein2", "SupportedBy")},
         )
     missing = [c for c in _REQUIRED if c not in df.columns]
