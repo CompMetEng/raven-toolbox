@@ -220,10 +220,16 @@ def test_support_threshold_changes_model(tmp_path):
 
 
 def test_one_to_many_and_strictness(tmp_path):
-    hits = hits_from_supporth(_write(tmp_path), "bug")
+    hits = hits_from_supporth(_write(tmp_path), "bug", protein_to_gene={"sp|P1|NG4_BUG": "ng4"})
     for strictness in (1, 2, 3):
         res = get_model_from_homology([_template()], hits, "bug", strictness=strictness)
         assert res.model.reactions.get_by_id("R_iso").gene_reaction_rule == "ng2"
+
+
+def test_gene_ids_cobra_splits_rejected(tmp_path):
+    hits = hits_from_supporth(_write(tmp_path), "bug")
+    with pytest.raises(ValueError, match=r"cannot be written into a GPR.*sp\|P1\|NG4_BUG"):
+        get_model_from_homology([_template()], hits, "bug")
 
 
 def test_review_identity_warns(tmp_path):
@@ -341,6 +347,20 @@ def test_run_supporth_shared_ids_prefixed(fake_run, tmp_path):
 def test_run_supporth_failure_not_read(fake_run, fastas, tmp_path):
     fake_run["returncode"] = 1
     with pytest.raises(RuntimeError, match="exited with code 1.*\nlog line\nstage broccoli failed"):
+        run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
+                     tmp_path / "out", supporth="suppOrth")
+    assert (tmp_path / "out" / "run_supporth.log").read_text(encoding="utf-8").endswith(
+        "\n\nlog line\nstage broccoli failed\n")
+
+
+def test_run_supporth_failed_stage_kept_in_error(fake_run, fastas, monkeypatch, tmp_path):
+    def run(cmd, capture_output, text):
+        summary = "\n".join(f"summary {i}" for i in range(30))
+        return subprocess.CompletedProcess(
+            cmd, 1, "[2/2] broccoli\n  FAILED after 0.0 min: exit code 2\n" + summary, "")
+
+    monkeypatch.setattr(supporth_mod.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="FAILED after 0.0 min: exit code 2\nsummary 10\n"):
         run_supporth("bug", fastas["bug"], ["templateGEM"], [fastas["templateGEM"]],
                      tmp_path / "out", supporth="suppOrth")
 

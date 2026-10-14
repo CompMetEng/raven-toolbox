@@ -354,7 +354,8 @@ def run_supporth(
     files share an id (for example two templates of the same species), every id is
     given a ``<label>__`` prefix in copies written to ``outdir/prefixed_inputs``, and
     the prefix is removed from the returned hits. ``outdir/suppOrth.tsv`` then
-    contains the prefixed ids.
+    contains the prefixed ids. SuppOrth's console output is written to
+    ``outdir/run_supporth.log``.
 
     Remaining keyword arguments go to :func:`hits_from_supporth`.
 
@@ -432,12 +433,19 @@ def run_supporth(
         *extra_args,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    output = "\n".join(s.strip() for s in (proc.stdout, proc.stderr) if s and s.strip())
+    outdir.mkdir(parents=True, exist_ok=True)
+    log = outdir / "run_supporth.log"
+    log.write_text(" ".join(cmd) + "\n\n" + output + "\n", encoding="utf-8")
     if proc.returncode != 0:
-        output = "\n".join(s.strip() for s in (proc.stdout, proc.stderr) if s and s.strip())
-        tail = "\n".join(output.splitlines()[-20:])
+        lines = output.splitlines()
+        # SuppOrth reports a failed stage before the consensus summary, which can push
+        # it out of the last lines.
+        failed = [ln for ln in lines[:-20] if "FAILED" in ln or ln.startswith("error")]
+        tail = "\n".join(failed + lines[-20:])
         raise RuntimeError(
             f"suppOrth exited with code {proc.returncode}; its output in {outdir} is "
-            f"incomplete and was not read.\n{tail}"
+            f"incomplete and was not read. Full output in {log}.\n{tail}"
         )
     table = _read_table(outdir / "suppOrth.tsv")
     if shared:

@@ -13,6 +13,7 @@ Key behaviour:
 from __future__ import annotations
 
 import ast
+import re
 import warnings
 from dataclasses import dataclass, field
 
@@ -21,6 +22,9 @@ import pandas as pd
 
 from raven_toolbox.manipulation.merge import merge_models
 from raven_toolbox.reconstruction.homology.hits import validate_hits
+
+# cobra's GPR parser splits a gene id at whitespace, parentheses, "|" and "&".
+_GPR_SPLIT = re.compile(r"[\s()|&]")
 
 
 @dataclass
@@ -328,6 +332,15 @@ def get_model_from_homology(
         model_genes=model_genes, max_evalue=max_evalue, min_align_len=min_align_len,
         min_identity=min_identity,
     )
+    mapped = {ng for per in ortho.values() for ngs in per.values() for ng in ngs}
+    unusable = sorted(g for g in mapped if _GPR_SPLIT.search(str(g)))
+    if unusable:
+        raise ValueError(
+            f"{len(unusable)} gene ids of {model_for!r} cannot be written into a GPR, because "
+            f"cobra splits them at whitespace, parentheses, '|' or '&': {unusable[:3]}. Map "
+            "them to gene ids first, for example with protein_to_gene in hits_from_supporth, "
+            "or use the accession alone for UniProt headers such as 'sp|P33284|HXK_KLULA'."
+        )
 
     order = [str(x) for x in preferred_order] if preferred_order else model_ids
     if preferred_order and len(models) > 1:
