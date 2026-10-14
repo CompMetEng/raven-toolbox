@@ -147,6 +147,23 @@ def test_only_genes_in_models_uses_the_template_gene():
     assert res.model.reactions.get_by_id("R_single").gene_reaction_rule == "tg2"
 
 
+def test_only_genes_in_models_rejects_an_emptied_direction():
+    hits = make_ortholog_hits([("tgX", "ng1"), ("tg1", "ng2")], "templateGEM", "bug")
+    hits.loc[hits.to_gene.isin(["tg1", "ng2"]), "identity"] = 10.0
+    assert not get_model_from_homology([_template()], hits, "bug").model.reactions
+    with pytest.raises(ValueError, match="No genes in matching from"):
+        get_model_from_homology([_template()], hits, "bug", only_genes_in_models=True)
+
+
+def test_miscased_organism_ids_are_rejected():
+    hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")
+    with pytest.raises(ValueError, match=r"only when case is ignored: \['bug'\]"):
+        get_model_from_homology([_template()], hits, "Bug")
+    other = make_ortholog_hits([("tg1", "ng1")], "otherGEM", "bug")
+    res = get_model_from_homology([_template()], pd.concat([hits, other]), "bug")
+    assert "R_single" in {r.id for r in res.model.reactions}
+
+
 def test_one_directional_non_reciprocal():
     # build hits with only the new->old direction present
     hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")

@@ -253,8 +253,11 @@ def get_model_from_homology(
       ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
       gene for later curator review, ``"keep"`` drops just that subunit,
       ``"drop"`` drops the whole reaction.
-    * ``only_genes_in_models`` restricts the hits table to genes that actually
-      appear in the given ``models`` before mapping orthologs.
+    * ``only_genes_in_models`` restricts the hits table to hits whose template
+      gene appears in the given ``models`` before mapping orthologs, so a gene
+      the templates lack cannot be a best hit. It raises ``ValueError`` when no
+      hit of a search direction between ``model_for`` and a template passes
+      the cutoffs and this filter.
     * ``keep_gene_free`` (default False) also transfers the template reactions that have no
       GPR (spontaneous, transport, exchange, artificial). By default they are dropped, as in
       RAVEN, because nothing supports them in the new organism. Set it when the template is
@@ -265,6 +268,10 @@ def get_model_from_homology(
     * ``preferred_order`` breaks ties when more than one template maps the
       same new-organism gene: the earlier template in the list wins that gene
       (default: the order of ``models``).
+
+    Organism ids in ``hits`` are case-sensitive. An id that matches
+    ``model_for`` or a template id only when case is ignored raises
+    ``ValueError``; hits involving other organisms are ignored.
 
     Defaults for the three filters come from a `calibration against KEGG orthology
     <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
@@ -313,6 +320,19 @@ def get_model_from_homology(
 
     model_by_id = {m.id: m for m in models}
     model_ids = list(model_by_id)
+    # An organism id that differs from model_for or a template id only in case
+    # would silently be read as another organism; RAVEN rejects it too.
+    known = {model_for, *model_ids}
+    known_lower = {k.lower() for k in known}
+    miscased = sorted(
+        i for i in set(hits.from_id) | set(hits.to_id)
+        if i not in known and str(i).lower() in known_lower
+    )
+    if miscased:
+        raise ValueError(
+            f"hits contain organism ids that match model_for ({model_for!r}) or a template "
+            f"model id ({model_ids}) only when case is ignored: {miscased}. Ids are case-sensitive."
+        )
     model_genes = {mid: {g.id for g in m.genes} for mid, m in model_by_id.items()}
     all_model_genes = set().union(*model_genes.values()) if model_genes else set()
 
@@ -329,7 +349,25 @@ def get_model_from_homology(
     if only_genes_in_models:
         # The template-side gene of each hit, as in RAVEN.
         template_gene = hits.to_gene.where(hits.from_id == model_for, hits.from_gene)
-        hits = hits[template_gene.isin(all_model_genes)]
+        kept = template_gene.isin(all_model_genes)
+        # As in RAVEN, a search direction with no hit left after the cutoffs and
+        # this filter is an error rather than an empty mapping.
+        passes = (
+            kept
+            & (hits.evalue < max_evalue)
+            & (hits.align_len >= min_align_len)
+            & (hits.identity >= min_identity)
+        )
+        directions = hits[["from_id", "to_id"]].drop_duplicates().itertuples(index=False)
+        for from_id, to_id in directions:
+            if model_for not in (from_id, to_id) or not {from_id, to_id} & set(model_ids):
+                continue
+            if not passes[(hits.from_id == from_id) & (hits.to_id == to_id)].any():
+                raise ValueError(
+                    f"No genes in matching from {from_id} to {to_id} are present in the "
+                    "corresponding model"
+                )
+        hits = hits[kept]
 
     ortho = _ortholog_map(
         hits, model_for, model_ids, bidirectional=bidirectional, best_hits_only=best_hits_only,
