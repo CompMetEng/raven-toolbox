@@ -111,6 +111,25 @@ def test_strictness_bidirectional_and_best_hits():
     assert "R_single" in {r.id for r in res.model.reactions}
 
 
+def test_strictness_3_keeps_tied_best_hits():
+    hits = make_ortholog_hits([("tg1", "ng1"), ("tg2", "ng1")], "templateGEM", "bug")
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3)
+    assert {r.id for r in res.model.reactions} == {"R_single", "R_iso"}
+
+    weaker = (hits.from_gene == "ng1") & (hits.to_gene == "tg2")
+    hits.loc[weaker, "bitscore"] = 500.0
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3)
+    assert {r.id for r in res.model.reactions} == {"R_single"}
+
+
+def test_max_evalue_is_exclusive():
+    hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")
+    hits["evalue"] = 1e-30
+    assert not get_model_from_homology([_template()], hits, "bug").model.reactions
+    res = get_model_from_homology([_template()], hits, "bug", max_evalue=1e-29)
+    assert "R_single" in {r.id for r in res.model.reactions}
+
+
 def test_one_directional_non_reciprocal():
     # build hits with only the new->old direction present
     hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")

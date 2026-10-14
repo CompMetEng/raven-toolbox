@@ -147,14 +147,15 @@ def _ortholog_map(
 ):
     """Build {model_id: {template_gene: [new_gene, ...]}} from the hits table."""
     h = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]
 
     if best_hits_only:
-        h = h.sort_values("bitscore", ascending=False)
-        h = h.groupby(["from_id", "to_id", "from_gene"], sort=False).head(1)
+        # Every hit tied for the best bitscore is kept, as in RAVEN.
+        best = h.groupby(["from_id", "to_id", "from_gene"])["bitscore"].transform("max")
+        h = h[h.bitscore == best]
 
     # Directional views, normalised to (model_id, new_gene, template_gene).
     fwd = (
@@ -237,14 +238,13 @@ def get_model_from_homology(
 
     * ``strictness`` (default 1) picks the hit-filtering policy:
 
-      - 1: bidirectional — a template gene and a new-organism gene must each
-        be the other's best match, rather than trusting a hit in just one
-        direction.
+      - 1: bidirectional — a template gene and a new-organism gene must have
+        an accepted hit in both directions, rather than in just one.
       - 2: one-directional — trust a hit found in a single direction, picked
         by ``map_direction``.
-      - 3: bidirectional and best-hits-only — before matching, each gene is
-        first trimmed to its single best hit (by bitscore) in each
-        direction, then the bidirectional rule is applied.
+      - 3: bidirectional and best-hits-only — before matching, each gene keeps
+        only its best hits (by bitscore) in each direction, all of them when
+        several tie, then the bidirectional rule is applied.
 
     * ``map_direction`` picks which one-directional search to trust when
       ``strictness`` is 2: ``"new_to_old"`` (default, hits found
@@ -275,6 +275,9 @@ def get_model_from_homology(
     * ``min_align_len`` 100 replaces RAVEN's 200, which discarded real orthologs
       for no gain in precision. Anything at or below 150 measured the same; 200
       cost 1-2 points on every organism tested.
+    A hit passes when its e-value is below ``max_evalue`` and its alignment length and
+    identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
+
     * ``max_evalue`` makes no difference anywhere between 1e-4 and 1e-50 -- the
       other two filters have already excluded whatever it would exclude -- so
       1e-30 is kept for continuity with RAVEN rather than for any measured effect.
@@ -433,7 +436,7 @@ def _candidate_evidence(
     point is a list somebody will actually skim, not an exhaustive dump.
     """
     usable = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]
