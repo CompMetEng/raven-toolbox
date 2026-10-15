@@ -56,12 +56,12 @@ def test_release_base_url_builds_releases_download_prefix():
     # Default repo + an arbitrary tag → the canonical GitHub release-asset prefix.
     assert (
         mrs.release_base_url("v0.3.0")
-        == "https://github.com/SysBioChalmers/raven-toolbox/releases/download/v0.3.0"
+        == "https://github.com/CompMetEng/toolbox-assets/releases/download/v0.3.0"
     )
     # --repo override is honoured; the fixed "releases/download" path is always present.
     assert (
-        mrs.release_base_url("blast-2.16.0", repo="ORG/raven-data")
-        == "https://github.com/ORG/raven-data/releases/download/blast-2.16.0"
+        mrs.release_base_url("blast-2.16.0", repo="ORG/toolbox-assets")
+        == "https://github.com/ORG/toolbox-assets/releases/download/blast-2.16.0"
     )
 
 

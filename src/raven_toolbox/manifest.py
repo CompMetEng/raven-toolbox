@@ -1,4 +1,4 @@
-"""Load a raven-data manifest into the runtime resolver registries.
+"""Load a toolbox-assets manifest into the runtime resolver registries.
 
 A *manifest* is the single, language-agnostic source of truth for every downloadable
 artefact (KEGG tables / HMMs, …) and external-binary bundle (BLAST / DIAMOND / HMMER).
@@ -15,7 +15,7 @@ The manifest is a superset of the two runtime registries:
 Usage::
 
     from raven_toolbox import manifest
-    manifest.load_into_registries("https://github.com/SysBioChalmers/raven-data/releases/download/manifest-v1/manifest.json")
+    manifest.load_into_registries("https://github.com/CompMetEng/toolbox-assets/releases/download/manifest-v1/manifest.json")
 
 or set ``RAVEN_PYTHON_MANIFEST`` (a path or URL) and the resolvers load it lazily on first
 use::

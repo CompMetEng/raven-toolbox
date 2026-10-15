@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", type=Path, default=Path("dist/binaries"), help="output folder")
     p.add_argument(
         "--base-url",
-        default="https://github.com/SysBioChalmers/raven-toolbox/releases/download",
+        default="https://github.com/CompMetEng/toolbox-assets/releases/download",
         help="release-download base; the snippet URLs become <base>/<bundle>-<version>/<asset>",
     )
     args = p.parse_args(argv)

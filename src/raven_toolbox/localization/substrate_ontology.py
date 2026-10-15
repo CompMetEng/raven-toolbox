@@ -1,6 +1,6 @@
 """ChEBI-ontology substrate matching — the substrate-specific layer of evidence-aware transport scoring.
 
-Two curated raven-data artefacts underlie this (built by ``scripts/build_transporter_data.py``):
+Two curated toolbox-assets artefacts underlie this (built by ``scripts/build_transporter_data.py``):
 
 * ``tcdb_substrates.tsv`` — TCDB's curated ``TC-ID -> substrate ChEBI(s)`` table;
 * ``chebi_relations.tsv.gz`` — the ChEBI ``is_a`` graph plus the protonation/tautomer bridges.
@@ -77,7 +77,7 @@ class SubstrateOntology:
         substrates_path: str | Path | None = None,
     ) -> SubstrateOntology:
         """Build a :class:`SubstrateOntology` from the ChEBI relations graph and the TCDB substrate
-        table, auto-downloading/caching each (the packaged raven-data artefacts) when its path is
+        table, auto-downloading/caching each (the packaged toolbox-assets artefacts) when its path is
         left as ``None``."""
         relations_path = (relations_path if relations_path is not None
                           else ensure_data_file("transporters", "chebi_relations.tsv.gz"))
