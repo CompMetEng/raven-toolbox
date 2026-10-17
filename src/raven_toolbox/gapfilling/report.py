@@ -277,6 +277,14 @@ def gap_report(
     Returns
     -------
     GapReportResult
+
+    Raises
+    ------
+    cobra.exceptions.Infeasible
+        If ``model`` is infeasible under its own bounds, or once its boundary
+        reactions are closed for ``can_produce_without_input`` and
+        ``can_consume_without_output`` (for example when a maintenance
+        reaction has a positive lower bound).
     """
     no_flux_reactions = [r.id for r in model.reactions if r.id in _blocked_ids(model)]
     no_flux_reactions_relaxed = [r.id for r in model.reactions if r.id in _blocked_ids(_relaxed_copy(model))]

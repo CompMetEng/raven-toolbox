@@ -135,6 +135,12 @@ def find_leak_metabolite(
     ----------
     model:
         Model to test. Never modified; the search runs on an internal copy.
+        Its boundary reactions are used as they are: close every exchange,
+        sink and demand reaction first (``for r in model.boundary: r.bounds =
+        (0, 0)`` on a copy), or an open uptake or excretion counts as a leak.
+        Positive lower bounds (such as on a maintenance reaction) still
+        apply and can make the search infeasible; the result then has status
+        ``"infeasible"``, which does not show that the model is leak-free.
     direction:
         ``"produce"`` to look for freely excreted metabolites, or
         ``"consume"`` to look for freely consumed metabolites.
