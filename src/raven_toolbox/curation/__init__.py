@@ -37,6 +37,13 @@ Schema (mirrors yeast-GEM's ``data/modelCuration/template/`` layout):
 Everything after the core columns in any of the four tables is
 interpreted as a MIRIAM annotation: the column header becomes the
 namespace key (``met.annotation[<header>] = <cell>``).
+
+``inchi``, ``metNotes``, ``rxnNotes``, ``rxnReferences`` and
+``rxnConfidenceScores`` are RAVEN fields and go to ``.notes`` under the keys
+:func:`~raven_toolbox.io.read_yaml_model` uses for them (``inchis``,
+``note``, ``note``, ``references`` and ``confidence_score``, the last as a
+number), so the YAML and MAT writers emit them as those fields. An InChI the
+metabolite already carries as ``annotation["inchi"]`` is updated as well.
 """
 from raven_toolbox.curation.batch import (
     DEFAULT_CORE_GENE_COLUMNS,

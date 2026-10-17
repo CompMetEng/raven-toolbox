@@ -50,7 +50,7 @@ def test_add_new_metabolite():
     assert new.compartment == "c"
     assert new.formula == "C21H27N7O14P2"
     assert new.charge == -2
-    assert new.notes.get("metNotes") == "added by curation"
+    assert new.notes.get("note") == "added by curation"
 
 
 def test_update_existing_metabolite():
@@ -66,7 +66,65 @@ def test_update_existing_metabolite():
     atp = m.metabolites.get_by_id("s_0001")
     assert atp.formula == "C10H16N5O13P3"  # overwritten
     assert atp.charge == -3
+    assert atp.notes["inchis"] == "InChI=ATP"
+
+
+def test_update_keeps_an_annotated_inchi_in_step():
+    m = _base_model()
+    atp = m.metabolites.get_by_id("s_0001")
+    atp.annotation["inchi"] = "InChI=old"
+    df = pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "formula": "", "charge": "",
+         "inchi": "InChI=ATP", "metNotes": ""},
+    ])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df, met_id_prefix="s_")
+    assert atp.notes["inchis"] == "InChI=ATP"
     assert atp.annotation["inchi"] == "InChI=ATP"
+
+
+def test_curated_notes_are_written_as_raven_yaml_fields(tmp_path):
+    """Notes, references, confidence scores and InChIs reach YAML as RAVEN's own fields."""
+    from cobra.io.yaml import yaml as cobra_yaml
+
+    from raven_toolbox.io import read_yaml_model, write_yaml_model
+
+    m = _base_model()
+    mets_df = pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "formula": "", "charge": "",
+         "inchi": "InChI=ATP", "metNotes": "charge assigned at pH 7.3"},
+    ])
+    rxns_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "grRules": "", "lb": "", "ub": "",
+         "rev": "", "subSystems": "", "eccodes": "", "rxnNotes": "curated",
+         "rxnReferences": "PMID:1", "rxnConfidenceScores": 2},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "metNames": "ATP", "comps": "c",
+         "coefficient": -1.0},
+        {"rxnNames": "ATP hydrolysis", "metNames": "ADP", "comps": "c",
+         "coefficient": 1.0},
+    ])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=mets_df, rxns_df=rxns_df,
+                     rxns_coeffs_df=coeffs_df, met_id_prefix="s_",
+                     rxn_id_prefix="r_")
+    out = tmp_path / "curated.yml"
+    write_yaml_model(m, out)
+
+    with open(out, encoding="utf-8") as fh:
+        raw = cobra_yaml.load(fh)
+    met = next(x for x in raw["metabolites"] if x["id"] == "s_0001")
+    assert met["notes"] == "charge assigned at pH 7.3"
+    assert met["inchis"] == "InChI=ATP"
+    rxn = next(x for x in raw["reactions"] if x["id"] == "r_0001")
+    assert rxn["notes"] == "curated"
+    assert rxn["references"] == "PMID:1"
+    assert rxn["confidence_score"] == 2
+
+    back = read_yaml_model(out)
+    assert back.metabolites.get_by_id("s_0001").notes["note"] == "charge assigned at pH 7.3"
+    assert back.reactions.get_by_id("r_0001").notes["confidence_score"] == 2
 
 
 def test_miriam_columns_auto_detected():
@@ -144,7 +202,7 @@ def test_add_new_reaction_with_existing_mets():
     assert new.gene_reaction_rule == "YBR456W"
     assert new.annotation["ec-code"] == "2.7.4.6"
     assert new.annotation["kegg.reaction"] == "R00187"
-    assert new.notes.get("rxnConfidenceScores") == "3"
+    assert new.notes.get("confidence_score") == 3
 
 
 def test_add_new_reaction_joins_list_subsystems():
@@ -192,7 +250,7 @@ def test_update_existing_reaction_by_stoichiometry():
     assert rxn.name == "ATP hydrolysis renamed"
     assert rxn.gene_reaction_rule == "YAL999W"
     assert rxn.lower_bound == -100
-    assert rxn.notes.get("rxnNotes") == "updated"
+    assert rxn.notes.get("note") == "updated"
 
 
 def test_rxn_with_unknown_met_raises():
