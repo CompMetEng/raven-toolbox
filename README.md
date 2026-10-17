@@ -27,7 +27,7 @@ functionality that is unique to RAVEN:
 
 The status of every RAVEN function (ported, mapped to a cobra equivalent, or
 explicitly not ported) is documented function-by-function in
-**[RAVEN 3 and raven-toolbox](https://raven-docs.readthedocs.io/en/latest/raven3-vs-raven-toolbox/)**.
+**[RAVEN 3 and raven-toolbox](https://raven-docs.readthedocs.io/en/latest/raven3-vs-raven-toolbox.html)**.
 
 ## Design principle
 
@@ -44,7 +44,7 @@ COBRA ecosystem.
 RAVEN 3.0 beta ([release notes](https://github.com/CompMetEng/raven-toolbox/releases/tag/v3.0.0b1),
 [changelog](CHANGELOG.md)). It has been validated against MATLAB RAVEN on **Human-GEM** (5 Hart2015
 cell-line models, Jaccard 0.975–0.980 — see
-[the Human-GEM validation study](https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/humangem-validation.md)
+[the Human-GEM validation study](https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/humangem-validation.md)
 on raven-docs).
 
 Two deliberate scope decisions, not pending work:
@@ -81,7 +81,7 @@ pip install -e ".[dev]"
 ```
 
 raven-toolbox requires Python ≥ 3.11. Genome-scale ftINIT MILPs currently require **Gurobi**
-([details on solver portability](https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md)
+([details on solver portability](https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md)
 on raven-docs); toy and unit-test work runs on the open-source GLPK.
 
 ### External command-line tools (BLAST, DIAMOND, HMMER, MAFFT, CD-HIT)
@@ -122,7 +122,7 @@ command, which is not downloaded automatically and runs on Linux and macOS:
 
 [**raven-docs**](https://raven-docs.readthedocs.io/) is the documentation, and it
 covers MATLAB RAVEN and raven-toolbox side by side: the same task shown in both
-languages, with every example executed on each commit.
+languages, with the examples run in both languages by the documentation's CI.
 
 This repository carries no prose documentation of its own. The API reference on the
 site is generated from the docstrings here at build time, so a docstring edit
