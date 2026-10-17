@@ -345,3 +345,48 @@ def test_read_yaml_model_gives_integer_charges(tmp_path):
     sbml = tmp_path / "float_charges.xml"
     cobra.io.write_sbml_model(model, str(sbml))
     assert cobra.io.read_sbml_model(str(sbml)).metabolites.get_by_id("a_c").charge == -1
+
+
+def test_sbo_term_is_a_string_after_yaml_round_trip(tmp_path):
+    """``annotation['sbo']`` is a bare string after a YAML round trip, as after add_sbo_terms or SBML read."""
+    m = cobra.Model("sbo")
+    a = cobra.Metabolite("a_c", compartment="c")
+    a.annotation["sbo"] = "SBO:0000247"
+    a.annotation["kegg.compound"] = ["C00031"]
+    r = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r.add_metabolites({a: -1})
+    r.annotation["sbo"] = "SBO:0000627"
+    m.add_reactions([r])
+    out = tmp_path / "sbo.yml"
+    write_yaml_model(m, out)
+    back = read_yaml_model(out)
+    assert back.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"
+    assert back.metabolites.get_by_id("a_c").annotation["sbo"] == "SBO:0000247"
+    assert back.metabolites.get_by_id("a_c").annotation["kegg.compound"] == ["C00031"]
+
+
+def test_sbo_term_written_as_a_list_is_read_as_a_string(tmp_path):
+    path = tmp_path / "sbo_list.yml"
+    path.write_text(
+        "!!omap\n"
+        "- metabolites:\n"
+        "  - !!omap\n"
+        "    - id: a_c\n"
+        "    - compartment: c\n"
+        "- reactions:\n"
+        "  - !!omap\n"
+        "    - id: r1\n"
+        "    - metabolites: !!omap\n"
+        "      - a_c: -1.0\n"
+        "    - lower_bound: 0.0\n"
+        "    - upper_bound: 1000.0\n"
+        "    - annotation: !!omap\n"
+        "      - sbo:\n"
+        "        - SBO:0000627\n"
+        "- genes: []\n"
+        "- compartments: !!omap\n"
+        "  - c: cytosol\n",
+        encoding="utf-8",
+    )
+    model = read_yaml_model(path)
+    assert model.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"

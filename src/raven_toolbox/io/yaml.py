@@ -239,7 +239,7 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     # single-item list here, before model_from_dict, so cobra/geckopy always
     # see annotation[key] as list[str] regardless of whether the source file
     # used a scalar or a list — cobra's own model_from_dict does not do this
-    # normalisation itself.
+    # normalisation itself. ``sbo`` stays a bare string.
     for section in ("metabolites", "reactions", "genes"):
         _normalize_annotation_values(raw.get(section))
 
@@ -334,8 +334,10 @@ def _normalize_annotation_values(entries) -> None:
     store whatever shape the source used — means ``annotation[key]`` is
     always ``list[str]`` however the file spelled it, matching what cobra
     and geckopy expect and keeping a scalar-collapsed value from coming
-    back as a bare string after a write/read round trip. Normalises in
-    place; a no-op when ``entries`` is falsy.
+    back as a bare string after a write/read round trip. The exception is
+    ``sbo``, which is single-valued: it is kept as a bare string, the type
+    cobra's SBML reader and :func:`~raven_toolbox.annotation.add_sbo_terms`
+    give it. Normalises in place; a no-op when ``entries`` is falsy.
     """
     if not entries:
         return
@@ -346,7 +348,10 @@ def _normalize_annotation_values(entries) -> None:
         if not isinstance(annotation, dict):
             continue
         for key, value in annotation.items():
-            if not isinstance(value, list):
+            if key == "sbo":
+                if isinstance(value, list) and len(value) == 1:
+                    annotation[key] = value[0]
+            elif not isinstance(value, list):
                 annotation[key] = [value]
 
 
