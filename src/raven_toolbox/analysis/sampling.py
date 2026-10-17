@@ -1,31 +1,33 @@
-"""Random-objective flux sampling — RAVEN's ``randomSampling`` (port + improvements).
+"""Flux sampling — RAVEN's ``randomSampling``.
 
-Samples the flux solution space by the **random-objective** method of Bordel et al.
-(2010, PLoS Comput Biol, doi:10.1371/journal.pcbi.1000859), as ported from RAVEN's
-``randomSampling``: each sample maximises a small random linear combination of
-reactions, so every sample is an *extreme point* (vertex) of the flux polytope.
+:func:`random_sampling` is the entry point for every sampling method and, like
+RAVEN's ``randomSampling``, dispatches on ``method``:
 
-This is a different statistical object from cobrapy's ``cobra.sampling`` (OptGP /
-ACHR), which draw a (near-)uniform Markov-chain sample of the polytope *interior*.
-Use cobra's samplers when you need the uniform flux distribution; use this when you
-want a fast, robust spread of diverse optimal states — the workflow RAVEN uses to
-compare conditions, and one that stays well-behaved on large or tightly-constrained
-models where MCMC mixing is poor. cobrapy has no equivalent, so this is a genuine
-addition, not a wrapper.
+* ``"achr"`` (default) and ``"chrr"`` draw a (near-)uniform Markov-chain sample
+  of the polytope interior; they are implemented in
+  :mod:`raven_toolbox.analysis.flux_sampling`.
+* ``"random_objective"`` is the random-objective method of Bordel et al. (2010,
+  PLoS Comput Biol, doi:10.1371/journal.pcbi.1000859), implemented here: each
+  sample maximises a small random linear combination of reactions, so every
+  sample is an *extreme point* (vertex) of the flux polytope. cobrapy has no
+  equivalent. Use it for a spread of diverse optimal states, not for the
+  uniform flux distribution.
 
-Improvements over RAVEN (see IMPROVEMENTS SAMP1):
+Differences from RAVEN's random-objective method:
 
-* **`good_reactions` via one FVA pass**, not a hand-rolled per-reaction ``parfor``
-  loop. A reaction is usable as a random objective if it can carry flux and is not
-  stuck in a stoichiometrically-infeasible loop (its range blows past the arbitrary
-  large bound). ``cobra``'s FVA computes exactly that, faster and in far less code,
-  and can optionally be made ``loopless``.
-* **Reproducible** via ``seed`` (RAVEN has no seed control).
-* **`n_objectives` is a parameter** (RAVEN hard-codes 2, though its docstring claims
-  3).
-* **Tidy output**: a ``samples`` DataFrame shaped samples × reactions (matching
-  ``cobra.sampling``), plus the reusable ``good_reactions`` list — instead of a
-  reactions × samples matrix and a parallel index vector.
+* **Reactions usable as random objectives** (``good_reactions``) come from one
+  FVA pass, loopless by default (:func:`find_good_reactions`), which drops
+  reactions that carry flux only through a loop. RAVEN runs
+  ``getAllowedBounds`` and drops reactions that reach 0.999 × the model's
+  largest bound, and on GECKO ecModels also the ``usage_prot_`` reactions.
+* **``replace_max_bound``** defaults to False; RAVEN's ``replaceBoundsWithInf``
+  defaults to true.
+* **Output**: a ``samples`` DataFrame shaped samples × reactions (matching
+  ``cobra.sampling``), plus the reusable ``good_reactions`` list, instead of a
+  reactions × samples matrix and a vector of reaction indexes.
+
+``seed`` and ``n_objectives`` (default 2) behave as RAVEN's ``seed`` and
+``nObjectives``.
 """
 from __future__ import annotations
 
@@ -113,7 +115,7 @@ def random_sampling(
         n_samples to compensate, try ``method='chrr'`` (raven-toolbox's rounding-based
         alternative, not wired into ACHR), or use an ESS/R-hat diagnostic to assess
         sample quality (see the `sampling convergence calibration study
-        <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/sampling-convergence-calibration.md>`_
+        <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/sampling-convergence-calibration.md>`_
         on raven-docs).
     warmup:
         ``chrr`` — burn-in steps discarded before the first recorded sample.
@@ -134,10 +136,9 @@ def random_sampling(
         ``random_objective`` only — worker processes for drawing samples in
         parallel (each sample is an independent LP solve). Defaults to
         ``cobra.Configuration().processes``; set to 1 to sample serially.
-        Reproducible for a given ``seed`` regardless of ``n_proc`` — each
+        Reproducible for a given ``seed`` regardless of ``n_proc``: each
         sample draws from its own independent RNG stream spawned from
-        ``seed``, not from one continuously-advancing generator, so results
-        no longer match pre-parallelization output for the same seed value.
+        ``seed``, not from one continuously-advancing generator.
 
     Returns
     -------
@@ -336,7 +337,8 @@ def _random_objective(
     n_samples
         Number of flux vectors to return.
     n_objectives
-        Reactions combined into each random objective (RAVEN's fixed 2).
+        Reactions combined into each random objective (default 2, as RAVEN's
+        ``nObjectives``).
     good_reactions
         Reaction ids eligible as objectives. If ``None`` they are computed once with
         :func:`find_good_reactions` and returned for reuse.
