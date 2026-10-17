@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Publish release assets to the raven-data repo with the GitHub CLI (``gh``).
+"""Publish release assets to the toolbox-assets repo with the GitHub CLI (``gh``).
 
 Maintainer-side. Creates per-artefact, **immutable** release tags and uploads the
 assets to them — idempotently: an existing tag is reused and only *missing* assets
@@ -10,11 +10,11 @@ duplication). Requires ``gh auth`` with write access to the target repo.
 Subcommands::
 
     # one release tag from explicit files or a whole directory
-    publish_to_raven_data.py release --tag kegg118 --dir C:/Work/GitHub/kegg118
-    publish_to_raven_data.py release --tag manifest-v1 data/manifest.json
+    publish_to_toolbox_assets.py release --tag kegg118 --dir C:/Work/GitHub/kegg118
+    publish_to_toolbox_assets.py release --tag manifest-v1 data/manifest.json
 
     # every binary ZIP in a dir, auto-grouped into <bundle>-<version> tags
-    publish_to_raven_data.py binaries --dir dist/binaries
+    publish_to_toolbox_assets.py binaries --dir dist/binaries
 
 Add ``--dry-run`` to print the ``gh`` calls without executing them.
 """
@@ -26,7 +26,7 @@ import re
 import subprocess
 from pathlib import Path
 
-DEFAULT_REPO = "SysBioChalmers/raven-data"
+DEFAULT_REPO = "CompMetEng/toolbox-assets"
 # Metadata sidecars produced by the build scripts — never uploaded as assets.
 _SKIP = {"checksums.txt", "PROVENANCE.txt", "manifest_binaries.json"}
 _BUNDLE_RE = re.compile(r"^([a-z0-9]+)-(\d+\.\d+(?:\.\d+)?)-")  # blast-2.17.0-linux-x86_64.zip

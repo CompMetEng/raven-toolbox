@@ -6,25 +6,25 @@
       "version": "kegg118",
       "description": "KEGG reference model + KO/reaction tables (core bundle), taxonomy, and prokaryote/eukaryote HMM libraries for getKEGGModelForOrganism.",
       "license": "Derived from the KEGG database; redistributed with permission from KEGG.",
-      "source": "https://github.com/SysBioChalmers/raven-data/releases/tag/kegg118",
+      "source": "https://github.com/CompMetEng/toolbox-assets/releases/tag/kegg118",
       "files": {
         "kegg118_core.tar.gz": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/kegg118/kegg118_core.tar.gz",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_core.tar.gz",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "kegg118_eukaryotes.hmm.gz": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/kegg118/kegg118_eukaryotes.hmm.gz",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_eukaryotes.hmm.gz",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "kegg118_prokaryotes.hmm.gz": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/kegg118/kegg118_prokaryotes.hmm.gz",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_prokaryotes.hmm.gz",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "kegg118_taxonomy.gz": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/kegg118/kegg118_taxonomy.gz",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_taxonomy.gz",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         }
@@ -40,17 +40,17 @@
       ],
       "platforms": {
         "linux-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/blast-2.17.0/blast-2.17.0-linux-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/blast-2.17.0/blast-2.17.0-linux-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "macos-arm64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/blast-2.17.0/blast-2.17.0-macos-arm64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/blast-2.17.0/blast-2.17.0-macos-arm64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "windows-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/blast-2.17.0/blast-2.17.0-windows-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/blast-2.17.0/blast-2.17.0-windows-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         }
@@ -65,17 +65,17 @@
       ],
       "platforms": {
         "linux-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/diamond-2.1.17/diamond-2.1.17-linux-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/diamond-2.1.17/diamond-2.1.17-linux-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "macos-arm64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/diamond-2.1.17/diamond-2.1.17-macos-arm64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/diamond-2.1.17/diamond-2.1.17-macos-arm64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "windows-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/diamond-2.1.17/diamond-2.1.17-windows-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/diamond-2.1.17/diamond-2.1.17-windows-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         }
@@ -90,17 +90,17 @@
       ],
       "platforms": {
         "windows-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/hmmer-3.3.2/hmmer-3.3.2-windows-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/hmmer-3.3.2/hmmer-3.3.2-windows-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "linux-x86_64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/hmmer-3.4.0/hmmer-3.4.0-linux-x86_64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/hmmer-3.4.0/hmmer-3.4.0-linux-x86_64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         },
         "macos-arm64": {
-          "url": "https://github.com/SysBioChalmers/raven-data/releases/download/hmmer-3.4.0/hmmer-3.4.0-macos-arm64.zip",
+          "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/hmmer-3.4.0/hmmer-3.4.0-macos-arm64.zip",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "bytes": 0
         }

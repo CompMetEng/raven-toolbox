@@ -27,15 +27,15 @@ provenance. See [maintaining_binaries.md](https://github.com/CompMetEng/raven-ge
 python scripts/build_binary_bundles.py        # -> dist/binaries/*.zip (+ checksums, PROVENANCE)
 ```
 
-## `publish_to_raven_data.py`
+## `publish_to_toolbox_assets.py`
 
-Upload release assets to the [`raven-data`](https://github.com/SysBioChalmers/raven-data)
+Upload release assets to the [`toolbox-assets`](https://github.com/CompMetEng/toolbox-assets)
 repo with `gh`, idempotently (immutable per-version tags; skips assets already present).
 
 ```bash
-python scripts/publish_to_raven_data.py binaries --dir dist/binaries
-python scripts/publish_to_raven_data.py release --tag kegg118 --dir artefacts
-python scripts/publish_to_raven_data.py --dry-run release --tag manifest-v1 data/manifest.json
+python scripts/publish_to_toolbox_assets.py binaries --dir dist/binaries
+python scripts/publish_to_toolbox_assets.py release --tag kegg118 --dir artefacts
+python scripts/publish_to_toolbox_assets.py --dry-run release --tag manifest-v1 data/manifest.json
 ```
 
 ## `build_kegg_artefacts.py`

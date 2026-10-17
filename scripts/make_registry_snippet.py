@@ -8,7 +8,7 @@ Computes the SHA256 of each file and prints the Python/JSON entry to merge into
 Examples
 --------
 Pass ``--tag`` (the GitHub release tag the assets were uploaded to); the script builds the
-``https://github.com/SysBioChalmers/raven-toolbox/releases/download/<tag>`` asset prefix
+``https://github.com/CompMetEng/toolbox-assets/releases/download/<tag>`` asset prefix
 itself, so you never hand it a full URL (and can't fumble the ``releases/download`` path).
 
 Data artefacts (KEGG reference model + tables + HMM libraries) for one release::
@@ -46,7 +46,7 @@ from pathlib import Path
 from raven_toolbox.binaries import _sha256
 
 #: Default GitHub repository whose release assets the registry/manifest point at.
-DEFAULT_REPO = "SysBioChalmers/raven-toolbox"
+DEFAULT_REPO = "CompMetEng/toolbox-assets"
 
 
 def release_base_url(tag: str, repo: str = DEFAULT_REPO) -> str:

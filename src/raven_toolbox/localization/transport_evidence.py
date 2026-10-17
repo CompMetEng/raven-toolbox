@@ -308,7 +308,7 @@ def annotate_proteome(
 
     Scans the proteome FASTA (headers = gene ids, as written by :func:`prepare_deeploc_input`) against
     the transporter Pfam HMM database (``hmmsearch --cut_ga``) and the TCDB DIAMOND database
-    (``diamond blastp``); both databases auto-download from raven-data if not supplied. Pfam families
+    (``diamond blastp``); both databases auto-download from toolbox-assets if not supplied. Pfam families
     and TCDB TC-families map to coarse substrate classes via
     :mod:`raven_toolbox.localization.transporter_tables`, and each gene's TCDB TC-IDs map to their
     curated **substrate ChEBIs** (``substrates``: a ``tcdb_substrates.tsv`` path, or ``False`` to skip

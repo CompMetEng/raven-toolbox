@@ -256,7 +256,7 @@ hand, so the checksums come from the same helper `ensure_binary` verifies with:
 ```bash
 python scripts/make_registry_snippet.py binary --bundle blast --version 2.17.0 \
     --provides blastp makeblastdb --dir zips \
-    --base-url https://github.com/SysBioChalmers/raven-data/releases/download/blast-2.17.0
+    --base-url https://github.com/CompMetEng/toolbox-assets/releases/download/blast-2.17.0
 ```
 
 Adding a new tool needs no new provisioning code: a bundle entry with the right

@@ -35,7 +35,7 @@ def test_resolve_unresolvable_raises(monkeypatch):
         binaries.resolve_binary("mafft")
 
 
-def test_default_registry_urls_point_at_raven_data():
+def test_default_registry_urls_point_at_toolbox_assets():
     # Guard against a straggler/old host slipping into the baked registries.
     from raven_toolbox import data as data_mod
 
@@ -44,7 +44,7 @@ def test_default_registry_urls_point_at_raven_data():
         f["url"] for d in data_mod._DATA_REGISTRY.values() for f in d["files"].values()
     ]
     assert urls, "registries should not be empty"
-    assert all("/SysBioChalmers/raven-data/releases/download/" in u for u in urls), urls
+    assert all("/CompMetEng/toolbox-assets/releases/download/" in u for u in urls), urls
 
 
 # --------------------------------------------------------------------------- #
