@@ -148,3 +148,18 @@ def test_template_models_connects_a_blocked_reaction():
     assert result.gap_fill is not None
     assert "R3" in result.gap_fill.newly_connected
     assert "EX_x" in result.gap_fill.added_reactions
+
+
+def test_infeasible_model_raises_with_maintenance_hint(gap_report_model):
+    atpm = cobra.Reaction("ATPM", lower_bound=5.0, upper_bound=1000.0)
+    atpm.add_metabolites({gap_report_model.metabolites.get_by_id("z"): -1})
+    gap_report_model.add_reactions([atpm])
+    with pytest.raises(ValueError, match="infeasible under its own bounds.*ATPM.*ATP maintenance"):
+        gap_report(gap_report_model)
+
+
+def test_forced_flux_infeasible_once_closed_raises(gap_report_model):
+    # Feasible with the uptake open, infeasible once every boundary is closed.
+    gap_report_model.reactions.get_by_id("R1").lower_bound = 1.0
+    with pytest.raises(ValueError, match="once its boundary reactions are closed.*R1"):
+        gap_report(gap_report_model)

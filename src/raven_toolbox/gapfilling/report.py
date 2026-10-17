@@ -29,6 +29,7 @@ it was built.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
@@ -258,6 +259,18 @@ def _check_production(
     return not_produced, needed_for_production, min_to_connect
 
 
+def _require_feasible(model: cobra.Model, condition: str) -> None:
+    """Raise a ValueError naming the forced-flux reactions if ``model`` is infeasible."""
+    if not math.isnan(model.slim_optimize(error_value=float("nan"))):
+        return
+    forced = [r.id for r in model.reactions if r.lower_bound > 0 or r.upper_bound < 0]
+    hint = f" Reactions with a forced flux: {', '.join(forced)}." if forced else ""
+    raise ValueError(
+        f"The model is infeasible {condition}, so gap_report cannot analyse it.{hint} "
+        "Set the bounds of ATP maintenance and any other forced flux to zero first."
+    )
+
+
 def gap_report(
     model: cobra.Model,
     *,
@@ -280,12 +293,14 @@ def gap_report(
 
     Raises
     ------
-    cobra.exceptions.Infeasible
+    ValueError
         If ``model`` is infeasible under its own bounds, or once its boundary
         reactions are closed for ``can_produce_without_input`` and
-        ``can_consume_without_output`` (for example when a maintenance
-        reaction has a positive lower bound).
+        ``can_consume_without_output``. The usual cause is a reaction with a
+        forced flux, such as ATP maintenance with a positive lower bound; set
+        its bounds to zero before calling ``gap_report``.
     """
+    _require_feasible(model, "under its own bounds")
     no_flux_reactions = [r.id for r in model.reactions if r.id in _blocked_ids(model)]
     no_flux_reactions_relaxed = [r.id for r in model.reactions if r.id in _blocked_ids(_relaxed_copy(model))]
 
@@ -298,6 +313,7 @@ def gap_report(
     closed = model.copy()
     for rxn in closed.boundary:
         rxn.bounds = (0.0, 0.0)
+    _require_feasible(closed, "once its boundary reactions are closed")
     can_produce_without_input = _can_exchange(closed, "produce")
     can_consume_without_output = _can_exchange(closed, "consume")
 
