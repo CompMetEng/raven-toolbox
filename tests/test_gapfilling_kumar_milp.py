@@ -129,3 +129,37 @@ def test_exit_status_on_infeasible():
     template = cobra.Model("empty_template")
     result = fill_gaps_kumar_milp(m, template, verbose=False)
     assert result.exit_status != "optimal"
+
+
+def _solvers():
+    out = ["glpk"]
+    try:
+        import gurobipy  # noqa: F401
+        out.append("gurobi")
+    except ImportError:
+        pass
+    return out
+
+
+@pytest.mark.parametrize("solver", _solvers())
+def test_small_floor_is_not_met_by_a_fractional_indicator(growth_gap, solver):
+    """With a floor below 1e-5 x big-M, a near-zero indicator must not pass as 'not added'."""
+    draft, template = growth_gap
+    draft.solver = solver
+    result = fill_gaps_kumar_milp(draft, template, min_growth=0.005, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["r_missing"]
+    assert result.model.slim_optimize() >= 0.005
+
+
+def test_selection_that_does_not_restore_growth_is_reported(growth_gap, monkeypatch):
+    """A rounded MILP selection is checked on the filled model."""
+    from raven_toolbox.gapfilling import kumar_milp
+
+    draft, template = growth_gap
+    draft.solver = "glpk"
+    # A loose integrality tolerance lets the indicator stay fractional.
+    monkeypatch.setattr(kumar_milp, "_INTEGRALITY_TOL", 1e-4)
+    result = fill_gaps_kumar_milp(draft, template, min_growth=0.005, verbose=False)
+    assert result.added_reactions == []
+    assert result.exit_status == "not_restored"

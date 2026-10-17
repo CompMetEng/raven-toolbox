@@ -24,6 +24,7 @@ is not needed, as it has a more mature solver interface.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -33,6 +34,9 @@ import cobra
 from cobra.util import linear_reaction_coefficients
 
 from raven_toolbox.manipulation.transfer import add_reactions_from_model
+
+# Integrality tolerance for the MILP, as RAVEN's optimizeProb sets IntFeasTol.
+_INTEGRALITY_TOL = 1e-9
 
 
 @dataclass
@@ -50,7 +54,10 @@ class KumarGapFillResult:
         Draft model with *added_reactions* incorporated and *reversed_reactions*
         bounds updated.
     exit_status:
-        Solver status string (e.g. ``"optimal"``, ``"infeasible"``).
+        Solver status string (e.g. ``"optimal"``, ``"infeasible"``), or
+        ``"not_restored"`` when the solver reported a solution but the
+        selected repairs do not bring the objective to *min_growth* in
+        *model*. The selection is still returned for inspection.
     """
 
     added_reactions: list[str] = field(default_factory=list)
@@ -250,6 +257,13 @@ def fill_gaps_kumar_milp(
             f"({len(rev_indicators)} reversal, {len(db_indicators)} database candidates)..."
         )
 
+    # A fractional indicator within the solver's default integrality tolerance
+    # (about 1e-5 on GLPK and Gurobi) times big_m lets a "closed" candidate
+    # carry enough flux to meet a small growth floor. RAVEN's optimizeProb uses
+    # the same tight tolerance for MILPs.
+    with contextlib.suppress(Exception):
+        working.solver.configuration.tolerances.integrality = _INTEGRALITY_TOL
+
     working.optimize()
     status = working.solver.status
 
@@ -289,9 +303,43 @@ def fill_gaps_kumar_milp(
             add_reactions_from_model(filled, t, ids_from_t, genes=False, note=None)
             remaining -= set(ids_from_t)
 
+    # The rounded selection must meet the floor on its own; a solution that
+    # relied on fractional indicators does not.
+    if not _meets_floor(filled, obj_coeffs, min_growth):
+        if verbose:
+            print(
+                "fill_gaps_kumar_milp: the selected repairs do not reach "
+                f"min_growth {min_growth:.4g} in the filled model."
+            )
+        status = "not_restored"
+
     return KumarGapFillResult(
         added_reactions=sorted(added_rxn_ids),
         reversed_reactions=sorted(reversed_rxn_ids),
         model=filled,
         exit_status=status,
     )
+
+
+def _meets_floor(model: cobra.Model, obj_coeffs: dict, min_growth: float) -> bool:
+    """Whether ``model`` is feasible with the MILP's growth floor applied.
+
+    The floor is the same bound the MILP puts on each objective reaction,
+    relaxed by a relative 1e-6 for the LP feasibility tolerance.
+    """
+    floor = min_growth * (1 - 1e-6)
+    with model:
+        for rxn, coeff in obj_coeffs.items():
+            if rxn.id not in model.reactions:
+                return False
+            target = model.reactions.get_by_id(rxn.id)
+            if coeff > 0:
+                if target.upper_bound < floor:
+                    return False
+                target.lower_bound = max(target.lower_bound, floor)
+            elif coeff < 0:
+                if target.lower_bound > -floor:
+                    return False
+                target.upper_bound = min(target.upper_bound, -floor)
+        model.slim_optimize(error_value=math.nan)
+        return model.solver.status == "optimal"
