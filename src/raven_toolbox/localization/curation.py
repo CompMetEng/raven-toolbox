@@ -5,7 +5,7 @@ added transport in an :class:`~raven_toolbox.localization.AssignmentProposal`, s
 thousands of calls and review only the highest-value few percent. It is a post-processor — no new solve
 except an optional gated essentiality FBA — combining several cheap signals that each flag a *distinct*
 way a placement can be wrong. See the `curation-priority signals study
-<https://github.com/SysBioChalmers/raven-gecko-parity/blob/develop/docs/localization/curation_priority_signals.md>`_ on raven-gecko-parity for the full catalogue;
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/curation_priority_signals.md>`_ on raven-gecko-parity for the full catalogue;
 this ships the recommended first composite:
 
 * **override** — the reaction was placed *against* its gene's top DeepLoc compartment, and that top

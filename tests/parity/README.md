@@ -60,7 +60,7 @@ Two sources, with different trade-offs:
    `RAVEN_ROOT` points at one:
 
    ```bash
-   git clone --depth 1 -b develop3 https://github.com/SysBioChalmers/RAVEN
+   git clone --depth 1 -b develop https://github.com/CompMetEng/RAVEN
    RAVEN_ROOT=$PWD/RAVEN pytest -m parity
    ```
 

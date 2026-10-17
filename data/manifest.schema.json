@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/SysBioChalmers/raven-toolbox/manifest.schema.json",
+  "$id": "https://github.com/CompMetEng/raven-toolbox/manifest.schema.json",
   "title": "RAVEN data/binary manifest",
   "description": "Language-agnostic registry of downloadable raven-toolbox / RAVEN data artefacts and external binary bundles. Consumed by the Python resolvers (raven_toolbox.data / raven_toolbox.binaries) and by MATLAB RAVEN. Every file carries a SHA256 so consumers verify integrity after download.",
   "type": "object",

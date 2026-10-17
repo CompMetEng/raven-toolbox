@@ -115,7 +115,7 @@ jobs:
     # Trusted Publishing: PyPI verifies this workflow's OIDC identity, so no
     # long-lived token is stored in the repo. Requires a one-time publisher on
     # PyPI for raven-toolbox with:
-    #   owner: SysBioChalmers   repo: raven-toolbox
+    #   owner: CompMetEng       repo: raven-toolbox
     #   workflow: release.yml   environment: pypi
     environment: pypi
     permissions:

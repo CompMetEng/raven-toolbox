@@ -29,8 +29,8 @@ def raven_root() -> Path:
     if not root:
         pytest.skip(
             "RAVEN_ROOT is not set. Clone RAVEN and point at it to run the "
-            "cross-language checks: git clone --depth 1 -b develop3 "
-            "https://github.com/SysBioChalmers/RAVEN && RAVEN_ROOT=$PWD/RAVEN "
+            "cross-language checks: git clone --depth 1 -b develop "
+            "https://github.com/CompMetEng/RAVEN && RAVEN_ROOT=$PWD/RAVEN "
             "pytest -m parity"
         )
     path = Path(root)

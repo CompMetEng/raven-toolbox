@@ -10,7 +10,7 @@ whether a reaction's flux and expression changed together, only one of them
 changed, or they moved in opposite directions.
 
 ``analyzeSampling.m`` calls ``getFluxZ.m`` directly and cannot be usefully
-ported without it (SysBioChalmers/raven-gecko-parity#41), so both are ported
+ported without it (CompMetEng/raven-gecko-parity#41), so both are ported
 together here.
 
 Sample orientation is *samples × reactions* (rows are samples, columns are

@@ -86,12 +86,12 @@ jobs:
       - uses: actions/checkout@v5
       # RAVEN is GPL and this package is MIT, so its files are never vendored
       # here -- the cross-language checks read them from a checkout instead.
-      # develop3 is the branch raven-docs documents and raven-toolbox tracks.
+      # develop is the RAVEN branch raven-docs documents and raven-toolbox tracks.
       - name: Check out MATLAB RAVEN
         uses: actions/checkout@v5
         with:
-          repository: SysBioChalmers/RAVEN
-          ref: develop3
+          repository: CompMetEng/RAVEN
+          ref: develop
           path: .raven
       - uses: actions/setup-python@v6
         with:

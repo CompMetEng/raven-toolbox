@@ -33,7 +33,7 @@ jobs:
     name: genome-scale parity
     # Forks do not have the secrets, and a scheduled run there would fail every
     # night for no reason.
-    if: github.repository == 'SysBioChalmers/raven-toolbox'
+    if: github.repository == 'CompMetEng/raven-toolbox'
     runs-on: ubuntu-latest
     # Measured against the classic INIT MILP this job used to check (now
     # ftINIT's run_ftinit, bounded to time_limit=600s -- see
@@ -51,8 +51,8 @@ jobs:
       - name: Check out MATLAB RAVEN
         uses: actions/checkout@v5
         with:
-          repository: SysBioChalmers/RAVEN
-          ref: develop3
+          repository: CompMetEng/RAVEN
+          ref: develop
           path: .raven
 
       - uses: actions/setup-python@v6
