@@ -215,8 +215,9 @@ def fill_gaps_kumar_milp(
     with contextlib.suppress(Exception):
         working.solver.configuration.tolerances.integrality = _INTEGRALITY_TOL
 
-    working.optimize()
-    status = working.solver.status
+    # Solve through optlang: cobra's optimize() reads primal values even when
+    # there are none, which Gurobi refuses for an infeasible MILP.
+    status = working.solver.optimize()
 
     if status != "optimal":
         if verbose:
