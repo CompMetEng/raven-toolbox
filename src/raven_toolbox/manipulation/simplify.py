@@ -8,9 +8,10 @@ Individual reduction modes (each removes a specific class of reaction, in place)
   (one that, given reaction directions, can only be produced or only consumed, or
   participates in a single reaction); RAVEN ``deleteInaccessible``. Iterates to a fixpoint
   and prunes orphaned metabolites.
-* ``remove_no_flux_reactions`` — reactions that cannot carry flux in *any* steady state,
-  found by FVA (both min and max flux zero); RAVEN ``deleteMinMax``. Catches blocked
-  reactions that are not topological dead-ends.
+* ``remove_no_flux_reactions`` — reactions that cannot carry flux under the model's
+  bounds (exchange reactions opened by default), found by FVA (both min and max flux
+  zero); RAVEN ``deleteMinMax``. Catches blocked reactions that are not topological
+  dead-ends.
 * ``remove_duplicate_reactions`` — all-but-one of each set of reactions with identical
   stoichiometry/bounds; RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
 * ``constrain_reversible_reactions`` — does not remove reactions; tightens bounds, making
@@ -131,11 +132,14 @@ def remove_no_flux_reactions(
     """Remove reactions that cannot carry any flux (RAVEN ``simplifyModel`` ``deleteMinMax``).
 
     Runs FVA and drops every reaction whose minimum and maximum flux are both zero.
-    With ``open_exchanges`` (default) boundary reactions are opened first, so only
-    *structurally* blocked reactions are removed, never ones that merely lack an open
-    boundary. A no-flux reaction cannot carry flux under any tighter constraint either,
-    so removing it before task discovery / the merge is safe. Modifies in place; returns
-    the removed reaction ids.
+    With ``open_exchanges`` (default) the reactions in ``model.exchanges`` are first
+    opened to at least ``(-1000, 1000)``; sink and demand reactions and all internal
+    bounds keep their current values, so a reaction blocked only by one of those is
+    still removed. With ``open_exchanges=False`` the current bounds are used, as RAVEN's
+    ``deleteMinMax`` does, which can remove more. A reaction that is blocked under these
+    bounds stays blocked under any tighter ones, so removing it before task discovery /
+    the merge is safe as long as no later step relaxes a sink, demand or internal
+    bound. Modifies in place; returns the removed reaction ids.
     """
     blocked = find_blocked_reactions(model, open_exchanges=open_exchanges)
     if blocked:
