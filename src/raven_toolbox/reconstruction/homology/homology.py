@@ -274,7 +274,7 @@ def get_model_from_homology(
     ``ValueError``; hits involving other organisms are ignored.
 
     Defaults for the three filters come from a `calibration against KEGG orthology
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
     on raven-docs, scored with precision weighted above recall (a wrongly transferred
     reaction is harder to undo than a missing one):
 

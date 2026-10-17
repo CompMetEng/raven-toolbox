@@ -10,10 +10,11 @@ Inputs/outputs are encoded as ranges on the per-metabolite mass-balance constrai
 and an output allows / requires net production (``Sv ≤ UB``, and ``≥ LB`` if
 ``LB > 0``). By default, existing boundary reactions are left exactly as they are: a
 task's inputs/outputs *add to* whatever the model's own open exchanges already allow,
-rather than replacing them (RAVEN's ``checkTasks`` semantics, and what the published
-task lists this module reads were curated against). Pass ``close_boundaries=True`` for
-the stricter reading, where a task's declared inputs/outputs are the complete boundary
-of the system for that check.
+rather than replacing them. That is what RAVEN's ``checkTasks`` does on a model without
+boundary metabolites, such as one read from YAML. Pass ``close_boundaries=True`` for the
+stricter reading, where a task's declared inputs/outputs are the complete boundary of the
+system for that check; it corresponds to RAVEN's ``checkTasks(closeModel(model), ...)``,
+which is how ``prepINITModel`` runs it.
 """
 from __future__ import annotations
 
@@ -212,9 +213,10 @@ def check_tasks(
     ``tasks`` is a parsed list of :class:`Task` or a path to a task-list file. By
     default (``close_boundaries=False``), existing exchange/sink/demand reactions are
     left open, so a task's inputs/outputs add to whatever the model's own boundary
-    already allows — matching RAVEN's ``checkTasks``, which published task lists were
-    curated against. Pass ``close_boundaries=True`` for the stricter reading, where
-    inputs/outputs are defined purely by the tasks.
+    already allows, as RAVEN's ``checkTasks`` does on a model without boundary
+    metabolites. Pass ``close_boundaries=True`` for the stricter reading, where
+    inputs/outputs are defined purely by the tasks, as with RAVEN's
+    ``checkTasks(closeModel(model), ...)``.
     """
     tasks = _as_tasks(tasks)
     base, name_to_id, comp_to_ids = _prepare_base(model, close_boundaries)
@@ -387,8 +389,10 @@ def find_task_essential_reactions(
     kept regardless of expression score and made irreversible in their forced direction.
     When a reaction is essential in several tasks with conflicting directions, the majority
     wins (ties → forward), matching RAVEN's ``pos < neg``. ``close_boundaries`` defaults to
-    ``False``, matching RAVEN: a task's inputs/outputs add to whatever the model's own
-    open exchanges already allow, rather than replacing them.
+    ``False``: a task's inputs/outputs add to whatever the model's own open exchanges
+    already allow, rather than replacing them, as in :func:`check_tasks`. RAVEN's
+    ``prepINITModel`` calls ``closeModel`` first, which corresponds to
+    ``close_boundaries=True``.
 
     The solver is configured per task to match RAVEN's ``solveLP`` (``FeasibilityTol =
     1e-9``, single-threaded with a fixed seed) so the degenerate min-flux vertex — and thus

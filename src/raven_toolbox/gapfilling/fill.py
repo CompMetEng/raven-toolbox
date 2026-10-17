@@ -138,7 +138,7 @@ def connect_blocked_reactions(
     """Add template reactions so blocked draft reactions can carry flux.
 
     Finds reactions that
-    cannot carry flux in ``model``, then adds the minimum-penalty set of template
+    cannot carry flux in ``model`` under its current bounds, then adds the minimum-penalty set of template
     reactions that lets the (irreversible) ones carry flux, and returns the filled
     model. Like RAVEN, only irreversible blocked reactions are forced — reversible
     ones can carry flux trivially in the split formulation, so forcing them is

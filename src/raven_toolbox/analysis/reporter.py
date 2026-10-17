@@ -92,15 +92,17 @@ def reporter_metabolites(
     is given, two extra results are returned for the up- (fc ≥ 0) and down- (fc < 0)
     regulated gene subsets, in addition to ``"all"``.
 
-    Parity with RAVEN's ``reporterMetabolites``: the ``z_score`` and underlying
-    background correction match exactly (exact closed-form instead of RAVEN's
-    Monte-Carlo, see IMPROVEMENTS RM1). The reported ``p_value`` is the
-    *one-sided* (``"up"``) enrichment ``1 - Φ(z)`` and the result is sorted by
-    ``z_score`` descending. RAVEN sorts by p-value and reports both tails
-    (``allPValues``, ``allUpPValues``, ``allDownPValues``); the up/down splits
-    here come from the ``gene_fold_changes`` subset partition instead, so the
-    same information is available via the three returned ``ReporterResult``
-    rows.
+    The background correction uses the population standard deviation
+    (``ddof=0``) of the scored Z-scores, which the closed form requires. The
+    reported ``p_value`` is the one-sided enrichment ``1 - Φ(z)`` and each
+    table is sorted by ``z_score`` descending.
+
+    Parity with RAVEN's ``reporterMetabolites``: the same closed-form
+    correction, one-sided p-value and sort order, with ``"up"``/``"down"``
+    matching its ``"only up"``/``"only down"`` entries. A RAVEN version that
+    divides by the sample standard deviation (``std`` with N−1) gives
+    z-scores smaller by a factor ``√(N/(N−1))`` for N scored genes; the
+    ranking is the same.
     """
     model_genes = {g.id for g in model.genes}
     scored = {

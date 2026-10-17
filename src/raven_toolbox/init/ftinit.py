@@ -32,11 +32,11 @@ drops positive reversible reactions from the problem (used in the staging schedu
 
 Needs a MILP solver (cobra's configured optlang solver; only Gurobi is fully viable at
 genome scale — see the `INIT solver benchmark
-<https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md>`_
+<https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md>`_
 on raven-docs). Magic numbers (``force_on``/``force_on_ess`` = 0.1, ``big_m`` = 100) are
 exposed and scale-dependent; calibration tables are in the `INIT parameter calibration
 study
-<https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
+<https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
 on raven-docs. ``big_m`` caps a *scored*
 reaction's flux in its on/off (direction) constraint — using a fixed 100 rather than
 the reaction's ±1000 bound keeps the LP relaxation tight (what makes the genome-scale
@@ -150,7 +150,7 @@ def run_ftinit(
     — solve time here is dominated by model construction, so a tight gap is
     nearly free (measured on genome-scale Human-GEM, see the `INIT parameter
     calibration study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
     on raven-docs). For the genome-scale staged
     schedule (:func:`raven_toolbox.init.ftinit`), an essential-forced step can
     run away without a cap (one severely-degraded case ran >75 min unbounded);
@@ -214,7 +214,7 @@ def run_ftinit(
     knowingly trades determinism for speed. Measured to have no effect on the *swing*
     between different seeds (raising it is not a substitute for ``resolve_ties``) — see the
     `ftINIT reproducibility study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
     on raven-docs.
     """
     scores = dict(rxn_scores or {})
@@ -547,7 +547,7 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
     reduces the run-to-run spread relative to no tie-break at all, but it is no longer a
     guarantee. A warning is raised when this happens; see the `ftINIT reproducibility
     study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
     on raven-docs.
 
     Returns ``True`` if phase 2 produced a usable solution (the caller then reads the
@@ -805,12 +805,12 @@ def ftinit(
     incorrectly caps some reversible/negative reactions above magnitude 100; raven-toolbox
     never had this because its own ``big_m=100`` default relies on the model being
     rescaled first, not on a per-reaction cap — see the `INIT parameter calibration study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_).
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_).
 
     ``mip_gap``/``time_limit`` are forwarded to each :func:`run_ftinit` solve. On
     genome-scale models they are essential for tractability — see the `INIT parameter
     calibration study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
     on raven-docs for the calibration table.
 
     ``resolve_ties`` and ``prove_abs_gap`` (both opt-in, default off → exact RAVEN
@@ -838,7 +838,7 @@ def ftinit(
     ``seed`` nor ``threads`` makes the extraction *stable*
     under small input changes, which is a separate property — see the `ftINIT
     reproducibility study
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
     on raven-docs. Measured there on Human-GEM/DLD1: ``resolve_ties`` makes repeated builds
     at a fixed seed identical and halves the seed-to-seed spread in predicted essential
     genes (16 → 8 flips); its own tie-break phases can exhaust ``time_limit`` at genome
@@ -858,7 +858,7 @@ def ftinit(
     essential-gene drift on another, traced to a network-topology regime swap the
     reference-matching objective cannot see coming, and was removed. See the
     `reference_reactions postmortem
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-reference-reactions.md>`_
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-reference-reactions.md>`_
     on raven-docs for the full account.
     """
     steps = steps if steps is not None else get_init_steps(series)

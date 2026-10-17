@@ -184,10 +184,7 @@ def _update_metabolite(met: cobra.Metabolite, row: pd.Series, miriam_cols: list[
         met.formula = str(row["formula"])
     if _has_value(row.get("charge")):
         met.charge = _coerce_int(row["charge"])
-    if _has_value(row.get("inchi")):
-        met.annotation["inchi"] = str(row["inchi"])
-    if _has_value(row.get("metNotes")):
-        met.notes["metNotes"] = str(row["metNotes"])
+    _apply_met_notes(met, row)
     _apply_miriam(met, row, miriam_cols)
 
 
@@ -209,10 +206,7 @@ def _build_new_metabolites(
             met.formula = str(row["formula"])
         if _has_value(row.get("charge")):
             met.charge = _coerce_int(row["charge"])
-        if _has_value(row.get("inchi")):
-            met.annotation["inchi"] = str(row["inchi"])
-        if _has_value(row.get("metNotes")):
-            met.notes["metNotes"] = str(row["metNotes"])
+        _apply_met_notes(met, row)
         _apply_miriam(met, row, miriam_cols)
         new_mets.append(met)
     return new_mets
@@ -374,12 +368,7 @@ def _update_reaction(rxn: cobra.Reaction, row: pd.Series, miriam_cols: list[str]
         rxn.subsystem = subsystem_to_str(row["subSystems"])
     if _has_value(row.get("eccodes")):
         rxn.annotation["ec-code"] = str(row["eccodes"])
-    if _has_value(row.get("rxnNotes")):
-        rxn.notes["rxnNotes"] = str(row["rxnNotes"])
-    if _has_value(row.get("rxnReferences")):
-        rxn.notes["rxnReferences"] = str(row["rxnReferences"])
-    if _has_value(row.get("rxnConfidenceScores")):
-        rxn.notes["rxnConfidenceScores"] = str(row["rxnConfidenceScores"])
+    _apply_rxn_notes(rxn, row)
     _apply_miriam(rxn, row, miriam_cols)
 
 
@@ -405,18 +394,39 @@ def _build_new_reactions(
             rxn.subsystem = subsystem_to_str(row["subSystems"])
         if _has_value(row.get("eccodes")):
             rxn.annotation["ec-code"] = str(row["eccodes"])
-        if _has_value(row.get("rxnNotes")):
-            rxn.notes["rxnNotes"] = str(row["rxnNotes"])
-        if _has_value(row.get("rxnReferences")):
-            rxn.notes["rxnReferences"] = str(row["rxnReferences"])
-        if _has_value(row.get("rxnConfidenceScores")):
-            rxn.notes["rxnConfidenceScores"] = str(row["rxnConfidenceScores"])
+        _apply_rxn_notes(rxn, row)
         _apply_miriam(rxn, row, miriam_cols)
         new_rxns.append(rxn)
     return new_rxns
 
 
 # --- shared helpers ---------------------------------------------------
+
+# Table columns stored in ``.notes``, mapped to the keys read_yaml_model and
+# read_mat_model use for the same RAVEN fields (see _MET_FIELDS/_RXN_FIELDS in
+# raven_toolbox.io.yaml), so the writers emit them as RAVEN fields.
+_MET_NOTE_COLUMNS = (("inchi", "inchis"), ("metNotes", "note"))
+_RXN_NOTE_COLUMNS = (("rxnNotes", "note"), ("rxnReferences", "references"))
+
+
+def _apply_met_notes(met: cobra.Metabolite, row: pd.Series) -> None:
+    for col, key in _MET_NOTE_COLUMNS:
+        if _has_value(row.get(col)):
+            met.notes[key] = str(row[col])
+    # An InChI already kept as a MIRIAM annotation is updated as well, so the
+    # metabolite does not carry two different structures.
+    if _has_value(row.get("inchi")) and "inchi" in met.annotation:
+        met.annotation["inchi"] = str(row["inchi"])
+
+
+def _apply_rxn_notes(rxn: cobra.Reaction, row: pd.Series) -> None:
+    for col, key in _RXN_NOTE_COLUMNS:
+        if _has_value(row.get(col)):
+            rxn.notes[key] = str(row[col])
+    if _has_value(row.get("rxnConfidenceScores")):
+        score = float(row["rxnConfidenceScores"])
+        rxn.notes["confidence_score"] = int(score) if score.is_integer() else score
+
 
 def _apply_miriam(entity, row: pd.Series, miriam_cols: list[str]) -> None:
     for col in miriam_cols:

@@ -1,6 +1,6 @@
 # Contributing to raven-toolbox
 
-User documentation lives on [raven-docs](https://github.com/edkerk/raven-docs),
+User documentation lives on [raven-docs](https://github.com/CompMetEng/raven-docs),
 which covers both this package and MATLAB RAVEN. This file is for working on the
 package itself, and for the maintainer tasks that have nowhere else to live.
 
@@ -32,7 +32,8 @@ documentation belongs in the docstrings: raven-docs generates its API reference
 from them at build time, so a docstring edit reaches the site without anything
 being copied across.
 
-Docstrings are NumPy style, which is what the site's generator expects.
+Write new and changed public docstrings in NumPy style (Parameters, Returns and, where
+useful, Examples sections). Many existing docstrings are still prose.
 
 ---
 
@@ -45,7 +46,7 @@ consumes the published output.
 
 End users do none of this. They download the published, version-pinned artefacts
 automatically; that side is documented in
-[Downloaded data and binaries](https://github.com/edkerk/raven-docs/blob/main/docs/installation/data-and-binaries.md).
+[Downloaded data and binaries](https://github.com/CompMetEng/raven-docs/blob/main/docs/installation/data-and-binaries.md).
 
 Publishing the results, and the versioning model behind the releases, is a shared
 convention rather than a raven-toolbox concern, and is documented in

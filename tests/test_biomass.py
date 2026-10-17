@@ -207,6 +207,28 @@ def test_scale_biomass_zero_current_raises():
         scale_biomass(m, cfg2, "DNA", 0.1)
 
 
+def test_scale_biomass_balance_that_would_go_negative_raises():
+    m, cfg = _toy_biomass_model()
+    before = {r.id: dict(r.metabolites) for r in m.reactions}
+    # Protein above 1 g/gDW leaves carbohydrate a negative share of the total,
+    # which would turn its substrates into products.
+    with pytest.raises(ValueError, match="carbohydrate"):
+        scale_biomass(m, cfg, "protein", 1.5, balance_out="carbohydrate")
+    assert {r.id: dict(r.metabolites) for r in m.reactions} == before
+
+
+def test_scale_biomass_balance_on_empty_component_raises():
+    m, cfg = _toy_biomass_model()
+    cfg2 = BiomassConfig.from_components(
+        cfg.biomass_rxn, cfg.proton_met,
+        [*cfg.components, BiomassComponent("DNA", "DNA pseudoreaction")],
+    )
+    before = {r.id: dict(r.metabolites) for r in m.reactions}
+    with pytest.raises(ValueError, match="DNA"):
+        scale_biomass(m, cfg2, "protein", 0.5, balance_out="DNA")
+    assert {r.id: dict(r.metabolites) for r in m.reactions} == before
+
+
 # --- set_gam --------------------------------------------------------
 
 def test_set_gam_scales_cofactor_coefficients():
