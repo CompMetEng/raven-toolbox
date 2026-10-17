@@ -93,11 +93,16 @@ def scale_biomass(
     balance_out: str | None = None,
 ) -> None:
     """Rescale a component to a new mass fraction, optionally balancing
-    out a second component to keep the total at 1 g/gDW.
+    out a second component so the biomass total becomes 1 g/gDW.
 
     Ports ``scaleBioMass.m``. The rescaling factor is derived from
     :func:`sum_biomass` on the *current* model state, so call this with
     an in-place ``model`` mutation, not on a stale snapshot.
+
+    With ``balance_out``, that component is rescaled so the components sum
+    to exactly 1 g/gDW, whatever the total was before. It must be large
+    enough to absorb the difference: a ``ValueError`` is raised, before the
+    model is changed, when its fraction is 0 or would become 0 or negative.
     """
     fractions = sum_biomass(model, config)
     current = fractions[component_name]
@@ -106,6 +111,22 @@ def scale_biomass(
             f"Cannot scale {component_name!r} to {new_value}: current "
             "fraction is 0 (pseudoreaction missing or empty)."
         )
+    if balance_out is not None:
+        balance_current = fractions[balance_out]
+        if balance_current == 0:
+            raise ValueError(
+                f"Cannot balance with {balance_out!r}: current fraction is 0 "
+                "(pseudoreaction missing or empty)."
+            )
+        # Fractions are linear in the substrate coefficients, so the total
+        # after the first rescaling is known before the model is changed.
+        balance_new = balance_current + 1.0 - (fractions["total"] - current + new_value)
+        if balance_new <= 0:
+            raise ValueError(
+                f"Cannot balance {component_name!r} = {new_value:g} with "
+                f"{balance_out!r}: it would have to go from {balance_current:.4g} "
+                f"to {balance_new:.4g} g/gDW to bring the total to 1."
+            )
     factor = new_value / current
     rescale_pseudoreaction(model, config, component_name, factor)
 
@@ -114,8 +135,6 @@ def scale_biomass(
         fractions = sum_biomass(model, config)
         total = fractions["total"]
         balance_current = fractions[balance_out]
-        if balance_current == 0:
-            return  # nothing we can do
         balance_factor = (balance_current + (1.0 - total)) / balance_current
         rescale_pseudoreaction(model, config, balance_out, balance_factor)
 
