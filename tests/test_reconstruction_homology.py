@@ -111,6 +111,59 @@ def test_strictness_bidirectional_and_best_hits():
     assert "R_single" in {r.id for r in res.model.reactions}
 
 
+def test_strictness_3_keeps_tied_best_hits():
+    hits = make_ortholog_hits([("tg1", "ng1"), ("tg2", "ng1")], "templateGEM", "bug")
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3)
+    assert {r.id for r in res.model.reactions} == {"R_single", "R_iso"}
+
+    weaker = (hits.from_gene == "ng1") & (hits.to_gene == "tg2")
+    hits.loc[weaker, "bitscore"] = 500.0
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3)
+    assert {r.id for r in res.model.reactions} == {"R_single"}
+
+
+def test_max_evalue_is_exclusive():
+    hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")
+    hits["evalue"] = 1e-30
+    assert not get_model_from_homology([_template()], hits, "bug").model.reactions
+    res = get_model_from_homology([_template()], hits, "bug", max_evalue=1e-29)
+    assert "R_single" in {r.id for r in res.model.reactions}
+
+
+def test_evalue_at_the_cutoff_is_parsed_exactly():
+    from raven_toolbox.reconstruction.homology.blast import _parse_tabular
+
+    hits = _parse_tabular("ng1\ttg1\t1e-30\t100\t1000\t300\t100\n", "bug", "templateGEM", "\t")
+    assert hits.evalue.iloc[0] == 1e-30
+
+
+def test_only_genes_in_models_uses_the_template_gene():
+    # A new-organism gene that shares its id with a template gene ("tg2") must not
+    # keep a hit to a gene the template lacks, which would be its best hit.
+    hits = make_ortholog_hits([("tg1", "tg2"), ("tgX", "tg2")], "templateGEM", "bug")
+    hits.loc[hits.to_gene == "tgX", "bitscore"] = 2000.0
+    res = get_model_from_homology([_template()], hits, "bug", strictness=3,
+                                  only_genes_in_models=True)
+    assert res.model.reactions.get_by_id("R_single").gene_reaction_rule == "tg2"
+
+
+def test_only_genes_in_models_rejects_an_emptied_direction():
+    hits = make_ortholog_hits([("tgX", "ng1"), ("tg1", "ng2")], "templateGEM", "bug")
+    hits.loc[hits.to_gene.isin(["tg1", "ng2"]), "identity"] = 10.0
+    assert not get_model_from_homology([_template()], hits, "bug").model.reactions
+    with pytest.raises(ValueError, match="No genes in matching from"):
+        get_model_from_homology([_template()], hits, "bug", only_genes_in_models=True)
+
+
+def test_miscased_organism_ids_are_rejected():
+    hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")
+    with pytest.raises(ValueError, match=r"only when case is ignored: \['bug'\]"):
+        get_model_from_homology([_template()], hits, "Bug")
+    other = make_ortholog_hits([("tg1", "ng1")], "otherGEM", "bug")
+    res = get_model_from_homology([_template()], pd.concat([hits, other]), "bug")
+    assert "R_single" in {r.id for r in res.model.reactions}
+
+
 def test_one_directional_non_reciprocal():
     # build hits with only the new->old direction present
     hits = make_ortholog_hits([("tg1", "ng1")], "templateGEM", "bug")

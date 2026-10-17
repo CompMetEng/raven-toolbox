@@ -13,6 +13,7 @@ Key behaviour:
 from __future__ import annotations
 
 import ast
+import re
 import warnings
 from dataclasses import dataclass, field
 
@@ -21,6 +22,9 @@ import pandas as pd
 
 from raven_toolbox.manipulation.merge import merge_models
 from raven_toolbox.reconstruction.homology.hits import validate_hits
+
+# cobra's GPR parser splits a gene id at whitespace, parentheses, "|" and "&".
+_GPR_SPLIT = re.compile(r"[\s()|&]")
 
 
 @dataclass
@@ -143,14 +147,15 @@ def _ortholog_map(
 ):
     """Build {model_id: {template_gene: [new_gene, ...]}} from the hits table."""
     h = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]
 
     if best_hits_only:
-        h = h.sort_values("bitscore", ascending=False)
-        h = h.groupby(["from_id", "to_id", "from_gene"], sort=False).head(1)
+        # Every hit tied for the best bitscore is kept, as in RAVEN.
+        best = h.groupby(["from_id", "to_id", "from_gene"])["bitscore"].transform("max")
+        h = h[h.bitscore == best]
 
     # Directional views, normalised to (model_id, new_gene, template_gene).
     fwd = (
@@ -233,14 +238,13 @@ def get_model_from_homology(
 
     * ``strictness`` (default 1) picks the hit-filtering policy:
 
-      - 1: bidirectional — a template gene and a new-organism gene must each
-        be the other's best match, rather than trusting a hit in just one
-        direction.
+      - 1: bidirectional — a template gene and a new-organism gene must have
+        an accepted hit in both directions, rather than in just one.
       - 2: one-directional — trust a hit found in a single direction, picked
         by ``map_direction``.
-      - 3: bidirectional and best-hits-only — before matching, each gene is
-        first trimmed to its single best hit (by bitscore) in each
-        direction, then the bidirectional rule is applied.
+      - 3: bidirectional and best-hits-only — before matching, each gene keeps
+        only its best hits (by bitscore) in each direction, all of them when
+        several tie, then the bidirectional rule is applied.
 
     * ``map_direction`` picks which one-directional search to trust when
       ``strictness`` is 2: ``"new_to_old"`` (default, hits found
@@ -249,8 +253,11 @@ def get_model_from_homology(
       ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
       gene for later curator review, ``"keep"`` drops just that subunit,
       ``"drop"`` drops the whole reaction.
-    * ``only_genes_in_models`` restricts the hits table to genes that actually
-      appear in the given ``models`` before mapping orthologs.
+    * ``only_genes_in_models`` restricts the hits table to hits whose template
+      gene appears in the given ``models`` before mapping orthologs, so a gene
+      the templates lack cannot be a best hit. It raises ``ValueError`` when no
+      hit of a search direction between ``model_for`` and a template passes
+      the cutoffs and this filter.
     * ``keep_gene_free`` (default False) also transfers the template reactions that have no
       GPR (spontaneous, transport, exchange, artificial). By default they are dropped, as in
       RAVEN, because nothing supports them in the new organism. Set it when the template is
@@ -262,6 +269,10 @@ def get_model_from_homology(
       same new-organism gene: the earlier template in the list wins that gene
       (default: the order of ``models``).
 
+    Organism ids in ``hits`` are case-sensitive. An id that matches
+    ``model_for`` or a template id only when case is ignored raises
+    ``ValueError``; hits involving other organisms are ignored.
+
     Defaults for the three filters come from a `calibration against KEGG orthology
     <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
     on raven-docs, scored with precision weighted above recall (a wrongly transferred
@@ -271,6 +282,9 @@ def get_model_from_homology(
     * ``min_align_len`` 100 replaces RAVEN's 200, which discarded real orthologs
       for no gain in precision. Anything at or below 150 measured the same; 200
       cost 1-2 points on every organism tested.
+    A hit passes when its e-value is below ``max_evalue`` and its alignment length and
+    identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
+
     * ``max_evalue`` makes no difference anywhere between 1e-4 and 1e-50 -- the
       other two filters have already excluded whatever it would exclude -- so
       1e-30 is kept for continuity with RAVEN rather than for any measured effect.
@@ -296,9 +310,29 @@ def get_model_from_homology(
         )
     bidirectional, best_hits_only = _strictness_to_flags(strictness)
     validate_hits(hits)
+    if review_identity is not None and hits.attrs.get("source") == "SuppOrth":
+        warnings.warn(
+            "review_identity has no effect on SuppOrth hits: their identity is a placeholder "
+            "of 100, so no reaction is a candidate. Filter on SuppOrth's own identity with "
+            "hits_from_supporth(min_identity=...) instead.",
+            stacklevel=2,
+        )
 
     model_by_id = {m.id: m for m in models}
     model_ids = list(model_by_id)
+    # An organism id that differs from model_for or a template id only in case
+    # would silently be read as another organism; RAVEN rejects it too.
+    known = {model_for, *model_ids}
+    known_lower = {k.lower() for k in known}
+    miscased = sorted(
+        i for i in set(hits.from_id) | set(hits.to_id)
+        if i not in known and str(i).lower() in known_lower
+    )
+    if miscased:
+        raise ValueError(
+            f"hits contain organism ids that match model_for ({model_for!r}) or a template "
+            f"model id ({model_ids}) only when case is ignored: {miscased}. Ids are case-sensitive."
+        )
     model_genes = {mid: {g.id for g in m.genes} for mid, m in model_by_id.items()}
     all_model_genes = set().union(*model_genes.values()) if model_genes else set()
 
@@ -313,7 +347,27 @@ def get_model_from_homology(
             )
 
     if only_genes_in_models:
-        hits = hits[hits.from_gene.isin(all_model_genes) | hits.to_gene.isin(all_model_genes)]
+        # The template-side gene of each hit, as in RAVEN.
+        template_gene = hits.to_gene.where(hits.from_id == model_for, hits.from_gene)
+        kept = template_gene.isin(all_model_genes)
+        # As in RAVEN, a search direction with no hit left after the cutoffs and
+        # this filter is an error rather than an empty mapping.
+        passes = (
+            kept
+            & (hits.evalue < max_evalue)
+            & (hits.align_len >= min_align_len)
+            & (hits.identity >= min_identity)
+        )
+        directions = hits[["from_id", "to_id"]].drop_duplicates().itertuples(index=False)
+        for from_id, to_id in directions:
+            if model_for not in (from_id, to_id) or not {from_id, to_id} & set(model_ids):
+                continue
+            if not passes[(hits.from_id == from_id) & (hits.to_id == to_id)].any():
+                raise ValueError(
+                    f"No genes in matching from {from_id} to {to_id} are present in the "
+                    "corresponding model"
+                )
+        hits = hits[kept]
 
     ortho = _ortholog_map(
         hits, model_for, model_ids, bidirectional=bidirectional, best_hits_only=best_hits_only,
@@ -321,6 +375,15 @@ def get_model_from_homology(
         model_genes=model_genes, max_evalue=max_evalue, min_align_len=min_align_len,
         min_identity=min_identity,
     )
+    mapped = {ng for per in ortho.values() for ngs in per.values() for ng in ngs}
+    unusable = sorted(g for g in mapped if _GPR_SPLIT.search(str(g)))
+    if unusable:
+        raise ValueError(
+            f"{len(unusable)} gene ids of {model_for!r} cannot be written into a GPR, because "
+            f"cobra splits them at whitespace, parentheses, '|' or '&': {unusable[:3]}. Map "
+            "them to gene ids first, for example with protein_to_gene in hits_from_supporth, "
+            "or use the accession alone for UniProt headers such as 'sp|P33284|HXK_KLULA'."
+        )
 
     order = [str(x) for x in preferred_order] if preferred_order else model_ids
     if preferred_order and len(models) > 1:
@@ -413,7 +476,7 @@ def _candidate_evidence(
     point is a list somebody will actually skim, not an exhaustive dump.
     """
     usable = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]
