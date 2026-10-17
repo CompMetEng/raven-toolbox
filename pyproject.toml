@@ -61,10 +61,10 @@ excel = [
 raven-toolbox-binaries = "raven_toolbox.binaries_cli:main"
 
 [project.urls]
-Homepage = "https://github.com/SysBioChalmers/raven-toolbox"
-Source = "https://github.com/SysBioChalmers/raven-toolbox"
-Issues = "https://github.com/SysBioChalmers/raven-toolbox/issues"
-"RAVEN MATLAB" = "https://github.com/SysBioChalmers/RAVEN"
+Homepage = "https://github.com/CompMetEng/raven-toolbox"
+Source = "https://github.com/CompMetEng/raven-toolbox"
+Issues = "https://github.com/CompMetEng/raven-toolbox/issues"
+"RAVEN MATLAB" = "https://github.com/CompMetEng/RAVEN"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/raven_toolbox"]

@@ -13,7 +13,7 @@ Tools already on ``PATH`` (or pointed at by ``RAVEN_PYTHON_*``) are left as-is
 unless ``--force-download`` is given. Tools with no bundle for this OS/arch
 (e.g. MAFFT/CD-HIT on native Windows) are reported as unavailable with a
 conda/WSL2 hint — see
-https://github.com/SysBioChalmers/raven-gecko-parity/blob/main/docs/maintaining_binaries.md.
+https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/maintaining_binaries.md.
 """
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{', '.join(r.executable for r in unavailable)}.\n"
             "Install them via conda (`conda install -c bioconda <tool>`) or, on "
             "native Windows for HMMER/MAFFT/CD-HIT, run inside WSL2 (see "
-            "https://github.com/SysBioChalmers/raven-gecko-parity/blob/main/docs/maintaining_binaries.md)."
+            "https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/maintaining_binaries.md)."
         )
     if errors:
         print(f"\n{len(errors)} download(s) failed:")

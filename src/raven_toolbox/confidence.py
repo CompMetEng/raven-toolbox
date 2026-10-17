@@ -31,7 +31,7 @@ defect. Detecting biomass by name instead is deliberately *not* done: ``\\bgrowt
 "non-growth associated maintenance reaction", and a name regex must never silence a chemistry check.
 
 The design and the measured yeast-GEM distributions are in the `confidence tracking study
-<https://github.com/SysBioChalmers/raven-gecko-parity/blob/develop/docs/localization/confidence_tracking.md>`_ on raven-gecko-parity; the
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/confidence_tracking.md>`_ on raven-gecko-parity; the
 facet set above is closed. Wire it in by calling :func:`score_localization_confidence` on an
 :class:`~raven_toolbox.localization.AssignmentProposal`, :func:`score_equation_confidence` and
 :func:`score_gene_association_confidence` on any model, and :func:`mark_curated` when a curator firmly

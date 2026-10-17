@@ -49,7 +49,7 @@ automatically; that side is documented in
 
 Publishing the results, and the versioning model behind the releases, is a shared
 convention rather than a raven-toolbox concern, and is documented in
-[raven-gecko-parity](https://github.com/SysBioChalmers/raven-gecko-parity/blob/develop/docs/publishing_artefacts.md).
+[raven-gecko-parity](https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/publishing_artefacts.md).
 
 ## Rebuilding the KEGG artefacts
 

@@ -1,12 +1,12 @@
 # raven-toolbox
 
-[![CI](https://github.com/SysBioChalmers/raven-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/SysBioChalmers/raven-toolbox/actions/workflows/ci.yml)
+[![CI](https://github.com/CompMetEng/raven-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/CompMetEng/raven-toolbox/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/raven-toolbox.svg)](https://pypi.org/project/raven-toolbox/)
 
 **Reconstruction, Analysis and Visualisation of Metabolic Networks — in Python.**
 
 `raven-toolbox` is the Python counterpart of the
-[RAVEN Toolbox](https://github.com/SysBioChalmers/RAVEN) (MATLAB). It builds on
+[RAVEN Toolbox](https://github.com/CompMetEng/RAVEN) (MATLAB). It builds on
 [**cobrapy**](https://github.com/opencobra/cobrapy) for everything cobrapy already does
 well — simulation, standard analyses, SBML I/O, model manipulation — and adds the
 functionality that is unique to RAVEN:
@@ -41,7 +41,7 @@ COBRA ecosystem.
 ## Status
 
 **raven-toolbox 3.0.0b1** is out — the first beta toward 3.0, tracking the upcoming MATLAB
-RAVEN 3.0 beta ([release notes](https://github.com/SysBioChalmers/raven-toolbox/releases/tag/v3.0.0b1),
+RAVEN 3.0 beta ([release notes](https://github.com/CompMetEng/raven-toolbox/releases/tag/v3.0.0b1),
 [changelog](CHANGELOG.md)). It has been validated against MATLAB RAVEN on **Human-GEM** (5 Hart2015
 cell-line models, Jaccard 0.975–0.980 — see
 [the Human-GEM validation study](https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/humangem-validation.md)
@@ -75,7 +75,7 @@ pip install --pre raven-toolbox
 To work against the unreleased code on `develop` instead, install from git:
 
 ```bash
-git clone https://github.com/SysBioChalmers/raven-toolbox
+git clone https://github.com/CompMetEng/raven-toolbox
 cd raven-toolbox
 pip install -e ".[dev]"
 ```
@@ -123,12 +123,12 @@ site is generated from the docstrings here at build time, so a docstring edit
 reaches the site without anything being copied across. Contributor and maintainer
 notes are in [CONTRIBUTING.md](CONTRIBUTING.md); the roadmap, the backlog and the
 MATLAB parity record are in
-[raven-gecko-parity](https://github.com/SysBioChalmers/raven-gecko-parity).
+[raven-gecko-parity](https://github.com/CompMetEng/raven-gecko-parity).
 
 ## Relationship to MATLAB RAVEN
 
 `raven-toolbox` is an independent Python reimplementation of the
-[RAVEN Toolbox](https://github.com/SysBioChalmers/RAVEN), released under the permissive
+[RAVEN Toolbox](https://github.com/CompMetEng/RAVEN), released under the permissive
 **MIT** license. If you use it in scientific work, please cite the RAVEN 2 paper:
 
 > Wang H, Marcišauskas S, Sánchez BJ, Domenzain I, Hermansson D, Agren R, Nielsen J,
