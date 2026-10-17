@@ -196,6 +196,21 @@ def test_scale_biomass_with_balance_keeps_total_at_one():
     assert out["total"] == pytest.approx(1.0, rel=1e-6)
 
 
+def test_scale_biomass_balance_to_target_total():
+    m, cfg = _toy_biomass_model()
+    scale_biomass(m, cfg, "protein", 0.4, balance_out="carbohydrate", target_total=0.9)
+    out = sum_biomass(m, cfg)
+    assert out["protein"] == pytest.approx(0.4, rel=1e-6)
+    assert out["total"] == pytest.approx(0.9, rel=1e-6)
+
+
+def test_scale_biomass_negative_balance_uses_target_total():
+    m, cfg = _toy_biomass_model()
+    # Protein 0.8 fits a total of 1 but not of 0.5.
+    with pytest.raises(ValueError, match="bring the total to 0.5"):
+        scale_biomass(m, cfg, "protein", 0.8, balance_out="carbohydrate", target_total=0.5)
+
+
 def test_scale_biomass_zero_current_raises():
     m, cfg = _toy_biomass_model()
     # Build a config that references a missing component → 0 current
