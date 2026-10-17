@@ -34,7 +34,7 @@ def raven_root() -> Path:
             "pytest -m parity"
         )
     path = Path(root)
-    if not (path / "io").is_dir():
+    if not (path / "src" / "io").is_dir():
         pytest.skip(f"RAVEN_ROOT={path} does not look like a RAVEN checkout")
     return path
 
@@ -46,8 +46,8 @@ def raven_models(raven_root: Path) -> dict[str, Path]:
     These were written by MATLAB RAVEN's own ``writeYAMLmodel``, which makes
     them reference data for the Python reader without needing MATLAB.
     """
-    tutorial = raven_root / "tutorial"
-    found = {p.name: p for p in sorted(tutorial.glob("*.yml"))}
+    tutorial = raven_root / "tutorials" / "data"
+    found = {p.name: p for p in sorted(tutorial.rglob("*.yml"))}
     if not found:
         pytest.skip(f"no YAML models under {tutorial}")
     return found
