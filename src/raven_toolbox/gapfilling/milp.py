@@ -34,8 +34,8 @@ _INTEGRALITY_TOL = 1e-9
 
 
 @dataclass
-class KumarGapFillResult:
-    """Outcome of a Kumar 2007 MILP gap-fill.
+class MILPGapFillResult:
+    """Outcome of a growth-floor MILP gap-fill.
 
     Parameters
     ----------
@@ -72,14 +72,14 @@ def _merge_templates(
     return working, template_ids
 
 
-def fill_gaps_kumar_milp(
+def fill_gaps_milp(
     model: cobra.Model,
     templates: cobra.Model | Iterable[cobra.Model],
     *,
     min_growth: float | None = None,
     big_m: float = 1000.0,
     verbose: bool = True,
-) -> KumarGapFillResult:
+) -> MILPGapFillResult:
     """Gap-fill to make the model objective (biomass) >= min_growth.
 
     Solves a global MILP that selects the fewest template reactions that make
@@ -104,7 +104,7 @@ def fill_gaps_kumar_milp(
 
     Returns
     -------
-    KumarGapFillResult
+    MILPGapFillResult
     """
     templates = _as_models(templates)
 
@@ -113,7 +113,7 @@ def fill_gaps_kumar_milp(
 
     if verbose:
         print(
-            f"fill_gaps_kumar_milp: merged model has {len(working.reactions)} reactions "
+            f"fill_gaps_milp: merged model has {len(working.reactions)} reactions "
             f"({len(model.reactions)} draft, {len(template_ids)} template)."
         )
 
@@ -122,7 +122,7 @@ def fill_gaps_kumar_milp(
     obj_coeffs = linear_reaction_coefficients(working)
     if not obj_coeffs:
         raise ValueError(
-            "fill_gaps_kumar_milp: model has no objective function. "
+            "fill_gaps_milp: model has no objective function. "
             "Set a non-zero objective before calling this function."
         )
 
@@ -132,14 +132,14 @@ def fill_gaps_kumar_milp(
         if not math.isfinite(max_val) or max_val <= 0:
             if verbose:
                 print(
-                    f"fill_gaps_kumar_milp: FBA on the merged model gives {max_val}. "
+                    f"fill_gaps_milp: FBA on the merged model gives {max_val}. "
                     "Cannot establish a growth floor."
                 )
-            return KumarGapFillResult(model=model.copy(), exit_status="infeasible")
+            return MILPGapFillResult(model=model.copy(), exit_status="infeasible")
         min_growth = 0.1 * max_val
         if verbose:
             print(
-                f"fill_gaps_kumar_milp: setting min_growth = {min_growth:.4g} "
+                f"fill_gaps_milp: setting min_growth = {min_growth:.4g} "
                 f"(10% of FBA max {max_val:.4g})."
             )
 
@@ -198,13 +198,13 @@ def fill_gaps_kumar_milp(
         working.objective = prob.Objective(sum(obj_terms), direction="min")
     else:
         if verbose:
-            print("fill_gaps_kumar_milp: no repair candidates found.")
-        return KumarGapFillResult(model=model.copy(), exit_status="infeasible")
+            print("fill_gaps_milp: no repair candidates found.")
+        return MILPGapFillResult(model=model.copy(), exit_status="infeasible")
 
     # ---- Solve ----
     if verbose:
         print(
-            f"fill_gaps_kumar_milp: solving MILP "
+            f"fill_gaps_milp: solving MILP "
             f"({len(db_indicators)} database candidates)..."
         )
 
@@ -221,8 +221,8 @@ def fill_gaps_kumar_milp(
 
     if status != "optimal":
         if verbose:
-            print(f"fill_gaps_kumar_milp: solver returned '{status}'.")
-        return KumarGapFillResult(model=model.copy(), exit_status=status)
+            print(f"fill_gaps_milp: solver returned '{status}'.")
+        return MILPGapFillResult(model=model.copy(), exit_status=status)
 
     # ---- Extract solution ----
     threshold = 0.5
@@ -232,7 +232,7 @@ def fill_gaps_kumar_milp(
 
     if verbose:
         print(
-            f"fill_gaps_kumar_milp: added {len(added_rxn_ids)} template reaction(s)."
+            f"fill_gaps_milp: added {len(added_rxn_ids)} template reaction(s)."
         )
 
     # ---- Build output model ----
@@ -251,12 +251,12 @@ def fill_gaps_kumar_milp(
     if not _meets_floor(filled, obj_coeffs, min_growth):
         if verbose:
             print(
-                "fill_gaps_kumar_milp: the selected repairs do not reach "
+                "fill_gaps_milp: the selected repairs do not reach "
                 f"min_growth {min_growth:.4g} in the filled model."
             )
         status = "not_restored"
 
-    return KumarGapFillResult(
+    return MILPGapFillResult(
         added_reactions=sorted(added_rxn_ids),
         model=filled,
         exit_status=status,

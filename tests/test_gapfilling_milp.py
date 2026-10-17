@@ -1,8 +1,8 @@
-"""Tests for growth-floor MILP gap-filling (gapfilling/kumar_milp.py)."""
+"""Tests for growth-floor MILP gap-filling (gapfilling/milp.py)."""
 import cobra
 import pytest
 
-from raven_toolbox.gapfilling import KumarGapFillResult, fill_gaps_kumar_milp
+from raven_toolbox.gapfilling import MILPGapFillResult, fill_gaps_milp
 
 
 def _met(mid):
@@ -62,26 +62,26 @@ def directionality_gap():
 
 def test_result_type(growth_gap):
     draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
-    assert isinstance(result, KumarGapFillResult)
+    result = fill_gaps_milp(draft, template, verbose=False)
+    assert isinstance(result, MILPGapFillResult)
 
 
 def test_added_reactions_list(growth_gap):
     draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
+    result = fill_gaps_milp(draft, template, verbose=False)
     assert isinstance(result.added_reactions, list)
 
 
 def test_model_returned(growth_gap):
     draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
+    result = fill_gaps_milp(draft, template, verbose=False)
     assert isinstance(result.model, cobra.Model)
 
 
 def test_gap_filled_enables_growth(growth_gap):
     """After adding r_missing, the model should be able to produce biomass."""
     draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
+    result = fill_gaps_milp(draft, template, verbose=False)
     if result.exit_status != "optimal":
         pytest.skip(f"Solver status: {result.exit_status}")
     val = result.model.slim_optimize()
@@ -91,7 +91,7 @@ def test_gap_filled_enables_growth(growth_gap):
 def test_r_missing_added(growth_gap):
     """r_missing should be in the returned model."""
     draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
+    result = fill_gaps_milp(draft, template, verbose=False)
     if result.exit_status != "optimal":
         pytest.skip(f"Solver status: {result.exit_status}")
     assert "r_missing" in result.added_reactions
@@ -100,7 +100,7 @@ def test_r_missing_added(growth_gap):
 def test_draft_directions_are_kept(directionality_gap):
     """A draft reaction in the wrong direction is not reversed: there is no fill."""
     draft, template = directionality_gap
-    result = fill_gaps_kumar_milp(draft, template, min_growth=1.0, verbose=False)
+    result = fill_gaps_milp(draft, template, min_growth=1.0, verbose=False)
     assert result.exit_status != "optimal"
     assert result.added_reactions == []
     assert result.model.reactions.r1.bounds == (0, 1000)
@@ -126,7 +126,7 @@ def test_forced_flux_is_kept():
     u1.add_metabolites({_met("A_c"): 1})
     template.add_reactions([u1])
 
-    result = fill_gaps_kumar_milp(draft, template, min_growth=8.0, verbose=False)
+    result = fill_gaps_milp(draft, template, min_growth=8.0, verbose=False)
     assert result.exit_status == "optimal"
     assert result.added_reactions == ["u1"]
     assert result.model.reactions.maint.lower_bound == 5
@@ -138,7 +138,7 @@ def test_no_objective_raises(growth_gap):
     draft, template = growth_gap
     draft.objective = {}   # clear objective
     with pytest.raises(ValueError, match="no objective"):
-        fill_gaps_kumar_milp(draft, template, verbose=False)
+        fill_gaps_milp(draft, template, verbose=False)
 
 
 def test_exit_status_on_infeasible():
@@ -151,7 +151,7 @@ def test_exit_status_on_infeasible():
     m.add_reactions([bio])
     m.objective = "bio"
     template = cobra.Model("empty_template")
-    result = fill_gaps_kumar_milp(m, template, verbose=False)
+    result = fill_gaps_milp(m, template, verbose=False)
     assert result.exit_status != "optimal"
 
 
@@ -170,7 +170,7 @@ def test_small_floor_is_not_met_by_a_fractional_indicator(growth_gap, solver):
     """With a floor below 1e-5 x big-M, a near-zero indicator must not pass as 'not added'."""
     draft, template = growth_gap
     draft.solver = solver
-    result = fill_gaps_kumar_milp(draft, template, min_growth=0.005, verbose=False)
+    result = fill_gaps_milp(draft, template, min_growth=0.005, verbose=False)
     assert result.exit_status == "optimal"
     assert result.added_reactions == ["r_missing"]
     assert result.model.slim_optimize() >= 0.005
@@ -178,21 +178,21 @@ def test_small_floor_is_not_met_by_a_fractional_indicator(growth_gap, solver):
 
 def test_floor_check_on_filled_model(growth_gap):
     """The floor check fails on the draft and passes once r_missing is added."""
-    from raven_toolbox.gapfilling import kumar_milp
+    from raven_toolbox.gapfilling import milp
 
     draft, template = growth_gap
     obj = {draft.reactions.biomass: 1.0}
-    assert not kumar_milp._meets_floor(draft, obj, 0.005)
+    assert not milp._meets_floor(draft, obj, 0.005)
     draft.add_reactions([template.reactions.r_missing.copy()])
-    assert kumar_milp._meets_floor(draft, obj, 0.005)
+    assert milp._meets_floor(draft, obj, 0.005)
 
 
 def test_selection_that_does_not_restore_growth_is_reported(growth_gap, monkeypatch):
     """A selection that fails the floor check is returned as 'not_restored'."""
-    from raven_toolbox.gapfilling import kumar_milp
+    from raven_toolbox.gapfilling import milp
 
     draft, template = growth_gap
-    monkeypatch.setattr(kumar_milp, "_meets_floor", lambda *args: False)
-    result = fill_gaps_kumar_milp(draft, template, min_growth=0.005, verbose=False)
+    monkeypatch.setattr(milp, "_meets_floor", lambda *args: False)
+    result = fill_gaps_milp(draft, template, min_growth=0.005, verbose=False)
     assert result.added_reactions == ["r_missing"]
     assert result.exit_status == "not_restored"
