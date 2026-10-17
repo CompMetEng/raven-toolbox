@@ -129,7 +129,7 @@ def remove_zero_interval_reactions(model: cobra.Model) -> list[str]:
 def remove_no_flux_reactions(
     model: cobra.Model, *, open_exchanges: bool = True
 ) -> list[str]:
-    """Remove reactions that cannot carry any flux (RAVEN ``simplifyModel`` ``deleteMinMax``).
+    """Remove reactions that cannot carry flux under the tested bounds (RAVEN ``deleteMinMax``).
 
     Runs FVA and drops every reaction whose minimum and maximum flux are both zero.
     With ``open_exchanges`` (default) the reactions in ``model.exchanges`` are first
