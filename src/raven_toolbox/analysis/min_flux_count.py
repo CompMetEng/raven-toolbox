@@ -92,13 +92,8 @@ def get_min_nr_fluxes(
         negative = more discouraged); non-negative entries are clamped up to
         the largest (least negative) negative score present, matching
         MATLAB's "positive scores are not possible" rule — or to 0 if
-        ``scores`` has no negative entries at all (MATLAB used to crash
-        outright here: ``scores(scores>=0)=max(scores(scores<0))`` evaluates
-        the right side to an empty array when nothing is negative, and
-        unlike the literal ``[]`` MATLAB treats as element deletion, an empty
-        array computed by ``max()`` just errors on the resulting size
-        mismatch instead of deleting anything — fixed upstream too, see
-        SysBioChalmers/RAVEN#729). Defaults to an implicit -1 for every
+        ``scores`` has no negative entries at all, as RAVEN's
+        ``getMinNrFluxes`` does. Defaults to an implicit -1 for every
         reaction (plain unweighted cardinality minimization).
     big_m:
         Override the big-M constant. Defaults to an estimate from the

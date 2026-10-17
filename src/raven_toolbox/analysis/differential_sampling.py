@@ -64,10 +64,8 @@ def get_flux_z(solutions_a: pd.DataFrame, solutions_b: pd.DataFrame) -> pd.Serie
 
     Notes
     -----
-    Fixes a real sign bug in the zero-variance branch of ``getFluxZ.m`` as it
-    stands on RAVEN's ``develop3`` (a flux *decrease* with no variance in
-    either condition scored ``+100``, backwards relative to the general
-    formula): SysBioChalmers/RAVEN#742 makes the same correction upstream.
+    A flux *decrease* with no variance in either condition scores ``-100``,
+    the same sign the general formula gives, as in RAVEN's ``getFluxZ``.
     """
     reaction_ids = _check_same_reactions(solutions_a, solutions_b)
 

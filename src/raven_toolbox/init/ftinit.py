@@ -800,12 +800,10 @@ def ftinit(
     docstring for the MILP mechanics and its one caveat (the bonus checks a producer is
     "on", not that the metabolite is verifiably net-produced through it). A name that
     matches no metabolite in ``prep.ref_model`` warns rather than silently doing nothing.
-    Ported from RAVEN's ``ftINITInternalAlg`` on its ``develop3`` branch — the released
-    ``main`` branch has an unrelated, unrepeated defect here (a fixed big-M that
-    incorrectly caps some reversible/negative reactions above magnitude 100; raven-toolbox
-    never had this because its own ``big_m=100`` default relies on the model being
-    rescaled first, not on a per-reaction cap — see the `INIT parameter calibration study
-    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_).
+    Ported from RAVEN 3's ``ftINITInternalAlg``. The ``big_m=100`` default relies on the
+    model being rescaled first, not on a per-reaction cap — see the `INIT parameter
+    calibration study
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_.
 
     ``mip_gap``/``time_limit`` are forwarded to each :func:`run_ftinit` solve. On
     genome-scale models they are essential for tractability — see the `INIT parameter

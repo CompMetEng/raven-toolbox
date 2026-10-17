@@ -4,8 +4,7 @@ Tests whether a model can produce (excrete) or consume (take up) any
 metabolite for free — a sign of a stoichiometric leak, futile cycle, or
 unconstrained exchange somewhere in the network. This is the unified
 replacement for RAVEN's ``makeSomething`` (``'produce'``) and
-``consumeSomething`` (``'consume'``), both now deprecated wrappers around it
-(SysBioChalmers/RAVEN#732).
+``consumeSomething`` (``'consume'``).
 
 Works by grafting a throwaway exchange reaction onto every metabolite (an
 "any metabolite" probe), forcing at least one unit of combined flux through

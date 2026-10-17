@@ -55,9 +55,8 @@ def _can_produce_and_consume(met) -> tuple[bool, bool]:
     counts exactly when it is reversible (``lower_bound < 0``). This deliberately
     ignores ``upper_bound`` and does not check whether a reaction can actually carry
     flux — that bounds-aware check is ``remove_no_flux_reactions``'s job (RAVEN
-    ``deleteMinMax``, via FVA); mixing it into this cheap structural pass previously
-    made a reaction locked at zero flux (``lb == ub == 0``) silently drop out as a
-    producer/consumer here, diverging from RAVEN when this pass runs alone.
+    ``deleteMinMax``, via FVA). A reaction locked at zero flux (``lb == ub == 0``)
+    therefore still counts as a producer/consumer here, as in RAVEN.
     """
     produce = consume = False
     for rxn in met.reactions:

@@ -1,5 +1,5 @@
 """Real ftINIT extraction against genome-scale Human-GEM, for cross-language parity
-against RAVEN's validate_genome_scale.m (in a RAVEN develop3 checkout).
+with the same pipeline (prepINITModel, then ftINIT) run in RAVEN.
 
 Not a committed test -- a script to run once per side of a comparison, using the full
 pipeline (prep_init_model with a real task list, then ftinit() with real RNA-seq

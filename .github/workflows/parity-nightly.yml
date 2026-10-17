@@ -35,14 +35,10 @@ jobs:
     # night for no reason.
     if: github.repository == 'CompMetEng/raven-toolbox'
     runs-on: ubuntu-latest
-    # Measured against the classic INIT MILP this job used to check (now
-    # ftINIT's run_ftinit, bounded to time_limit=600s -- see
-    # tests/parity/test_genome_scale.py): that extraction took ~68 minutes on
-    # a fast workstation, of which only ~2 were parsing and copying, and
-    # time_limit did not bound the call -- a 60-second limit still ran for
-    # well over 15 minutes -- so the real stop was pytest-timeout below. This
-    # budget is comfortably larger than ftINIT's bound so a runaway is still
-    # reported as a test failure instead of a killed job.
+    # The extraction is run_ftinit bounded to time_limit=600s (see
+    # tests/parity/test_genome_scale.py). This budget is comfortably larger
+    # than that bound, so a runaway is reported as a test failure by
+    # pytest-timeout below instead of a killed job.
     timeout-minutes: 150
 
     steps:
