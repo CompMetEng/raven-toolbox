@@ -8,11 +8,9 @@ Four complementary strategies are provided:
   required; scales better to large models (fastGapFill / swiftGapFill).
 - :func:`analyse_topology` (no solver) — BFS metabolite-producibility pre-screening;
   identifies unreachable metabolites and prunes the candidate reaction pool.
-- :func:`fill_gaps_kumar_milp` (objective MILP) — growth-floor MILP with directionality
-  reversal repair (Kumar et al. 2007).
-
-For the objective-feasibility flavour without directionality repair, also see
-``cobra.flux_analysis.gapfill``.
+- :func:`fill_gaps_kumar_milp` (objective MILP) — fewest template reactions that let the
+  objective reach a growth floor (Kumar et al. 2007); ``cobra.flux_analysis.gapfill``
+  solves a similar problem.
 
 Separately, :func:`find_leak_metabolite` tests whether the model itself contains a
 stoichiometric leak (a metabolite it can produce or consume for free) rather than

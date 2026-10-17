@@ -52,8 +52,11 @@ def directionality_gap():
     draft.add_reactions([exb, r1, bio])
     draft.objective = "biomass"
 
-    # Empty template — reversal is the only repair
-    template = cobra.Model("template_empty")
+    # The template offers nothing that makes A
+    template = cobra.Model("template")
+    other = cobra.Reaction("r_other", lower_bound=0, upper_bound=1000)
+    other.add_metabolites({_met("B_c"): -1})
+    template.add_reactions([other])
     return draft, template
 
 
@@ -67,12 +70,6 @@ def test_added_reactions_list(growth_gap):
     draft, template = growth_gap
     result = fill_gaps_kumar_milp(draft, template, verbose=False)
     assert isinstance(result.added_reactions, list)
-
-
-def test_reversed_reactions_list(growth_gap):
-    draft, template = growth_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
-    assert isinstance(result.reversed_reactions, list)
 
 
 def test_model_returned(growth_gap):
@@ -100,13 +97,40 @@ def test_r_missing_added(growth_gap):
     assert "r_missing" in result.added_reactions
 
 
-def test_directionality_reversal(directionality_gap):
-    """r1 should be reversed when that is the only repair option."""
+def test_draft_directions_are_kept(directionality_gap):
+    """A draft reaction in the wrong direction is not reversed: there is no fill."""
     draft, template = directionality_gap
-    result = fill_gaps_kumar_milp(draft, template, verbose=False)
-    if result.exit_status != "optimal":
-        pytest.skip(f"Solver status: {result.exit_status}")
-    assert "r1" in result.reversed_reactions
+    result = fill_gaps_kumar_milp(draft, template, min_growth=1.0, verbose=False)
+    assert result.exit_status == "infeasible"
+    assert result.added_reactions == []
+    assert result.model.reactions.r1.bounds == (0, 1000)
+
+
+def test_forced_flux_is_kept():
+    """A draft reaction with a forced flux (maintenance) keeps its lower bound."""
+    A, B = _met("A_c"), _met("B_c")
+    draft = cobra.Model("draft")
+    exa = cobra.Reaction("EX_A", lower_bound=0, upper_bound=10)
+    exa.add_metabolites({A: 1})
+    r1 = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r1.add_metabolites({A: -1, B: 1})
+    grow = cobra.Reaction("grow", lower_bound=0, upper_bound=1000)
+    grow.add_metabolites({B: -1})
+    maint = cobra.Reaction("maint", lower_bound=5, upper_bound=1000)
+    maint.add_metabolites({A: -1})
+    draft.add_reactions([exa, r1, grow, maint])
+    draft.objective = "grow"
+
+    template = cobra.Model("template")
+    u1 = cobra.Reaction("u1", lower_bound=0, upper_bound=10)
+    u1.add_metabolites({_met("A_c"): 1})
+    template.add_reactions([u1])
+
+    result = fill_gaps_kumar_milp(draft, template, min_growth=8.0, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["u1"]
+    assert result.model.reactions.maint.lower_bound == 5
+    assert result.model.slim_optimize() >= 8 - 1e-6
 
 
 def test_no_objective_raises(growth_gap):
@@ -152,14 +176,23 @@ def test_small_floor_is_not_met_by_a_fractional_indicator(growth_gap, solver):
     assert result.model.slim_optimize() >= 0.005
 
 
-def test_selection_that_does_not_restore_growth_is_reported(growth_gap, monkeypatch):
-    """A rounded MILP selection is checked on the filled model."""
+def test_floor_check_on_filled_model(growth_gap):
+    """The floor check fails on the draft and passes once r_missing is added."""
     from raven_toolbox.gapfilling import kumar_milp
 
     draft, template = growth_gap
-    draft.solver = "glpk"
-    # A loose integrality tolerance lets the indicator stay fractional.
-    monkeypatch.setattr(kumar_milp, "_INTEGRALITY_TOL", 1e-4)
+    obj = {draft.reactions.biomass: 1.0}
+    assert not kumar_milp._meets_floor(draft, obj, 0.005)
+    draft.add_reactions([template.reactions.r_missing.copy()])
+    assert kumar_milp._meets_floor(draft, obj, 0.005)
+
+
+def test_selection_that_does_not_restore_growth_is_reported(growth_gap, monkeypatch):
+    """A selection that fails the floor check is returned as 'not_restored'."""
+    from raven_toolbox.gapfilling import kumar_milp
+
+    draft, template = growth_gap
+    monkeypatch.setattr(kumar_milp, "_meets_floor", lambda *args: False)
     result = fill_gaps_kumar_milp(draft, template, min_growth=0.005, verbose=False)
-    assert result.added_reactions == []
+    assert result.added_reactions == ["r_missing"]
     assert result.exit_status == "not_restored"

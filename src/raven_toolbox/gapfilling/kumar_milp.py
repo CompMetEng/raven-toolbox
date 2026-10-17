@@ -1,16 +1,10 @@
 """Objective-based gap-filling via a global growth-floor MILP.
 
-Implements the single-level MILP formulation from Kumar et al. 2007
-(BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212) to find the minimum-cost set of model
-modifications that make the objective (biomass) >= *min_growth*.
-
-Two repair mechanisms are supported:
-- **Database reactions** (``y_db``): add reactions from a universal template.
-- **Directionality reversal** (``y_rev``): flip an existing draft reaction so
-  it can also carry flux in the reverse direction. Every irreversible draft
-  reaction is a candidate, exchange reactions and maintenance drains such as
-  ATP hydrolysis included, and with the default weights a reversal is cheaper
-  than an addition; check ``reversed_reactions`` before accepting a fill.
+Finds the smallest set of template reactions that makes the objective
+(biomass) >= *min_growth*, following the database repair of Kumar et al. 2007
+(BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212). Reactions already in
+the draft keep their bounds: a reaction with the wrong direction is a curation
+issue and is not changed here.
 
 The universal template should include any exchange or transport reactions
 that are desired as repair candidates; they are treated identically to other
@@ -18,12 +12,9 @@ database reactions.
 
 This is computationally more expensive than LP-based gap-filling
 (:mod:`~raven_toolbox.gapfilling.fast_lp`) because it involves a MILP solve,
-but it supports the directionality-reversal repair mechanism and optimises
-for objective feasibility rather than mere connectivity.
-
-Note: ``cobra.flux_analysis.gapfill`` also solves an objective-based gap-fill
-(by default without directionality reversal). Use that function if reversal
-is not needed, as it has a more mature solver interface.
+but it optimises for objective feasibility rather than mere connectivity.
+It is the counterpart of RAVEN's ``gapFillMILP``; ``cobra.flux_analysis.gapfill``
+solves a similar problem.
 """
 from __future__ import annotations
 
@@ -50,12 +41,8 @@ class KumarGapFillResult:
     ----------
     added_reactions:
         Template reaction IDs selected by the MILP.
-    reversed_reactions:
-        Draft reaction IDs whose directionality is reversed (lower_bound
-        changed to allow negative flux).
     model:
-        Draft model with *added_reactions* incorporated and *reversed_reactions*
-        bounds updated.
+        Draft model with *added_reactions* incorporated.
     exit_status:
         Solver status string (e.g. ``"optimal"``, ``"infeasible"``), or
         ``"not_restored"`` when the solver reported a solution but the
@@ -64,7 +51,6 @@ class KumarGapFillResult:
     """
 
     added_reactions: list[str] = field(default_factory=list)
-    reversed_reactions: list[str] = field(default_factory=list)
     model: cobra.Model = field(default_factory=cobra.Model)
     exit_status: str = "not_solved"
 
@@ -91,15 +77,14 @@ def fill_gaps_kumar_milp(
     templates: cobra.Model | Iterable[cobra.Model],
     *,
     min_growth: float | None = None,
-    weights: tuple[float, float] = (1.0, 2.0),
     big_m: float = 1000.0,
     verbose: bool = True,
 ) -> KumarGapFillResult:
     """Gap-fill to make the model objective (biomass) >= min_growth.
 
-    Solves a global MILP that selects the minimum-weight combination of
-    directionality reversals and template reactions to make the model's
-    objective reaction feasible at *min_growth*.
+    Solves a global MILP that selects the fewest template reactions that make
+    the model's objective reaction feasible at *min_growth*. The draft
+    reactions keep their bounds.
 
     Parameters
     ----------
@@ -111,9 +96,6 @@ def fill_gaps_kumar_milp(
     min_growth:
         Minimum required objective value. If ``None``, runs FBA on the
         merged model and uses 10% of the maximum as the floor.
-    weights:
-        ``(w_rev, w_db)`` — cost per reversed draft reaction and cost per
-        added template reaction. Lower-weight repairs are preferred.
     big_m:
         Big-M constant for coupling constraints. Must exceed any expected
         flux magnitude in the model.
@@ -125,7 +107,6 @@ def fill_gaps_kumar_milp(
     KumarGapFillResult
     """
     templates = _as_models(templates)
-    w_rev, w_db = weights
 
     # ---- Merge draft + templates ----
     working, template_ids = _merge_templates(model, templates)
@@ -147,20 +128,11 @@ def fill_gaps_kumar_milp(
 
     if min_growth is None:
         # FBA on merged model (all template reactions available).
-        # Also try with all draft reversals relaxed, since the model may only
-        # achieve growth after directionality repair.
         max_val = working.slim_optimize()
-        if not math.isfinite(max_val) or max_val <= 0:
-            # Retry with all irreversible draft reactions temporarily reversed
-            with working as w:
-                for rxn in w.reactions:
-                    if rxn.id in {r.id for r in model.reactions} and rxn.lower_bound >= 0:
-                        rxn.lower_bound = -big_m
-                max_val = w.slim_optimize()
         if not math.isfinite(max_val) or max_val <= 0:
             if verbose:
                 print(
-                    f"fill_gaps_kumar_milp: FBA on merged+relaxed model gives {max_val}. "
+                    f"fill_gaps_kumar_milp: FBA on the merged model gives {max_val}. "
                     "Cannot establish a growth floor."
                 )
             return KumarGapFillResult(model=model.copy(), exit_status="infeasible")
@@ -177,30 +149,6 @@ def fill_gaps_kumar_milp(
     extra_cons: list = []
     obj_terms: list = []
 
-    # Reversal candidates: draft reactions that are currently irreversible (lb >= 0)
-    rev_indicators: dict[str, Any] = {}
-    draft_ids = {r.id for r in model.reactions}
-
-    for rxn in list(working.reactions):
-        if rxn.id not in draft_ids or rxn.lower_bound < 0:
-            continue
-        # Binary y_rev: when 1, allows the reaction to carry negative flux
-        y = prob.Variable(f"_gf_rev_{rxn.id}", type="binary")
-        indicators.append(y)
-        rev_indicators[rxn.id] = y
-        obj_terms.append(w_rev * y)
-
-        # Coupling: v_j + bigM * y_rev >= 0
-        # (preserves v_j >= 0 when y_rev = 0; allows v_j >= -bigM when y_rev = 1)
-        # Relax the reaction's lower bound to allow potential reversal
-        rxn.lower_bound = -big_m
-        c = prob.Constraint(
-            rxn.flux_expression + big_m * y,
-            lb=0,
-            name=f"_gf_revc_{rxn.id}",
-        )
-        extra_cons.append(c)
-
     # Database reaction candidates
     db_indicators: dict[str, Any] = {}
     finite_bounds = [
@@ -216,7 +164,7 @@ def fill_gaps_kumar_milp(
         y = prob.Variable(f"_gf_db_{rid}", type="binary")
         indicators.append(y)
         db_indicators[rid] = y
-        obj_terms.append(w_db * y)
+        obj_terms.append(y)
 
         ub = rxn.upper_bound if math.isfinite(rxn.upper_bound) else effective_big_m
         lb = rxn.lower_bound if math.isfinite(rxn.lower_bound) else -effective_big_m
@@ -245,7 +193,7 @@ def fill_gaps_kumar_milp(
             elif coeff < 0:
                 obj_rxn.upper_bound = min(obj_rxn.upper_bound, -min_growth)
 
-    # MILP objective: minimise weighted sum of binary variables
+    # MILP objective: minimise the number of added template reactions
     if obj_terms:
         working.objective = prob.Objective(sum(obj_terms), direction="min")
     else:
@@ -257,7 +205,7 @@ def fill_gaps_kumar_milp(
     if verbose:
         print(
             f"fill_gaps_kumar_milp: solving MILP "
-            f"({len(rev_indicators)} reversal, {len(db_indicators)} database candidates)..."
+            f"({len(db_indicators)} database candidates)..."
         )
 
     # A fractional indicator within the solver's default integrality tolerance
@@ -277,26 +225,17 @@ def fill_gaps_kumar_milp(
 
     # ---- Extract solution ----
     threshold = 0.5
-    reversed_rxn_ids = [
-        rid for rid, y in rev_indicators.items() if (y.primal or 0) > threshold
-    ]
     added_rxn_ids = [
         rid for rid, y in db_indicators.items() if (y.primal or 0) > threshold
     ]
 
     if verbose:
         print(
-            f"fill_gaps_kumar_milp: reversed {len(reversed_rxn_ids)} reaction(s), "
-            f"added {len(added_rxn_ids)} template reaction(s)."
+            f"fill_gaps_kumar_milp: added {len(added_rxn_ids)} template reaction(s)."
         )
 
     # ---- Build output model ----
     filled = model.copy()
-
-    # Apply directionality reversals
-    for rid in reversed_rxn_ids:
-        if rid in filled.reactions:
-            filled.reactions.get_by_id(rid).lower_bound = -big_m
 
     # Add selected template reactions
     remaining = set(added_rxn_ids)
@@ -318,7 +257,6 @@ def fill_gaps_kumar_milp(
 
     return KumarGapFillResult(
         added_reactions=sorted(added_rxn_ids),
-        reversed_reactions=sorted(reversed_rxn_ids),
         model=filled,
         exit_status=status,
     )
