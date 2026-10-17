@@ -1,13 +1,16 @@
 """Objective-based gap-filling via a global growth-floor MILP.
 
 Implements the single-level MILP formulation from Kumar et al. 2007
-(Bioinformatics 23:1626–1635) to find the minimum-cost set of model
+(BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212) to find the minimum-cost set of model
 modifications that make the objective (biomass) >= *min_growth*.
 
 Two repair mechanisms are supported:
 - **Database reactions** (``y_db``): add reactions from a universal template.
 - **Directionality reversal** (``y_rev``): flip an existing draft reaction so
-  it can also carry flux in the reverse direction.
+  it can also carry flux in the reverse direction. Every irreversible draft
+  reaction is a candidate, exchange reactions and maintenance drains such as
+  ATP hydrolysis included, and with the default weights a reversal is cheaper
+  than an addition; check ``reversed_reactions`` before accepting a fill.
 
 The universal template should include any exchange or transport reactions
 that are desired as repair candidates; they are treated identically to other
