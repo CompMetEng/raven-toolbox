@@ -18,8 +18,7 @@ the run that produced it, so it can be tightened as evidence accumulates rather
 than guessed now.
 
 This exercises ``run_ftinit`` directly (the single-step MILP, not the staged
-``ftinit()`` pipeline) on the raw model with synthetic scores -- the same shape
-of check the classic INIT MILP used to get here, before tINIT was removed.
+``ftinit()`` pipeline) on the raw model with synthetic scores.
 ``time_limit``/``mip_gap`` are the genome-scale-staged values ``run_ftinit``'s
 own docstring recommends, since nothing here goes through ``prep_init_model``'s
 rescaling.

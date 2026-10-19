@@ -9,8 +9,8 @@ weaknesses are noted in IMPROVEMENTS, FS1–FS4):
 * **Robust trend, not strict monotonicity.** Each reaction's flux is regressed against
   the enforced product flux across the scan; the **slope** is the response and the
   **correlation** (|r|) is a quality score. A reaction is a target if it tracks the
-  product cleanly (|r| ≥ ``correlation_threshold``) — one noisy step from LP
-  alternative optima no longer discards it (and pFBA per step keeps the scan stable).
+  product cleanly (|r| ≥ ``correlation_threshold``), so one noisy step from LP
+  alternative optima does not discard it (and pFBA per step keeps the scan stable).
 * **Direction classification RAVEN lacks.** Targets are labelled ``amplify`` (|flux|
   rises with the product → over-express), ``knockdown`` (|flux| falls), or ``knockout``
   (|flux| → ~0 → delete). RAVEN only ever reports the amplification targets.

@@ -12,7 +12,7 @@ gitignored); upload its ZIPs as GitHub release assets and paste the emitted
 
 Sources (pinned for reproducibility):
 
-* RAVEN ``develop3`` — BLAST+ 2.17.0, DIAMOND 2.1.17, HMMER 3.4.0 ``hmmsearch``
+* RAVEN 3 — BLAST+ 2.17.0, DIAMOND 2.1.17, HMMER 3.4.0 ``hmmsearch``
   (Linux + macOS). ``.mac`` builds: ``hmmsearch`` is arm64, BLAST/DIAMOND are
   universal — so ``macos-arm64`` serves all three (Intel macOS → conda).
 * RAVEN ``v2.10.5`` — HMMER **3.3.2** native Windows ``hmmsearch.exe`` (+ the
@@ -32,8 +32,8 @@ from pathlib import Path
 from urllib.request import urlopen
 
 RAW = "https://raw.githubusercontent.com/SysBioChalmers/RAVEN"
-# Pinned RAVEN refs (commit SHA for the mutable branch; tag is already immutable).
-DEV3 = "aa5e2c670f2f9cb7d040557974bb493a8ce0ba91"  # develop3 HEAD at build time
+# Pinned RAVEN refs: the commit carrying the RAVEN 3 binaries, and a release tag.
+RAVEN3 = "aa5e2c670f2f9cb7d040557974bb493a8ce0ba91"
 V2105 = "v2.10.5"
 
 PROVIDES = {"blast": ["blastp", "makeblastdb"], "diamond": ["diamond"], "hmmer": ["hmmsearch"]}
@@ -41,30 +41,30 @@ PROVIDES = {"blast": ["blastp", "makeblastdb"], "diamond": ["diamond"], "hmmer":
 # One dict per published ZIP. members: (path under software/, arcname in ZIP, executable?)
 SPECS: list[dict] = [
     # BLAST+ 2.17.0
-    {"bundle": "blast", "version": "2.17.0", "plat": "linux-x86_64", "ref": DEV3, "members": [
+    {"bundle": "blast", "version": "2.17.0", "plat": "linux-x86_64", "ref": RAVEN3, "members": [
         ("blast+/blastp", "blastp", True),
         ("blast+/makeblastdb", "makeblastdb", True),
         ("blast+/LICENSE", "LICENSE", False)]},
-    {"bundle": "blast", "version": "2.17.0", "plat": "macos-arm64", "ref": DEV3, "members": [
+    {"bundle": "blast", "version": "2.17.0", "plat": "macos-arm64", "ref": RAVEN3, "members": [
         ("blast+/blastp.mac", "blastp", True),
         ("blast+/makeblastdb.mac", "makeblastdb", True),
         ("blast+/LICENSE", "LICENSE", False)]},
-    {"bundle": "blast", "version": "2.17.0", "plat": "windows-x86_64", "ref": DEV3, "members": [
+    {"bundle": "blast", "version": "2.17.0", "plat": "windows-x86_64", "ref": RAVEN3, "members": [
         ("blast+/blastp.exe", "blastp.exe", True),
         ("blast+/makeblastdb.exe", "makeblastdb.exe", True),
         ("blast+/nghttp2.dll", "nghttp2.dll", False),
         ("blast+/LICENSE", "LICENSE", False)]},
     # DIAMOND 2.1.17
-    {"bundle": "diamond", "version": "2.1.17", "plat": "linux-x86_64", "ref": DEV3, "members": [
+    {"bundle": "diamond", "version": "2.1.17", "plat": "linux-x86_64", "ref": RAVEN3, "members": [
         ("diamond/diamond", "diamond", True), ("diamond/LICENSE", "LICENSE", False)]},
-    {"bundle": "diamond", "version": "2.1.17", "plat": "macos-arm64", "ref": DEV3, "members": [
+    {"bundle": "diamond", "version": "2.1.17", "plat": "macos-arm64", "ref": RAVEN3, "members": [
         ("diamond/diamond.mac", "diamond", True), ("diamond/LICENSE", "LICENSE", False)]},
-    {"bundle": "diamond", "version": "2.1.17", "plat": "windows-x86_64", "ref": DEV3, "members": [
+    {"bundle": "diamond", "version": "2.1.17", "plat": "windows-x86_64", "ref": RAVEN3, "members": [
         ("diamond/diamond.exe", "diamond.exe", True), ("diamond/LICENSE", "LICENSE", False)]},
     # HMMER — 3.4.0 (Linux/macOS), 3.3.2 native Windows from v2.10.5
-    {"bundle": "hmmer", "version": "3.4.0", "plat": "linux-x86_64", "ref": DEV3, "members": [
+    {"bundle": "hmmer", "version": "3.4.0", "plat": "linux-x86_64", "ref": RAVEN3, "members": [
         ("hmmer/hmmsearch", "hmmsearch", True), ("hmmer/LICENSE", "LICENSE", False)]},
-    {"bundle": "hmmer", "version": "3.4.0", "plat": "macos-arm64", "ref": DEV3, "members": [
+    {"bundle": "hmmer", "version": "3.4.0", "plat": "macos-arm64", "ref": RAVEN3, "members": [
         ("hmmer/hmmsearch.mac", "hmmsearch", True), ("hmmer/LICENSE", "LICENSE", False)]},
     {"bundle": "hmmer", "version": "3.3.2", "plat": "windows-x86_64", "ref": V2105, "members": [
         ("hmmer/hmmsearch.exe", "hmmsearch.exe", True),
@@ -104,7 +104,7 @@ def build(out: Path, base_url: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     rows: list[tuple[str, str, int]] = []
-    provenance: list[str] = [f"RAVEN develop3 @ {DEV3}", f"RAVEN tag {V2105}", ""]
+    provenance: list[str] = [f"RAVEN 3 @ {RAVEN3}", f"RAVEN tag {V2105}", ""]
     manifest: dict[str, dict] = {}
 
     for spec in SPECS:

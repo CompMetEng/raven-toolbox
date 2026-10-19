@@ -17,15 +17,10 @@ functions with no second user. A third, ``canExchange``, is reimplemented the
 same way for the same reason, on top of the same probe-reaction technique
 :func:`~raven_toolbox.gapfilling.find_leak_metabolite` already uses.
 
-``gapReport.m`` only runs its mass-balancing section
-(``canProduceWithoutInput``/``canConsumeWithoutOutput``) when the model
-carries RAVEN's legacy ``unconstrained`` metabolite marker — a v2-era way of
-representing boundary metabolites that a ``cobra.Model`` has no equivalent
-for (``simplify_model``'s own docstring notes the same gap for
-``deleteUnconstrained``). This port always computes that section instead, by
-temporarily closing every one of the model's own boundary reactions first —
-strictly more informative, and well-defined for any model regardless of how
-it was built.
+The mass-balancing section (``can_produce_without_input`` /
+``can_consume_without_output``) temporarily closes every one of the model's
+own boundary reactions, as ``gapReport.m`` does with the reactions
+``getExchangeRxns`` returns.
 """
 from __future__ import annotations
 

@@ -38,11 +38,9 @@ These problems have many optima of equal objective value, so a different
 answer is not a wrong answer. What can be checked is *drift*: today's result
 against the result that was last inspected and accepted.
 
-Nothing currently records an ftINIT extraction baseline this way — the tier-2
-extraction check that used to live here compared the classic INIT MILP
-(`run_init`) against a recorded baseline, and was removed along with the rest
-of that MILP. An ftINIT equivalent (baseline + recording script, on the same
-pattern) is open work; see `docs/reference/todo.md`.
+Nothing records an ftINIT extraction baseline this way yet. An ftINIT
+drift check (baseline + recording script) is open work; see
+`docs/reference/todo.md`.
 
 ### Tier 3 — statistical
 
@@ -111,8 +109,5 @@ Still only *reported*, not enforced: the genome-scale Human-GEM, yeast and
 multi-organism *comparisons against MATLAB RAVEN* in raven-gecko-parity and
 raven-docs (the nightly job above is a regression guard on this package, not a
 cross-language check — same distinction as tier 1's baseline), and any small-model
-extraction drift check. A small-model tier-2 test used to cover the latter
-(`test_set_level.py`, against the classic INIT MILP) and was removed along
-with the rest of tINIT; an ftINIT equivalent is open, see
-`docs/reference/todo.md`. Tier 3 has a stated contract and no tests yet for
-the same reason.
+extraction drift check; an ftINIT drift check is open, see
+`docs/reference/todo.md`. Tier 3 has a stated contract and no tests yet.

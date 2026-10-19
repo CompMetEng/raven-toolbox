@@ -324,8 +324,7 @@ def test_unproven_tie_break_warns():
 # metabolomics (production-bonus for detected metabolites).
 #
 # Fixtures and expected outcomes are the same ones hand-verified end-to-end against
-# RAVEN's own ftINITInternalAlg (develop3 branch, the corrected one -- see the
-# reference_reactions postmortem for why not `main`) via a standalone MATLAB probe
+# RAVEN 3's own ftINITInternalAlg via a standalone MATLAB probe
 # before porting: same toy topology, same objective values, same flux directions.
 # --------------------------------------------------------------------------- #
 def _irrev_producer_model():
