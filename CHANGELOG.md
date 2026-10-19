@@ -4,6 +4,64 @@ Milestones in the raven-toolbox port. For function-level status see
 [docs/raven_migration.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/migration.md); for open work see
 [docs/todo.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/todo.md).
 
+## 3.0.0b2 — 2026-10-19
+
+Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input,
+and a stricter match to RAVEN in homology and gap-filling.
+
+### Model I/O
+
+* `io.write_matlab_model` / `read_matlab_model` now write and read the RAVEN structure directly,
+  field for field as RAVEN's own exporter does, instead of cobra's COBRA Toolbox layout. A
+  COBRA Toolbox `.mat` is still read, through cobra's reader.
+* SBML export keeps `subSystems`, `rxnNotes`, `rxnReferences` and `rxnConfidenceScores` under the
+  names RAVEN's `importModel` parses. It no longer writes the Python repr of `metaData` as a
+  note: only string-valued notes are written, and the model version and date are their own notes.
+* `read_yaml_model` reads the SBO term as a string and whole-number charges as ints, so charges
+  survive an SBML write.
+* The Excel export no longer lists InChI twice in the MIRIAM column.
+* New: `get_model_metadata` / `set_model_metadata`. `export_for_git` writes version and date.
+
+### Homology and curation
+
+* New: `reconstruction.homology.hits_from_supporth` and `run_supporth` read SuppOrth consensus
+  orthologs as homology input.
+* `get_model_from_homology` now matches RAVEN's `getModelFromHomology`: it keeps every hit tied
+  for the best bitscore at strictness 3, applies `max_evalue` exclusively, and filters
+  `only_genes_in_models` on the template gene. Hit values are parsed with round-trip float
+  precision, so a hit at the cutoff is no longer let through.
+* `get_model_from_homology` also keeps gene-free reactions and template notes, drops duplicate
+  genes, and raises on gene ids that cobra would split.
+* `curation.batch_curate` stores notes, references, confidence score and InChI under the keys
+  the YAML layer uses.
+
+### Gap-filling and analysis
+
+* Renamed `gapfilling.fill_gaps_kumar_milp` to `fill_gaps_milp` (module `gapfilling.kumar_milp`
+  to `gapfilling.milp`, `KumarGapFillResult` to `MILPGapFillResult`), matching RAVEN's
+  `gapFillMILP`. It adds template reactions only; `reversed_reactions` and `weights` are removed.
+* `fill_gaps_milp` runs with integrality tolerance 1e-9 and returns `exit_status="not_restored"`
+  when the selection does not restore growth. An infeasible MILP on Gurobi no longer crashes.
+* `gap_report` raises a `ValueError` naming reactions with a forced flux when the model is
+  infeasible, instead of a bare cobra `Infeasible`.
+* `biomass.scale_biomass` gained `target_total` and raises before changing the model when the
+  balancing component cannot absorb the change.
+
+### Context-specific models
+
+* `omics.hpa` moved to `init.hpa`; the `omics` package is gone.
+* `init.ftinit` / `run_ftinit` gained `feas_tol`, `opt_tol`, `int_feas_tol` and `presolve`
+  (defaults unchanged).
+* `init.ftinit` skips the tie-break when the primary solve stops at the time limit, and warns
+  when it solves with GLPK. `merge_linear` and `merge_compartments` keep the source model's solver.
+
+### Packaging and docs
+
+* Assets are downloaded from `CompMetEng/toolbox-assets`; `publish_to_raven_data.py` is now
+  `publish_to_toolbox_assets.py`.
+* Docstrings corrected for `reporter_metabolites`, `random_sampling`, `remove_no_flux_reactions`,
+  `check_tasks`, `connect_blocked_reactions` and `find_leak_metabolite`.
+
 ## 3.0.0b1 — 2026-09-07
 
 First beta toward 3.0, matching the upcoming MATLAB RAVEN 3.0 beta.

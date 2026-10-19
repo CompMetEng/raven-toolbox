@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "raven-toolbox"
-version = "3.0.0b1"
+version = "3.0.0b2"
 description = "Reconstruction, Analysis and Visualization of Metabolic Networks in Python, a port of the RAVEN Toolbox built on cobrapy"
 readme = "README.md"
 requires-python = ">=3.11"
