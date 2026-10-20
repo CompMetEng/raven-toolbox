@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import cobra
+import libsbml
 from cobra.core import Group
 
 from raven_toolbox.io.excel import _equation, export_to_excel
@@ -127,6 +128,23 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     return out
 
 
+def _write_sbml(model: cobra.Model, path: Path) -> None:
+    """Write ``model`` as SBML with each gene product's fbc:label set to the gene name.
+
+    cobra's writer sets fbc:label to the gene product id (``G_<id>``), while RAVEN's
+    exportModel writes the gene short name there, and RAVEN's importModel reads
+    geneShortNames from fbc:label before fbc:name. cobra writes the gene name as
+    fbc:name, or the id when the gene has no name, so copying fbc:name into fbc:label
+    keeps the id as label for unnamed genes. cobra reads gene ids from fbc:id and
+    names from fbc:name, so the label does not change what cobra reads back.
+    """
+    cobra.io.write_sbml_model(_for_sbml(model), str(path))
+    doc = libsbml.readSBMLFromFile(str(path))
+    for gene_product in doc.getModel().getPlugin("fbc").getListOfGeneProducts():
+        gene_product.setLabel(gene_product.getName())
+    libsbml.writeSBMLToFile(doc, str(path))
+
+
 def _write_txt(model: cobra.Model, path: Path) -> None:
     """Single-file, human-readable reaction table (RAVEN exportForGit txt)."""
     with open(path, "w", encoding="utf-8") as fh:
@@ -198,7 +216,7 @@ def export_for_git(
     if "yml" in formats:
         write_yaml_model(model, target("yml"))
     if "xml" in formats:
-        cobra.io.write_sbml_model(_for_sbml(model), str(target("xml")))
+        _write_sbml(model, target("xml"))
     if "mat" in formats:
         write_matlab_model(model, target("mat"), varname=varname)
     if "xlsx" in formats:
