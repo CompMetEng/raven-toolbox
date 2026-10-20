@@ -390,3 +390,45 @@ def test_sbo_term_written_as_a_list_is_read_as_a_string(tmp_path):
     )
     model = read_yaml_model(path)
     assert model.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"
+
+
+def test_write_quotes_yaml_1_1_booleans(tmp_path):
+    """Nitric oxide (name and formula NO), formula Y and compartment n are
+    YAML 1.1 booleans, which PyYAML reads as True or False when unquoted."""
+    m = cobra.Model("t")
+    m.compartments = {"n": "nucleus"}
+    no = cobra.Metabolite("no_n", name="NO", formula="NO", compartment="n")
+    y = cobra.Metabolite("y_n", name="on", formula="Y", compartment="n")
+    m.add_metabolites([no, y])
+    r = cobra.Reaction("R1", name="yes")
+    r.add_metabolites({no: -1, y: 1})
+    m.add_reactions([r])
+
+    out = tmp_path / "m.yml"
+    write_yaml_model(m, out)
+    text = out.read_text()
+    for line in ('name: "NO"', 'formula: "NO"', 'formula: "Y"', 'compartment: "n"',
+                 'name: "on"', 'name: "yes"'):
+        assert line in text
+    assert "compartment: n\n" not in text
+
+    back = read_yaml_model(out)
+    assert back.metabolites.no_n.name == "NO"
+    assert back.metabolites.no_n.formula == "NO"
+    assert back.metabolites.y_n.formula == "Y"
+    assert back.metabolites.y_n.compartment == "n"
+    assert back.reactions.R1.name == "yes"
+
+
+@pytest.mark.parametrize("value", ["y", "N", "Yes", "nO", "ON", "Off"])
+def test_needs_quote_yaml_1_1_booleans_any_case(value):
+    from raven_toolbox.io.yaml import _needs_quote
+
+    assert _needs_quote(value)
+
+
+@pytest.mark.parametrize("value", ["NOS1", "Yn", "onion", "ny", "off-target"])
+def test_needs_quote_leaves_longer_words_plain(value):
+    from raven_toolbox.io.yaml import _needs_quote
+
+    assert not _needs_quote(value)
