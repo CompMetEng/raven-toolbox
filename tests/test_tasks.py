@@ -1,4 +1,6 @@
 """Tests for metabolic tasks (Phase 4a): parse_task_list + check_tasks."""
+import re
+
 import cobra
 import pytest
 
@@ -167,6 +169,28 @@ def test_unknown_metabolite_reported(model):
     task = Task("typo", inputs=[("Z[c]", 0, 1000)], outputs=[("B[c]", 0, 1000)])
     (res,) = check_tasks(model, [task])
     assert not res.passed and "unknown metabolite" in res.error
+
+
+def test_in_and_out_with_nonzero_lower_bounds_raises(model):
+    task = Task("21", "protons", inputs=[("A[c]", 1, 1)], outputs=[("A[c]", 1, 1)])
+    with pytest.raises(ValueError, match=r'The IN LB and OUT LB in "\[21\] protons" cannot be '
+                                         "nonzero for the same metabolite"):
+        check_tasks(model, [task])
+
+
+def test_in_and_out_with_one_zero_lower_bound_runs(model):
+    task = Task("io", inputs=[("A[c]", 0, 1000)], outputs=[("A[c]", 1, 1000)])
+    (res,) = check_tasks(model, [task])
+    assert res.error is None
+
+
+@pytest.mark.parametrize("side", ["inputs", "outputs"])
+def test_metabolite_listed_twice_on_one_side_raises(model, side):
+    task = Task("dup", "twice", **{side: [("A[c]", 0, 10), ("a[C]", 0, 20)]})
+    word = "input(s)" if side == "inputs" else "output(s)"
+    with pytest.raises(ValueError, match=rf'some {re.escape(word)} in "\[dup\] twice" are '
+                                         "defined more than one time"):
+        check_tasks(model, [task])
 
 
 def test_open_exchange_is_closed_so_task_controls_io(model):

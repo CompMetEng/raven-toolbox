@@ -79,9 +79,17 @@ def _metabolite_bounds(
 
     Bulk tokens (ALLMETS / ALLMETSIN) are applied before specific metabolites, as
     RAVEN does. Returns the bounds and a list of unresolved tokens (→ task error).
+
+    Raises
+    ------
+    ValueError
+        If a metabolite is listed more than once among the inputs or among the
+        outputs, or if it is both an input and an output with a nonzero lower bound
+        on both sides. The messages are those of RAVEN's ``checkTasks``.
     """
     bounds: dict[str, list[float]] = {}
     missing: list[str] = []
+    label = f'"[{task.id}] {task.description}"'
 
     def touch(mid: str) -> list[float]:
         return bounds.setdefault(mid, [0.0, 0.0])
@@ -89,6 +97,14 @@ def _metabolite_bounds(
     for entries, is_input in ((task.inputs, True), (task.outputs, False)):
         bulk = [(t, lb, ub) for (t, lb, ub) in entries if _classify(t)[0] != "met"]
         specific = [(t, lb, ub) for (t, lb, ub) in entries if _classify(t)[0] == "met"]
+        # As in RAVEN, only the tokens that match a model metabolite are compared.
+        listed = [_classify(t)[1] for t, _, _ in specific]
+        listed = [arg for arg in listed if arg in name_to_ids]
+        if len(listed) != len(set(listed)):
+            side = "input(s)" if is_input else "output(s)"
+            raise ValueError(
+                f"The constraints on some {side} in {label} are defined more than one time"
+            )
         for token, lb, ub in bulk + specific:
             kind, arg = _classify(token)
             if kind == "all":
@@ -107,6 +123,11 @@ def _metabolite_bounds(
                     if kind == "met":
                         b[1] = -lb
                 else:
+                    if kind == "met" and lb > 0 and b[1] < 0:
+                        raise ValueError(
+                            f"The IN LB and OUT LB in {label} cannot be nonzero for the "
+                            "same metabolite"
+                        )
                     b[1] = ub  # allow net production up to UB
                     if kind == "met" and lb > 0:
                         b[0] = lb  # require at least LB produced
