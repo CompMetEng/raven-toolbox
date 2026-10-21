@@ -14,7 +14,9 @@ needs the ``[excel]`` extra). Recognised columns (the only required one is ``ID`
 A task spans consecutive rows; only its first row carries an ID. Metabolites are
 written ``name[compartment]``; several in one cell are separated by ``;`` (sharing
 that row's bounds). ``IN``/``OUT`` default LB 0, UB 1000; ``EQU`` defaults LB
--1000 if reversible (``<=>``) else 0, UB 1000. The special tokens ``ALLMETS`` and
+-1000 if reversible (``<=>``) else 0, UB 1000. An empty ``CHANGED LB``/``CHANGED UB``
+leaves that bound of the reaction unchanged. ``SHOULD FAIL``/``PRINT FLUX`` are false
+when empty or ``0``/``false``/``no`` (any case), true otherwise. The special tokens ``ALLMETS`` and
 ``ALLMETSIN[comp]`` allow free uptake/excretion of all metabolites (only the upper
 bound is used).
 """
@@ -34,7 +36,11 @@ _COLUMNS = (
 
 @dataclass
 class Task:
-    """One metabolic task. Bounds are ``(metabolite_or_reaction, lb, ub)`` triples."""
+    """One metabolic task. Bounds are ``(metabolite_or_reaction, lb, ub)`` triples.
+
+    In ``changed``, a bound is ``None`` when the cell was empty, meaning "leave that
+    bound of the reaction as it is" (RAVEN reads it as NaN).
+    """
 
     id: str
     description: str = ""
@@ -44,7 +50,7 @@ class Task:
     inputs: list[tuple[str, float, float]] = field(default_factory=list)
     outputs: list[tuple[str, float, float]] = field(default_factory=list)
     equations: list[tuple[str, float, float]] = field(default_factory=list)
-    changed: list[tuple[str, float, float]] = field(default_factory=list)
+    changed: list[tuple[str, float | None, float | None]] = field(default_factory=list)
 
 
 def _truthy(value: str) -> bool:
@@ -56,8 +62,18 @@ def _num(value: str, default: float) -> float:
     return float(value) if value else default
 
 
+def _opt_num(value: str) -> float | None:
+    value = value.strip()
+    return float(value) if value else None
+
+
 def _read_rows(path: str | Path) -> list[list[str]]:
     path = Path(path)
+    if path.suffix.lower() == ".xls":
+        raise ValueError(
+            f"{path}: the old binary .xls format is not supported. Save the task list as "
+            ".xlsx (sheet 'TASKS') or as a tab-delimited .txt file."
+        )
     if path.suffix.lower() in (".xlsx", ".xlsm"):
         try:
             from openpyxl import load_workbook
@@ -145,5 +161,5 @@ def _add_row(task: Task, row: list[str], cell) -> None:
         ub = _num(cell(row, "EQU UB"), 1000.0)
         task.equations.append((equ.strip(), lb, ub))
     if chg := cell(row, "CHANGED RXN"):
-        lb, ub = _num(cell(row, "CHANGED LB"), -1000.0), _num(cell(row, "CHANGED UB"), 1000.0)
-        task.changed += [(r.strip(), lb, ub) for r in chg.split(";") if r.strip()]
+        chg_lb, chg_ub = _opt_num(cell(row, "CHANGED LB")), _opt_num(cell(row, "CHANGED UB"))
+        task.changed += [(r.strip(), chg_lb, chg_ub) for r in chg.split(";") if r.strip()]

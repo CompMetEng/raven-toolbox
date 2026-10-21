@@ -17,7 +17,9 @@ RAVEN did, only printing a warning.
 from __future__ import annotations
 
 import ast
+import logging
 import statistics
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -88,6 +90,12 @@ def is_dnf(gpr: GPR | str | None) -> bool:
         A cobra :class:`~cobra.core.gene.GPR`, a grRule string, or ``None``.
         An empty/``None`` rule is trivially DNF.
 
+    Raises
+    ------
+    ValueError
+        If a rule string is not valid (unbalanced parentheses, a dangling
+        operator, two genes without an operator between them, ``()``).
+
     Examples
     --------
     >>> is_dnf("(G1 and G2) or G3")
@@ -95,10 +103,33 @@ def is_dnf(gpr: GPR | str | None) -> bool:
     >>> is_dnf("(G1 or G2) and G3")
     False
     """
-    parsed = GPR.from_string(gpr) if isinstance(gpr, str) else gpr
+    parsed = _parse_rule(gpr) if isinstance(gpr, str) else gpr
     if parsed is None:
         return True
     return _is_dnf_node(parsed.body)
+
+
+def _parse_rule(rule: str) -> GPR | None:
+    """Parse a grRule string; ``None`` for a blank rule, ``ValueError`` if malformed.
+
+    ``GPR.from_string`` swallows a syntax error, logs it and returns an empty GPR, which
+    would make any malformed rule look trivially DNF. RAVEN's ``isDnfGrRule`` raises
+    ``RAVEN:badGrRule`` instead, so this does too.
+    """
+    if not rule.strip():
+        return None
+    gene_logger = logging.getLogger("cobra.core.gene")
+    was_disabled = gene_logger.disabled
+    gene_logger.disabled = True
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            parsed = GPR.from_string(rule)
+    finally:
+        gene_logger.disabled = was_disabled
+    if parsed.body is None:
+        raise ValueError(f"Malformed grRule: {rule!r}")
+    return parsed
 
 
 @dataclass(frozen=True)

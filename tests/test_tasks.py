@@ -187,3 +187,82 @@ def test_check_tasks_accepts_a_file_path(model, tmp_path):
     )
     results = check_tasks(model, p)  # path, parsed internally
     assert _by_id(results)["make_B"].passed
+
+
+# --------------------------------------------------------------------------- #
+# Parity with RAVEN parseTaskList / checkTasks (flags, lists, CHANGED, duplicates)
+# --------------------------------------------------------------------------- #
+def test_parse_flags_false_texts(tmp_path):
+    p = tmp_path / "flags.txt"
+    p.write_text(
+        "ID\tSHOULD FAIL\tPRINT FLUX\n"
+        "A\tfalse\t0\n"
+        "B\tNo\tFALSE\n"
+        "C\tyes\t1\n"
+        "D\t\tTRUE\n"
+    )
+    flags = {t.id: (t.should_fail, t.print_fluxes) for t in parse_task_list(p)}
+    assert flags == {"A": (False, False), "B": (False, False), "C": (True, True), "D": (False, True)}
+
+
+def test_parse_semicolon_lists_are_trimmed_and_drop_empty_items(tmp_path):
+    p = tmp_path / "lists.txt"
+    p.write_text(
+        "ID\tIN\tIN UB\tCHANGED RXN\tCHANGED UB\n"
+        "T1\tA[c]; B[c];\t5\t;r1 ; r2\t10\n"
+    )
+    (t,) = parse_task_list(p)
+    assert t.inputs == [("A[c]", 0.0, 5.0), ("B[c]", 0.0, 5.0)]
+    assert [c[0] for c in t.changed] == ["r1", "r2"]
+
+
+def test_parse_empty_changed_bounds_are_none(tmp_path):
+    p = tmp_path / "changed.txt"
+    p.write_text("ID\tCHANGED RXN\tCHANGED LB\tCHANGED UB\nT1\tr1\t\t10\nT2\tr1\t-5\t\nT3\tr1\t1\t2\n")
+    t1, t2, t3 = parse_task_list(p)
+    assert t1.changed == [("r1", None, 10.0)]
+    assert t2.changed == [("r1", -5.0, None)]
+    assert t3.changed == [("r1", 1.0, 2.0)]
+
+
+def test_parse_headers_ignore_case_and_whitespace(tmp_path):
+    p = tmp_path / "hdr.txt"
+    p.write_text(" id \tIn\t in ub \nT1\tA[c]\t7\n")
+    (t,) = parse_task_list(p)
+    assert t.inputs == [("A[c]", 0.0, 7.0)]
+
+
+def test_parse_xls_gives_a_clear_error(tmp_path):
+    p = tmp_path / "old.xls"
+    p.write_bytes(b"")
+    with pytest.raises(ValueError, match=r"\.xls.*not supported.*\.xlsx"):
+        parse_task_list(p)
+
+
+def test_empty_changed_bound_leaves_reaction_bound_alone(model):
+    """A None bound keeps the reaction's own bound; r1 is [0, 1000]."""
+    inputs, outputs = [("A[c]", 0, 1000)], [("B[c]", 1, 1000)]
+    keep_lb = Task("keep_lb", inputs=inputs, outputs=outputs, changed=[("r1", None, 1000.0)])
+    (res,) = check_tasks(model, [keep_lb])
+    assert res.passed
+    # UB 0 with the LB left at 0 blocks r1, so B cannot be made.
+    ub_zero = Task("ub_zero", inputs=inputs, outputs=outputs, changed=[("r1", None, 0.0)])
+    (res2,) = check_tasks(model, [ub_zero])
+    assert not res2.passed
+    # The model passed in is not modified.
+    assert model.reactions.r1.bounds == (0, 1000)
+
+
+def test_duplicate_name_comp_warns_and_constrains_all():
+    m = cobra.Model("dup")
+    a1, a2, b = _met("A1_c", "A"), _met("A2_c", "A"), _met("B_c", "B")
+    m.add_metabolites([a1, a2, b])
+    r1 = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r1.add_metabolites({a1: -1, b: 1})
+    r2 = cobra.Reaction("r2", lower_bound=0, upper_bound=1000)
+    r2.add_metabolites({a2: -1, b: 1})
+    m.add_reactions([r1, r2])
+    task = Task("dup", inputs=[("A[c]", 0, 1000)], outputs=[("B[c]", 1, 1000)])
+    with pytest.warns(UserWarning, match=r"matches 2 model metabolites.*RAVEN constrains only the first"):
+        (res,) = check_tasks(m, [task])
+    assert res.passed

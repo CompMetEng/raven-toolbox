@@ -1,7 +1,8 @@
 """remove_low_score_genes — the three RAVEN docstring oracle cases.
 
-Scores use distinct values to avoid the random tie-break RAVEN mentions when all
-isozyme alternatives are negative.
+Scores use distinct values in the oracle cases. Ties are tested separately: when
+all isozyme alternatives are negative and equal, the one listed first in the rule is
+kept, on both sides (RAVEN's removeLowScoreGenes does the same).
 """
 import cobra
 
@@ -69,3 +70,19 @@ def test_removed_genes_reported_and_pruned():
     out, removed = remove_low_score_genes(_model("G1 or G2"), {"G1": -1.0, "G2": 1.0})
     assert removed == ["G1"]
     assert "G1" not in {g.id for g in out.genes}
+
+
+def test_tie_between_negative_isozymes_keeps_the_first_in_the_rule():
+    # G2 comes first in the rule although G1 comes first alphabetically.
+    assert _result("G2 or G1", {"G1": -1.0, "G2": -1.0}) == "G2"
+    assert _result("G4 or G3 or G2", {"G2": -1.0, "G3": 1.0, "G4": -1.0}) == "G3"
+
+
+def test_tie_between_negative_complexes_keeps_the_first_in_the_rule():
+    scores = {"G1": -1.0, "G2": -1.0, "G3": -1.0, "G4": -1.0}
+    assert _result("(G3 and G4) or (G1 and G2)", scores) == _norm("G3 and G4")
+
+
+def test_positive_isozymes_keep_rule_order():
+    scores = {"G1": 1.0, "G2": 1.0, "G3": 1.0}
+    assert _result("G3 or G1 or G2", scores) == _norm("G3 or G1 or G2")

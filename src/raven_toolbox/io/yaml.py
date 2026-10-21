@@ -776,6 +776,17 @@ def write_yaml_model(
         version = stored_meta.get("version")
     foreign = model_notes.pop("_yaml_sections", None) or {}
 
+    unnamed = [met.id for met in model.metabolites if not met.name]
+    if unnamed:
+        # RAVEN's writeYAMLmodel stops on these (checkModelStruct: "metabolites have
+        # empty names"), so a file written here with `name: ""` may not load there.
+        shown = ", ".join(unnamed[:5]) + (", ..." if len(unnamed) > 5 else "")
+        warnings.warn(
+            f"{len(unnamed)} metabolite(s) have an empty name ({shown}); the YAML is written "
+            "anyway, but RAVEN's writeYAMLmodel refuses such a model.",
+            stacklevel=2,
+        )
+
     doc = OrderedDict(_to_plain(model_to_dict(model)))
 
     # cobra's model_to_dict serialises model.notes verbatim into doc["notes"],

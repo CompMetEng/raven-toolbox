@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import pickle
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +101,13 @@ def _metabolite_bounds(
                 if not ids:
                     missing.append(token)
                     continue
+                if len(ids) > 1:
+                    warnings.warn(
+                        f"task {task.id!r}: {token!r} matches {len(ids)} model metabolites "
+                        f"({', '.join(ids)}); all of them are constrained (RAVEN constrains "
+                        "only the first).",
+                        stacklevel=2,
+                    )
             for mid in ids:
                 b = touch(mid)
                 if is_input:
@@ -117,8 +125,9 @@ def task_name_maps(model: cobra.Model) -> tuple[dict[str, list[str]], dict[str, 
     """Build ``name[comp]→[ids]`` and ``comp→[ids]`` lookups for a model's metabolites.
 
     ``name[comp]`` maps to a *list* because a model can carry several metabolites with
-    the same name and compartment; a task referencing it constrains all of them (as
-    RAVEN does), rather than an arbitrary one.
+    the same name and compartment. A task referencing it constrains all of them. RAVEN's
+    ``checkTasks`` constrains only the first match; both sides warn when a task hits
+    duplicates, so the difference is visible instead of silent.
     """
     name_to_ids: dict[str, list[str]] = {}
     comp_to_ids: dict[str, list[str]] = {}
@@ -156,10 +165,15 @@ def apply_task_constraints(
             tmp = model.reactions.get_by_id(f"TASK_TMP_{i}")
             task_mets |= {m.id for m in tmp.metabolites if m.id in existing}
 
-    for rxn_id, lb, ub in task.changed:
+    for rxn_id, new_lb, new_ub in task.changed:
         if rxn_id not in model.reactions:
             return set(), f"CHANGED RXN not in model: {rxn_id!r}"
-        model.reactions.get_by_id(rxn_id).bounds = (lb, ub)
+        rxn = model.reactions.get_by_id(rxn_id)
+        # An empty bound in the task list means "leave this bound as it is".
+        rxn.bounds = (
+            rxn.lower_bound if new_lb is None else new_lb,
+            rxn.upper_bound if new_ub is None else new_ub,
+        )
 
     model.objective = model.problem.Objective(Zero, direction="max")  # feasibility only
     return task_mets, None
