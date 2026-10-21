@@ -96,3 +96,20 @@ def test_duplicate_name_in_source_compartment_warns(model):
         added = add_transport_reactions(model, "c", "m", ["H2O"], only_to_existing=False)
     # Transport still works (uses the first match) — the warning is the signal.
     assert len(added) == 1
+
+
+# --- the subsystem names the two compartments, as in RAVEN's addTransport -----------------
+
+def test_reversible_transport_subsystem(model):
+    added = add_transport_reactions(model, "c", "m", ["ATP"])
+    assert added[0].subsystem == "Transport between c and m"
+
+
+def test_irreversible_transport_subsystem(model):
+    added = add_transport_reactions(model, "c", "m", ["ATP"], reversible=False)
+    assert added[0].subsystem == "Transport from c to m"
+
+
+def test_subsystem_names_each_target_compartment(model):
+    added = add_transport_reactions(model, "c", ["m", "e"], ["ATP"], only_to_existing=False)
+    assert [r.subsystem for r in added] == ["Transport between c and m", "Transport between c and e"]
