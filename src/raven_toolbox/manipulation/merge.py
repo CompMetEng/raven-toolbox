@@ -5,7 +5,10 @@ merges **N** models and unifies metabolites by **name[compartment]** (so the sam
 compound under different ids in two models becomes one), while adding **all**
 reactions without de-duplication
 (a reaction whose ID already exists is renamed ``id_<sourceid>``). Genes are
-unified by ID. Provenance (which source model each object came from) is recorded
+unified by ID. Like RAVEN, every metabolite and gene of every model is kept, also
+when no reaction uses it; the objective of every model is carried over; when two
+models name the same compartment differently the first model's name is kept; new
+metabolites and genes are added in the order of their source model. Provenance (which source model each object came from) is recorded
 in ``notes['origin']``.
 
 The bulk of RAVEN's function is struct field-padding and manual S-matrix
@@ -18,7 +21,7 @@ import warnings
 from collections.abc import Iterable
 
 import cobra
-from cobra import Metabolite, Model, Reaction
+from cobra import Gene, Metabolite, Model, Reaction
 
 
 def _unique_id(existing, base: str, suffix: str) -> str:
@@ -69,7 +72,9 @@ def merge_models(
         return models[0].copy()
 
     merged = Model("MERGED")
+    merged.objective_direction = models[0].objective_direction
     comp_names: dict[str, str] = {}
+    objective: dict[Reaction, float] = {}
     met_lookup: dict = {}  # name/comp or id key -> merged Metabolite
 
     def met_key(met: Metabolite):
@@ -118,8 +123,22 @@ def merge_models(
 
     for model in models:
         origin = model.id or "model"
-        comp_names.update(model.compartments)
+        # model.compartments lists only compartments that hold metabolites; RAVEN keeps all.
+        for comp, name in {**model.compartments, **model._compartments}.items():
+            comp_names.setdefault(comp, name)    # the first model's name for a compartment wins
         genes_before = {g.id for g in merged.genes}
+
+        # Every metabolite and gene of the model, in the model's order, before the reactions
+        # that use them: unused ones are kept, and the order does not depend on the reactions.
+        for met in model.metabolites:
+            ensure_metabolite(met, origin)
+        for gene in model.genes:
+            if gene.id not in merged.genes:
+                new_gene = Gene(gene.id, name=gene.name)
+                new_gene.annotation = copy.deepcopy(gene.annotation)
+                new_gene.notes = copy.deepcopy(gene.notes)
+                merged.genes.append(new_gene)
+                new_gene._model = merged
 
         new_rxns: list[Reaction] = []
         for rxn in model.reactions:
@@ -140,6 +159,8 @@ def merge_models(
             new_rxn.notes = copy.deepcopy(rxn.notes)
             if track_origin:
                 new_rxn.notes.setdefault("origin", origin)
+            if rxn.objective_coefficient:
+                objective[new_rxn] = rxn.objective_coefficient
 
         if track_origin:
             for gene in merged.genes:
@@ -147,4 +168,6 @@ def merge_models(
                     gene.notes.setdefault("origin", origin)
 
     merged._compartments.update(comp_names)
+    if objective:
+        merged.objective = objective
     return merged
