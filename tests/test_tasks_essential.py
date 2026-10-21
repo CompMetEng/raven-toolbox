@@ -5,6 +5,7 @@ pre-merge essential reactions are R2 (the only a[s]<->a[c] link) and R7 (the onl
 e[c]->e[s] producer); the alternative internal paths make nothing else essential.
 """
 import cobra
+import pytest
 from tinit_oracles import (
     TEST_MODEL_TASK_ESSENTIAL_PREMERGE,
     make_test_model,
@@ -195,6 +196,7 @@ def test_duplicate_name_comp_metabolites_both_constrained():
     m.objective = "R1"
     # Output b from input a -> 'a[s]' matches both a1 and a2; must not be reported missing.
     task = Task(id="t", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("b[s]", 1.0, 1.0)])
-    res = find_task_essential_reactions(m, [task])
+    with pytest.warns(UserWarning, match="matches 2 model metabolites"):
+        res = find_task_essential_reactions(m, [task])
     assert res.failed_tasks == []  # 'a[s]' resolved (to both a1 and a2), task feasible
     assert "R1" in res.reactions

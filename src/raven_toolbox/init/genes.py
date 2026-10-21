@@ -79,7 +79,8 @@ def remove_low_score_genes(
         negative alternatives was cut to one of several alternatives with the same
         best score are appended to it, once per reaction. In such a rule the first of
         the tied alternatives in the rule is kept, so the result depends on the order
-        of the rule; RAVEN picks one of them at random.
+        of the rule. RAVEN keeps the first one too (CompMetEng/RAVEN#11); before that
+        it kept the alphabetically first.
 
     Returns
     -------

@@ -392,6 +392,27 @@ def test_sbo_term_written_as_a_list_is_read_as_a_string(tmp_path):
     assert model.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"
 
 
+def test_write_warns_on_empty_metabolite_names(tmp_path):
+    """RAVEN's writeYAMLmodel refuses empty metabolite names; Python writes but warns."""
+    m = cobra.Model("m")
+    m.add_metabolites(
+        [
+            cobra.Metabolite("a_c", name="A", compartment="c"),
+            cobra.Metabolite("b_c", name="", compartment="c"),
+        ]
+    )
+    with pytest.warns(UserWarning, match=r"1 metabolite\(s\) have an empty name \(b_c\)"):
+        write_yaml_model(m, tmp_path / "out.yml")
+    assert (tmp_path / "out.yml").exists()
+
+
+def test_write_is_silent_when_all_metabolites_are_named(tmp_path, recwarn):
+    m = cobra.Model("m")
+    m.add_metabolites([cobra.Metabolite("a_c", name="A", compartment="c")])
+    write_yaml_model(m, tmp_path / "out.yml")
+    assert not [w for w in recwarn if "empty name" in str(w.message)]
+
+
 def test_write_quotes_yaml_1_1_booleans(tmp_path):
     """Nitric oxide (name and formula NO), formula Y and compartment n are
     YAML 1.1 booleans, which PyYAML reads as True or False when unquoted."""

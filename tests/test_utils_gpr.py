@@ -82,3 +82,18 @@ def test_find_non_dnf_grrules_flags_only_offenders():
 def test_find_non_dnf_grrules_empty_when_all_clean():
     model = _model_with_rules({"R1": "G1 or G2", "R2": "(G1 and G2) or G3"})
     assert find_non_dnf_grrules(model) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    ["G1 and", "(G1 or G2", "G1 or or G2", "G1 G2", "and G1", "(G1 and G2)) or G3", "()"],
+)
+def test_is_dnf_raises_on_malformed_rule(rule):
+    """RAVEN's isDnfGrRule errors on these (RAVEN:badGrRule); cobra alone returns an empty GPR."""
+    with pytest.raises(ValueError, match="Malformed grRule"):
+        is_dnf(rule)
+
+
+@pytest.mark.parametrize("rule", ["", "   ", None])
+def test_is_dnf_blank_rule_is_still_true(rule):
+    assert is_dnf(rule) is True
