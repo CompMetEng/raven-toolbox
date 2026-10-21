@@ -86,3 +86,43 @@ def test_tie_between_negative_complexes_keeps_the_first_in_the_rule():
 def test_positive_isozymes_keep_rule_order():
     scores = {"G1": 1.0, "G2": 1.0, "G3": 1.0}
     assert _result("G3 or G1 or G2", scores) == _norm("G3 or G1 or G2")
+
+
+def test_tie_among_negative_isozymes_reported():
+    """All four isozymes negative with the same score: the first is kept and the
+    reaction is reported."""
+    tied: list[str] = []
+    scores = {"CYP2C9": -1.0, "CYP2C8": -1.0, "CYP3A4": -1.0, "CYP26C1": -1.0}
+    out, removed = remove_low_score_genes(
+        _model("CYP2C9 or CYP2C8 or CYP3A4 or CYP26C1"), scores, tied_reactions=tied
+    )
+    assert out.reactions.R.gene_reaction_rule == "CYP2C9"
+    assert removed == ["CYP26C1", "CYP2C8", "CYP3A4"]
+    assert tied == ["R"]
+
+
+def test_tie_in_nested_or_reported_once():
+    tied: list[str] = []
+    scores = {"G1": -1.0, "G2": -1.0, "G3": -2.0, "G4": -2.0, "G5": 1.0}
+    out, _ = remove_low_score_genes(
+        _model("((G1 or G2) and G5) or ((G3 or G4) and G5)"), scores, tied_reactions=tied
+    )
+    assert out.reactions.R.gene_reaction_rule == _norm("G1 and G5")
+    assert tied == ["R"]
+
+
+def test_distinct_negative_scores_not_reported():
+    tied: list[str] = []
+    out, _ = remove_low_score_genes(
+        _model("G1 or G2"), {"G1": -2.0, "G2": -1.0}, tied_reactions=tied
+    )
+    assert out.reactions.R.gene_reaction_rule == "G2"
+    assert tied == []
+
+
+def test_tie_with_a_positive_alternative_not_reported():
+    tied: list[str] = []
+    remove_low_score_genes(
+        _model("G1 or G2 or G3"), {"G1": -1.0, "G2": -1.0, "G3": 1.0}, tied_reactions=tied
+    )
+    assert tied == []

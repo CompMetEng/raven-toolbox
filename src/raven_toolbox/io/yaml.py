@@ -531,6 +531,7 @@ def _coerce_floats(obj):
 
 _QUOTE_RESOLVER_PATTERN = re.compile(
     r"^(true|True|TRUE|false|False|FALSE)$"
+    r"|^(?i:y|n|yes|no|on|off)$"
     r"|^[-+]?[0-9][0-9_]*\.[0-9_]*([eE][-+]?[0-9]+)?$"
     r"|^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$"
     r"|^[-+]?\.[0-9_]+([eE][-+][0-9]+)?$"
@@ -557,13 +558,15 @@ def _is_ws(ch: str) -> bool:
 def _needs_quote(s: str) -> bool:
     """Whether this scalar needs quoting when written as YAML.
 
-    Ports writeYAMLmodel.m's needsQuote so both writers quote exactly the
-    same set of values, for the same two reasons: a plain (bare) reading
-    would resolve to a non-string YAML type (bool/int/float/null/
-    timestamp — neither writer emits explicit type tags), or the text
+    Ports writeYAMLmodel.m's needsQuote, for the same two reasons: a plain
+    (bare) reading would resolve to a non-string YAML type (bool/int/float/
+    null/timestamp, as neither writer emits explicit type tags), or the text
     itself is not valid as a plain block scalar (leading indicator
     character, a mid-string ": "/" #", leading/trailing whitespace, or an
-    embedded line break).
+    embedded line break). Besides the YAML 1.2 booleans it quotes the YAML
+    1.1 ones (y, n, yes, no, on, off, in any case), which a YAML 1.1 loader
+    such as PyYAML would otherwise read as booleans: ``name: NO`` (nitric
+    oxide) is written ``name: "NO"``.
     """
     if not s:
         return True

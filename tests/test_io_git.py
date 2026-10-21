@@ -1,5 +1,6 @@
 """Tests for raven_toolbox.io.git (exportForGit port)."""
 import cobra
+import libsbml
 import pytest
 from cobra.core import Group
 
@@ -174,3 +175,35 @@ def test_sbml_notes_keep_the_model_note():
     m = _sbml_model()
     set_model_metadata(m, note="a generic human cell")
     assert _for_sbml(m).notes["note"] == "a generic human cell"
+
+
+def _consistency(path):
+    doc = libsbml.readSBMLFromFile(str(path))
+    doc.checkConsistency()
+    return sorted(
+        (doc.getError(i).getSeverityAsString(), doc.getError(i).getErrorId())
+        for i in range(doc.getNumErrors())
+    )
+
+
+def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
+    """RAVEN's importModel reads geneShortNames from fbc:label before fbc:name."""
+    model.reactions.R1.gene_reaction_rule = "ENSG1 or ENSG2"
+    model.genes.ENSG1.name = "DPM1"
+    root = export_for_git(model, tmp_path, formats=("xml",))
+    path = root / "xml" / "model.xml"
+
+    doc = libsbml.readSBMLFromFile(str(path))
+    products = doc.getModel().getPlugin("fbc").getListOfGeneProducts()
+    labels = {gp.getId(): (gp.getName(), gp.getLabel()) for gp in products}
+    assert labels == {"G_ENSG1": ("DPM1", "DPM1"), "G_ENSG2": ("G_ENSG2", "G_ENSG2")}
+
+    plain = tmp_path / "plain.xml"
+    cobra.io.write_sbml_model(_for_sbml(model), str(plain))
+    assert _consistency(path) == _consistency(plain)
+
+    back, plain_back = cobra.io.read_sbml_model(str(path)), cobra.io.read_sbml_model(str(plain))
+    assert sorted((g.id, g.name) for g in back.genes) == sorted(
+        (g.id, g.name) for g in plain_back.genes
+    )
+    assert back.reactions.R1.gene_reaction_rule == "ENSG1 or ENSG2"

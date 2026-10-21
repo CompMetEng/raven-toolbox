@@ -4,7 +4,10 @@ cobra has no transport-reaction primitive. For each metabolite this matches the
 species by *name* across compartments (the source in ``from_compartment`` and its
 same-named twin in each target compartment), optionally creating the target
 metabolite, and
-builds a ``-1 from / +1 to`` reaction with a sequential ``tr_0001`` ID.
+builds a ``-1 from / +1 to`` reaction with a sequential ``tr_0001`` ID. As in RAVEN's
+``addTransport``, the subsystem of each reaction names the two compartments:
+``Transport between <from> and <to>`` for a reversible reaction and
+``Transport from <from> to <to>`` for an irreversible one (the compartment ids are used).
 """
 from __future__ import annotations
 
@@ -159,6 +162,11 @@ def add_transport_reactions(
             rxn = Reaction(next_id())
             rxn.name = f"{name} transport, {from_name}-{to_name}"
             rxn.bounds = bounds
+            rxn.subsystem = (
+                f"Transport between {from_compartment} and {to_comp}"
+                if reversible
+                else f"Transport from {from_compartment} to {to_comp}"
+            )
             added.append(rxn)
             pending_coeffs.append({src: -1, dst: 1})
 

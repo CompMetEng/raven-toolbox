@@ -19,14 +19,18 @@ from cobra.manipulation import remove_genes
 from raven_toolbox.utils.gpr import resolve_aggregators
 
 
-def _prune(node, scores, iso, cplx) -> tuple[str | None, float | None]:
-    """Return (pruned GPR string, aggregate score) for an AST node, or (None, None)."""
+def _prune(node, scores, iso, cplx, ties: list) -> tuple[str | None, float | None]:
+    """Return (pruned GPR string, aggregate score) for an AST node, or (None, None).
+
+    Appends to ``ties`` each time an OR node with only negative alternatives keeps
+    one of several alternatives that share the best score.
+    """
     if isinstance(node, ast.Name):
         return node.id, scores.get(node.id)  # None = unscored (NaN: never removed)
     if not isinstance(node, ast.BoolOp):
         return None, None
 
-    pruned = [_prune(v, scores, iso, cplx) for v in node.values]
+    pruned = [_prune(v, scores, iso, cplx, ties) for v in node.values]
     children: list[tuple[str, float | None]] = [(s, sc) for s, sc in pruned if s is not None]
 
     if isinstance(node.op, ast.And):  # complex: keep every subunit, prune nested ORs
@@ -35,6 +39,8 @@ def _prune(node, scores, iso, cplx) -> tuple[str | None, float | None]:
         kept = [(s, sc) for s, sc in children if sc is None or sc >= 0]
         if not kept:  # all negative → keep the least-negative (every sc is non-None here)
             kept = [max(children, key=lambda c: c[1] if c[1] is not None else float("-inf"))]
+            if sum(sc == kept[0][1] for _, sc in children) > 1:
+                ties.append(node)
 
     parts = [s for s, _ in kept]
     score_vals = [sc for _, sc in kept if sc is not None]
@@ -51,17 +57,36 @@ def remove_low_score_genes(
     *,
     isozyme_scoring: str = "max",
     complex_scoring: str = "min",
+    tied_reactions: list[str] | None = None,
 ) -> tuple[cobra.Model, list[str]]:
     """Remove negative-scoring genes from GPRs (RAVEN ``removeLowScoreGenes``).
 
-    ``gene_scores`` maps gene id → score; genes absent from it are treated as unscored
-    (never removed). Returns ``(new_model, removed_gene_ids)`` — genes dropped from
-    *every* rule they were in (and thus from the model). ``isozyme_scoring`` /
-    ``complex_scoring`` aggregate alternative/subunit scores (``max``/``min`` default).
+    Genes joined by OR are alternatives: the negative-scoring ones are removed, and when
+    all alternatives are negative the least-negative one is kept. Genes joined by AND
+    are subunits of a complex and are not removed individually.
 
-    When all isozyme alternatives are negative the least-negative one is kept
-    **deterministically** (first on a tie), unlike RAVEN's random tie-break — same
-    quality, reproducible.
+    Parameters
+    ----------
+    model : cobra.Model
+        The model to prune. It is not changed.
+    gene_scores : Mapping[str, float]
+        Gene id to score. Genes absent from it are unscored and never removed.
+    isozyme_scoring, complex_scoring : str
+        How the scores of OR alternatives and of complex subunits are aggregated
+        (``"max"`` and ``"min"`` by default).
+    tied_reactions : list of str, optional
+        When a list is given, the ids of the reactions in which an OR rule with only
+        negative alternatives was cut to one of several alternatives with the same
+        best score are appended to it, once per reaction. In such a rule the first of
+        the tied alternatives in the rule is kept, so the result depends on the order
+        of the rule. RAVEN keeps the first one too (CompMetEng/RAVEN#11); before that
+        it kept the alphabetically first.
+
+    Returns
+    -------
+    tuple of (cobra.Model, list of str)
+        The pruned copy of the model, and the sorted ids of the genes removed from
+        every rule they were in, and thus from the model.
     """
     iso, cplx = resolve_aggregators(isozyme_scoring, complex_scoring)
 
@@ -70,7 +95,10 @@ def remove_low_score_genes(
         body = rxn.gpr.body
         if body is None or not rxn.genes:
             continue
-        pruned, _ = _prune(body, gene_scores, iso, cplx)
+        ties: list = []
+        pruned, _ = _prune(body, gene_scores, iso, cplx, ties)
+        if ties and tied_reactions is not None:
+            tied_reactions.append(rxn.id)
         if pruned is not None:
             rxn.gene_reaction_rule = pruned
 
