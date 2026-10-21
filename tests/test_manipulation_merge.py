@@ -229,6 +229,7 @@ def test_order_does_not_depend_on_the_reactions():
 
 
 def test_merge_is_independent_of_the_hash_seed():
+    import os
     import subprocess
     import sys
     code = (
@@ -249,7 +250,9 @@ def test_merge_is_independent_of_the_hash_seed():
     )
     outputs = set()
     for seed in ("0", "1", "2"):
-        out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True,
-                             env={"PYTHONHASHSEED": seed, "PATH": ""}, check=True).stdout
+        # The seed is set explicitly (not "-I", which ignores PYTHON* variables), and the rest
+        # of the environment is kept: Python does not start on Windows without SYSTEMROOT.
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             env={**os.environ, "PYTHONHASHSEED": seed}, check=True).stdout
         outputs.add(out)
     assert len(outputs) == 1
