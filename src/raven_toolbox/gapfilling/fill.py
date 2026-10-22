@@ -2,7 +2,7 @@
 *blocked* in a draft can carry flux.
 
 For the other gap-filling flavour (add the fewest template reactions until the model's
-own objective becomes feasible) use ``cobra.flux_analysis.gapfill`` — just align the
+own objective becomes feasible) use ``cobra.flux_analysis.gapfill``, after aligning the
 template's metabolite ids to the draft first, since cobra matches by id.
 
 It solves an MILP: pick the minimum-penalty subset of template reactions such that the
@@ -75,18 +75,25 @@ def _carrying_flux(
     """
     if not reaction_ids:
         return set()
-    with model as m:
-        for rxn in m.reactions:
-            if rxn.lower_bound == -math.inf:
-                rxn.lower_bound = -10000.0
-            if rxn.upper_bound == math.inf:
-                rxn.upper_bound = 10000.0
-        if net_production:
-            for met in m.metabolites:
-                m.constraints[met.id].ub = None
-        fva = flux_variability_analysis(
-            m, reaction_list=reaction_ids, fraction_of_optimum=0.0, processes=1
-        )
+    # The rollback of ``with model`` covers reaction bounds but not constraint bounds, so
+    # the steady-state bounds are restored explicitly.
+    steady_state_ub = {met.id: model.constraints[met.id].ub for met in model.metabolites}
+    try:
+        with model as m:
+            for rxn in m.reactions:
+                if rxn.lower_bound == -math.inf:
+                    rxn.lower_bound = -10000.0
+                if rxn.upper_bound == math.inf:
+                    rxn.upper_bound = 10000.0
+            if net_production:
+                for met in m.metabolites:
+                    m.constraints[met.id].ub = None
+            fva = flux_variability_analysis(
+                m, reaction_list=reaction_ids, fraction_of_optimum=0.0, processes=1
+            )
+    finally:
+        for mid, ub in steady_state_ub.items():
+            model.constraints[mid].ub = ub
     return {
         rid for rid in reaction_ids
         if rid in fva.index
@@ -189,8 +196,8 @@ def connect_blocked_reactions(
     reactions are forced; reversible ones can carry flux trivially in the split
     formulation, so forcing them is uninformative.
 
-    For the *other* gap-filling flavour — adding reactions to make the model's
-    objective feasible — use ``cobra.flux_analysis.gapfill`` after aligning the
+    For the *other* gap-filling flavour (adding reactions to make the model's
+    objective feasible), use ``cobra.flux_analysis.gapfill`` after aligning the
     template's metabolite ids to the draft.
 
     The draft is expected to have exchange reactions for its nutrients (otherwise most
@@ -205,8 +212,13 @@ def connect_blocked_reactions(
     """
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")
-    templates = unique_templates(model, _as_models(templates))
+    renames: dict[str, str] = {}
+    templates = unique_templates(model, _as_models(templates), renames)
     working, template_ids = _merge_templates(model, templates)
+    if scores:
+        # Scores are keyed by the id the reaction has in the template.
+        scores = {rid: scores[renames.get(rid, rid)] for rid in template_ids
+                  if renames.get(rid, rid) in scores}
 
     draft_ids = [r.id for r in model.reactions]
     unblocked = _carrying_flux(

@@ -194,4 +194,34 @@ def test_template_reaction_with_a_draft_id_is_renamed_not_dropped():
     template.add_reactions([clash])
     res = connect_blocked_reactions(draft, template)
     assert "T1" in res.added_reactions
+    assert "R1_template" in res.added_reactions
     assert "R1" not in res.added_reactions
+    assert "R3" in res.newly_connected
+
+
+def test_scores_of_a_renamed_template_reaction_are_looked_up_by_its_template_id():
+    # R3 needs E: via the template's R1 (C -> E, renamed R1_template, score -0.1) or via T2 (A -> E, -0.5).
+    draft, template = _chain(1000.0, [("T1", ["A"], ["C"]), ("T2", ["A"], ["E"])])
+    clash = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    clash.add_metabolites({_met("C"): -1, _met("E"): 1})
+    template.add_reactions([clash])
+    res = connect_blocked_reactions(draft, template, scores={"R1": -0.1, "T2": -0.5})
+    assert "R1_template" in res.added_reactions
+    assert "T2" not in res.added_reactions
+
+
+def test_net_production_does_not_relax_the_callers_model():
+    def rxn(rid, subs, prods):
+        r = cobra.Reaction(rid, lower_bound=0, upper_bound=1000)
+        r.add_metabolites({**{_met(s): -1 for s in subs}, **{_met(p): 1 for p in prods}})
+        return r
+
+    draft = cobra.Model("draft")
+    draft.add_reactions([rxn("EX_A", [], ["A"]), rxn("R1", ["A"], ["B"]), rxn("EX_B", ["B"], []), rxn("R2", ["C"], ["D"])])
+    template = cobra.Model("template")
+    template.add_reactions([rxn("T1", ["A"], ["C"])])
+    res = connect_blocked_reactions(draft, template, allow_net_production=True)
+    for m in (draft, res.model):
+        m.reactions.get_by_id("EX_B").upper_bound = 0
+        m.objective = "R1"
+        assert m.slim_optimize() == pytest.approx(0.0)
