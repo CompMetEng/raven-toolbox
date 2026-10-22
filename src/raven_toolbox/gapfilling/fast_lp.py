@@ -267,7 +267,7 @@ def fill_gaps_fast_lp(
     templates = _as_models(templates)
 
     # ---- Find blocked reactions in draft ----
-    blocked = set(find_blocked_reactions(model))
+    blocked = set(find_blocked_reactions(model, processes=1))
     if not blocked:
         if verbose:
             print("fill_gaps_fast_lp: no blocked reactions found.")
@@ -287,7 +287,7 @@ def fill_gaps_fast_lp(
     blocked_in_model = [r for r in blocked if r in working.reactions]
     if blocked_in_model:
         fva = flux_variability_analysis(
-            working, reaction_list=blocked_in_model, fraction_of_optimum=0.0
+            working, reaction_list=blocked_in_model, fraction_of_optimum=0.0, processes=1
         )
         rescuable = [
             r

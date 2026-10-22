@@ -160,14 +160,16 @@ def connect_blocked_reactions(
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")
     templates = _as_models(templates)
-    blocked = set(find_blocked_reactions(model))
+    blocked = set(find_blocked_reactions(model, processes=1))
     candidates = [r for r in blocked if model.reactions.get_by_id(r).lower_bound >= 0]
 
     working, template_ids = _merge_templates(model, templates)
 
     target: list[str] = []
     if candidates:
-        fva = flux_variability_analysis(working, reaction_list=candidates, fraction_of_optimum=0.0)
+        fva = flux_variability_analysis(
+            working, reaction_list=candidates, fraction_of_optimum=0.0, processes=1
+        )
         # A reaction can be missing from the FVA frame if the solver dropped it
         # (e.g. the reaction was eliminated upstream); treat that as "unreachable"
         # rather than letting the KeyError propagate.
