@@ -35,8 +35,10 @@ def _equation(rxn: cobra.Reaction) -> str:
     """Human-readable equation in RAVEN ``name[comp]`` form."""
 
     def side(items):
+        # A coefficient of 1 is left out, as RAVEN's constructEquations does.
         return " + ".join(
-            f"{abs(coef):g} {met.name}[{met.compartment}]" for met, coef in items
+            f"{'' if abs(coef) == 1 else f'{abs(coef):g} '}{met.name}[{met.compartment}]"
+            for met, coef in items
         )
 
     reactants = [(m, c) for m, c in rxn.metabolites.items() if c < 0]

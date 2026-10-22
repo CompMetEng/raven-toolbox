@@ -245,3 +245,10 @@ def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
         (g.id, g.name) for g in plain_back.genes
     )
     assert back.reactions.R1.gene_reaction_rule == "ENSG1 or ENSG2"
+
+
+def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):
+    model.reactions.get_by_id("R1").add_metabolites({model.metabolites.atp_c: -1})
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    equation = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")[1]
+    assert equation == "2 ATP[c] <=> ADP[c]"
