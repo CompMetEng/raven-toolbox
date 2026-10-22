@@ -49,6 +49,11 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
     z_values = np.fromiter(gene_z.values(), dtype=float)
     mu = float(z_values.mean()) if z_values.size else 0.0
     sigma = float(z_values.std(ddof=0)) if z_values.size else 0.0
+    # The mean of many identical z-scores carries a rounding error, which makes sigma a small
+    # positive number instead of 0. The spread is tested instead; it counts as 0 up to
+    # 100 * eps(max|z|), as in RAVEN.
+    spread = float(z_values.max() - z_values.min()) if z_values.size else 0.0
+    has_spread = spread > 100 * float(np.spacing(np.abs(z_values).max())) if z_values.size else False
 
     rows = []
     for met in model.metabolites:
@@ -59,7 +64,7 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
         n = zs.size
         raw = zs.sum() / math.sqrt(n)
         # Exact background correction for sampling-with-replacement (see module doc).
-        corrected = (raw - math.sqrt(n) * mu) / sigma if sigma > 0 else 0.0
+        corrected = (raw - math.sqrt(n) * mu) / sigma if has_spread else 0.0
         if not math.isfinite(corrected):  # never on clamped z-scores; guards the p-value
             corrected = 0.0
         rows.append(

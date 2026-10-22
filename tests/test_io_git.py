@@ -263,10 +263,22 @@ def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):
         (1.2345678, "1.2346"),
         (2.0, "2"),
         (1000000.0, "1000000"),
+        (1000000000000000.125, "1000000000000000"),
+        (2.0**53, "9007199254740992"),
+        (1e20, "1e+20"),
+        (1e300, "1e+300"),
+        (float("inf"), "Inf"),
     ],
 )
 def test_coefficients_are_written_as_matlab_num2str(value, text):
     from raven_toolbox.io.excel import _num2str
 
     assert _num2str(value) == text
-    assert _num2str(-value) == text
+    assert _num2str(-value) == "-" + text
+
+
+def test_num2str_of_infinity_and_negative_zero():
+    from raven_toolbox.io.excel import _num2str
+
+    assert _num2str(float("-inf")) == "-Inf"
+    assert _num2str(-0.0) == "0"

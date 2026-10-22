@@ -121,3 +121,30 @@ def test_nan_fold_changes_do_not_count(model):
         gene_fold_changes={"g1": 0.0, "g2": float("nan")},
     )
     assert [r.test for r in res] == ["all"]
+
+
+@pytest.mark.parametrize("n", [6, 7, 11, 22])
+def test_identical_p_values_give_zero_scores_whatever_the_rounding(n):
+    """With these pool sizes the mean of identical z-scores differs from them by one ulp, so
+    the standard deviation is about 5e-17 instead of 0; the spread is tested instead."""
+    m = cobra.Model("pool")
+    a = _met("A_c")
+    m.add_metabolites([a])
+    for i in range(n):
+        r = cobra.Reaction(f"r{i}")
+        r.add_metabolites({a: -1})
+        m.add_reactions([r])
+        r.gene_reaction_rule = f"h{i}"
+    (res,) = reporter_metabolites(m, {f"h{i}": 0.37 for i in range(n)})
+    assert (res.table["z_score"] == 0.0).all()
+    assert (res.table["p_value"] == 0.5).all()
+
+
+def test_a_tiny_real_spread_is_kept(model):
+    import numpy as np
+    from scipy.stats import norm
+
+    # z = 1e-10 * [1, 2, 3] is far above rounding level.
+    p = norm.sf(1e-10 * np.array([1.0, 2.0, 3.0]))
+    (res,) = reporter_metabolites(model, {"g1": p[0], "g2": p[1], "g3": p[2]})
+    assert res.table["z_score"].abs().max() > 0.5

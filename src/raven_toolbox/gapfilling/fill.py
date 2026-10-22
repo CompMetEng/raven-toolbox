@@ -217,8 +217,9 @@ def connect_blocked_reactions(
     working, template_ids = _merge_templates(model, templates)
     if scores:
         # Scores are keyed by the id the reaction has in the template.
-        scores = {rid: scores[renames.get(rid, rid)] for rid in template_ids
-                  if renames.get(rid, rid) in scores}
+        # A score under the renamed id takes precedence over the one under the original id.
+        scores = {rid: scores[rid] if rid in scores else scores[renames.get(rid, rid)]
+                  for rid in template_ids if rid in scores or renames.get(rid, rid) in scores}
 
     draft_ids = [r.id for r in model.reactions]
     unblocked = _carrying_flux(

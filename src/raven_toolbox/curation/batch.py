@@ -443,10 +443,16 @@ def _update_reaction(rxn: cobra.Reaction, row: pd.Series, miriam_cols: list[str]
 
 
 def _stored_default_ub(model: cobra.Model) -> float:
-    """The ``defaultUB`` stored with the model (YAML metaData or MAT annotation), else +inf."""
-    for source in (model.notes.get("metaData"), model.annotation):
-        if isinstance(source, dict) and source.get("defaultUB") not in (None, ""):
-            return float(source["defaultUB"])
+    """The ``defaultUB`` stored in the model's ``notes["metaData"]``, else +inf.
+
+    A reaction without ``ub`` takes this bound, as RAVEN's ``addRxns`` takes
+    ``model.annotation.defaultUB``. A reaction without ``lb`` keeps ``-inf``: ``addRxns``
+    sets the lower bound of reactions given by ``mets`` and ``stoichCoeffs`` to ``-inf``
+    before it reads ``defaultLB``, and ``curateModelFromTables`` adds reactions that way.
+    """
+    meta = model.notes.get("metaData")
+    if isinstance(meta, dict) and meta.get("defaultUB") not in (None, ""):
+        return float(meta["defaultUB"])
     return math.inf
 
 

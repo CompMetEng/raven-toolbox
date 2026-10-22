@@ -210,6 +210,19 @@ def test_scores_of_a_renamed_template_reaction_are_looked_up_by_its_template_id(
     assert "T2" not in res.added_reactions
 
 
+def test_a_score_under_the_renamed_id_takes_precedence():
+    # The template's R1 is renamed R1_template; an explicit score for R1_template wins over R1's.
+    draft, template = _chain(1000.0, [("T1", ["A"], ["C"]), ("T2", ["A"], ["E"])])
+    clash = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    clash.add_metabolites({_met("C"): -1, _met("E"): 1})
+    template.add_reactions([clash])
+    res = connect_blocked_reactions(
+        draft, template, scores={"R1": -0.1, "R1_template": -5.0, "T2": -0.5}
+    )
+    assert "T2" in res.added_reactions
+    assert "R1_template" not in res.added_reactions
+
+
 def test_net_production_does_not_relax_the_callers_model():
     def rxn(rid, subs, prods):
         r = cobra.Reaction(rid, lower_bound=0, upper_bound=1000)
