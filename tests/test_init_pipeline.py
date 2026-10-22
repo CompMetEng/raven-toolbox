@@ -63,7 +63,7 @@ def test_ftinit_no_tasks_matches_oracle():
     """T0001: testModel, no tasks, '1+1' → {R1,R4,R6,R8,R9,R10}."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
 
@@ -71,7 +71,7 @@ def test_ftinit_with_spontaneous_matches_oracle():
     """T0001 variant: R7,R10 spontaneous → the path through R2/R7, {R1,R2,R4,R6,R7,R8}."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s", spontaneous=["R7", "R10"])
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_SPONT_R7_R10)
 
 
@@ -81,7 +81,7 @@ def test_ftinit_with_task_matches_oracle():
     prep = prep_init_model(model, [make_test_task()], ext_comp="s")
     # Essentials map to merged ids {R1, R7} (RAVEN T0002).
     assert prep.essential_rxns == set(TEST_MODEL_TASK_ESSENTIAL_MERGED)
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_WITH_TASK)
 
 
@@ -89,7 +89,7 @@ def test_full_series_runs():
     """The single-step 'full' series also produces a feasible subnetwork."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model), series="full")
+    out = ftinit(prep, rxn_scores=_scores(model), series="full")
     assert len(out.reactions) >= 1
 
 
@@ -104,7 +104,7 @@ def test_pipeline_with_gene_scores_and_tasks_wires_up():
     model = make_test_model()
     gene_scores = gene_scores_from_expression(expr_for_rxn_score(TEST_MODEL_SCORES), 1.0)
     prep = prep_init_model(model, [make_test_task()], ext_comp="s")
-    out = ftinit(prep, _scores(model), gene_scores=gene_scores)
+    out = ftinit(prep, rxn_scores=_scores(model), gene_scores=gene_scores)
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_WITH_TASK)
 
 
@@ -228,7 +228,7 @@ def test_ftinit_prove_abs_gap_matches_oracle():
     """prove_abs_gap: one near-proven-optimal solve per step, still gives T0001."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model), prove_abs_gap=0.05)
+    out = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05)
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
 
@@ -236,8 +236,8 @@ def test_ftinit_resolve_ties_matches_oracle_and_is_stable():
     """resolve_ties (+ prove_abs_gap): preserves T0001, identical across repeated runs."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out1 = ftinit(prep, _scores(model), prove_abs_gap=0.05, resolve_ties=True)
-    out2 = ftinit(prep, _scores(model), prove_abs_gap=0.05, resolve_ties=True)
+    out1 = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05, resolve_ties=True)
+    out2 = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05, resolve_ties=True)
     assert {r.id for r in out1.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
     assert {r.id for r in out1.reactions} == {r.id for r in out2.reactions}
 
@@ -271,11 +271,11 @@ def test_metabolomics_name_resolves_through_the_merge():
     prep, model = _merged_producer_prep()
     scores = _scores(model)
 
-    baseline = ftinit(prep, scores, fill_gaps=False)
+    baseline = ftinit(prep, rxn_scores=scores, fill_gaps=False)
     assert not ({"R3", "R5"} & {r.id for r in baseline.reactions})
     assert {r.id for r in baseline.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
-    boosted = ftinit(prep, scores, fill_gaps=False, metabolomics=["b"], prod_weight=5.0)
+    boosted = ftinit(prep, rxn_scores=scores, fill_gaps=False, metabolomics=["b"], prod_weight=5.0)
     kept_ids = {r.id for r in boosted.reactions}
     assert {"R3", "R5"} <= kept_ids  # merge group survives whole (all-or-nothing)
 
@@ -286,5 +286,5 @@ def test_metabolomics_unknown_name_warns():
 
     prep, model = _merged_producer_prep()
     with pytest.warns(UserWarning, match="matched no metabolite"):
-        ftinit(prep, _scores(model), fill_gaps=False,
+        ftinit(prep, rxn_scores=_scores(model), fill_gaps=False,
               metabolomics=["not_a_real_metabolite"])

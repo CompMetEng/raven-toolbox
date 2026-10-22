@@ -15,7 +15,7 @@ Pipeline (typical (f)tINIT entry):
     hpa = parse_hpa("normal_tissue.tsv")
     gene_scores = hpa_gene_scores(hpa, tissue="liver", celltype="hepatocytes")
     rxn_scores  = score_reactions_from_genes(model, gene_scores)
-    # → ftinit(prep, rxn_scores, gene_scores=gene_scores, ...)
+    # → ftinit(prep, rxn_scores=rxn_scores, gene_scores=gene_scores, ...)
 
 or for RNA-seq:
 
