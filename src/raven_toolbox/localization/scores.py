@@ -305,8 +305,8 @@ def load_uniprot(path: str | Path, *,
                  sep: str = "\t") -> LocalizationScores:
     """Parse a UniProtKB export into a normalised :class:`LocalizationScores`.
 
-    UniProt's curated ``Subcellular location [CC]`` annotation is qualitative — a set of
-    compartments, not probabilities — so each annotated compartment gets score ``1.0`` (a
+    UniProt's curated ``Subcellular location [CC]`` annotation is qualitative (a set of
+    compartments, not probabilities), so each annotated compartment gets score ``1.0`` (a
     multi-location protein lands in several). The annotation text is scanned for the labels in
     ``compartment_map`` (which therefore doubles as the vocabulary), mapping them to your model's
     compartment ids. Labels match as whole words (``cytoplasm`` does not match ``Cytoplasmic
@@ -320,7 +320,7 @@ def load_uniprot(path: str | Path, *,
     sorted and a ``UserWarning`` is issued.
 
     Export from https://rest.uniprot.org with ``fields=accession,gene_oln,cc_subcellular_location``
-    (TSV). Pick ``id_column`` to match your model's gene ids — for yeast-GEM that is the
+    (TSV). Pick ``id_column`` to match your model's gene ids; for yeast-GEM that is the
     ordered-locus column (``Gene Names (ordered locus)``, the ORF id like ``YNR001C``), not the
     default accession.
     """

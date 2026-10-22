@@ -324,3 +324,68 @@ def test_prep_keeps_the_template_bounds_and_directions_on_ref_model():
     prep = prep_init_model(m, [task], ext_comp="s")
     assert state(prep.ref_model) == template
     assert state(m) == template  # the template itself is not modified
+
+
+def _bounds_and_stoichiometry(model):
+    return {
+        r.id: (r.bounds, {mt.id: co for mt, co in r.metabolites.items()}, r.objective_coefficient)
+        for r in model.reactions
+    }
+
+
+def test_prep_restores_an_essential_reaction_that_was_flipped_to_forward():
+    """A task forces R1 in its written reverse direction; the orientation is undone on ref_model."""
+    import cobra
+
+    from raven_toolbox.tasks import Task, find_task_essential_reactions
+
+    m = cobra.Model("flip")
+    a, b, c = (cobra.Metabolite(x, name=x, compartment="s") for x in "abc")
+    m.add_metabolites([a, b, c])
+    ex_a = cobra.Reaction("EX_a", lower_bound=-1000, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    ex_c = cobra.Reaction("EX_c", lower_bound=0, upper_bound=1000)
+    ex_c.add_metabolites({c: -1})
+    r1 = cobra.Reaction("R1", lower_bound=-1000, upper_bound=1000)
+    r1.add_metabolites({a: 1, b: -1})  # b <=> a, but the task needs a -> b
+    r1.gene_reaction_rule = "g1"
+    r2 = cobra.Reaction("R2", lower_bound=-1000, upper_bound=1000)
+    r2.add_metabolites({b: -1, c: 1})
+    r2.gene_reaction_rule = "g2"
+    m.add_reactions([ex_a, ex_c, r1, r2])
+    task = Task(id="mk_c", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("c[s]", 1.0, 1000.0)])
+
+    essential = find_task_essential_reactions(m.copy(), [task], close_boundaries=True).reactions
+    assert essential["R1"] == -1  # precondition: the forced direction is the reverse one
+
+    template = _bounds_and_stoichiometry(m)
+    prep = prep_init_model(m, [task], ext_comp="s")
+    assert _bounds_and_stoichiometry(prep.ref_model) == template
+
+
+def test_prep_restores_a_reversible_reaction_that_can_only_run_backwards():
+    """constrain_reversible flips a reversible reaction whose only feasible flux is
+    negative; the template's bounds and stoichiometry come back on ref_model."""
+    import cobra
+
+    from raven_toolbox.manipulation import simplify_model
+
+    m = cobra.Model("backwards")
+    a, b = (cobra.Metabolite(x, name=x, compartment="s") for x in "ab")
+    m.add_metabolites([a, b])
+    ex_b = cobra.Reaction("EX_b", lower_bound=0, upper_bound=1000)
+    ex_b.add_metabolites({b: 1})
+    ex_a = cobra.Reaction("EX_a", lower_bound=0, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    r = cobra.Reaction("R", lower_bound=-1000, upper_bound=1000)
+    r.add_metabolites({a: -1, b: 1})  # a <=> b, but only b -> a is feasible
+    r.gene_reaction_rule = "g1"
+    m.add_reactions([ex_b, ex_a, r])
+
+    tightened = m.copy()
+    simplify_model(tightened, constrain_reversible=True)
+    assert tightened.reactions.R.lower_bound >= 0  # precondition: the pass changes R
+
+    template = _bounds_and_stoichiometry(m)
+    prep = prep_init_model(m, None, ext_comp="s")
+    assert _bounds_and_stoichiometry(prep.ref_model) == template

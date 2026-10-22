@@ -8,7 +8,7 @@ to per-reaction scores by walking each reaction's GPR: genes joined by **OR**
 missing or NaN gets ``no_gene_score`` (default −2). These reaction scores feed
 :func:`raven_toolbox.init.ftinit`.
 
-Upstream — the omics-data → gene-score step (thresholding, expression levels) — lives
+Upstream, the omics-data → gene-score step (thresholding, expression levels) lives
 in :mod:`raven_toolbox.init.hpa`; this function takes gene scores as given.
 """
 from __future__ import annotations
