@@ -31,13 +31,23 @@ def _miriam_string(annotation: dict, exclude: tuple[str, ...] = ()) -> str:
     return ";".join(parts)
 
 
+def _num2str(value: float) -> str:
+    """A coefficient as MATLAB's ``num2str`` writes it: integers in full, other values with
+    ``max(floor(log10(abs(value))) + 5, 5)`` significant digits."""
+    value = abs(value)
+    if value == int(value):
+        return str(int(value))
+    digits = max(math.floor(math.log10(value)) + 5, 5)
+    return f"{value:.{digits}g}"
+
+
 def _equation(rxn: cobra.Reaction) -> str:
     """Human-readable equation in RAVEN ``name[comp]`` form."""
 
     def side(items):
         # A coefficient of 1 is left out, as RAVEN's constructEquations does.
         return " + ".join(
-            f"{'' if abs(coef) == 1 else f'{abs(coef):g} '}{met.name}[{met.compartment}]"
+            f"{'' if abs(coef) == 1 else f'{_num2str(coef)} '}{met.name}[{met.compartment}]"
             for met, coef in items
         )
 

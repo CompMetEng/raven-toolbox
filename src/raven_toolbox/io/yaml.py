@@ -703,7 +703,10 @@ def _build_metadata(model: cobra.Model, stored_meta: dict, version) -> OrderedDi
     metadata["date"] = stored_meta.get("date") or date.today().isoformat()
     bounds = _default_bounds(model) if "defaultLB" in stored_meta or "defaultUB" in stored_meta else None
     if bounds is not None:
-        metadata["defaultLB"], metadata["defaultUB"] = bounds
+        if "defaultLB" in stored_meta:
+            metadata["defaultLB"] = bounds[0]
+        if "defaultUB" in stored_meta:
+            metadata["defaultUB"] = bounds[1]
     for key in _META_ANNOTATION_FIELDS:
         value = stored_meta.get(key)
         if value:

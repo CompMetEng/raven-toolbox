@@ -252,3 +252,21 @@ def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):
     root = export_for_git(model, tmp_path, formats=("txt",))
     equation = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")[1]
     assert equation == "2 ATP[c] <=> ADP[c]"
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (2.777777777e-05, "2.7778e-05"),
+        (0.123456, "0.12346"),
+        (1234.56789, "1234.5679"),
+        (1.2345678, "1.2346"),
+        (2.0, "2"),
+        (1000000.0, "1000000"),
+    ],
+)
+def test_coefficients_are_written_as_matlab_num2str(value, text):
+    from raven_toolbox.io.excel import _num2str
+
+    assert _num2str(value) == text
+    assert _num2str(-value) == text

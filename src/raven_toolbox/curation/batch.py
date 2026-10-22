@@ -442,6 +442,14 @@ def _update_reaction(rxn: cobra.Reaction, row: pd.Series, miriam_cols: list[str]
     _apply_miriam(rxn, row, miriam_cols)
 
 
+def _stored_default_ub(model: cobra.Model) -> float:
+    """The ``defaultUB`` stored with the model (YAML metaData or MAT annotation), else +inf."""
+    for source in (model.notes.get("metaData"), model.annotation):
+        if isinstance(source, dict) and source.get("defaultUB") not in (None, ""):
+            return float(source["defaultUB"])
+    return math.inf
+
+
 def _build_new_reactions(
     model: cobra.Model,
     rows: list[tuple[pd.Series, dict[cobra.Metabolite, float]]],
@@ -449,13 +457,14 @@ def _build_new_reactions(
     id_prefix: str,
 ) -> list[cobra.Reaction]:
     ids = _generate_ids(model.reactions, id_prefix, len(rows))
+    default_ub = _stored_default_ub(model)
     new_rxns: list[cobra.Reaction] = []
     for new_id, (row, stoich) in zip(ids, rows, strict=True):
         rxn = cobra.Reaction(
             id=new_id,
             name=str(row["rxnNames"]),
             lower_bound=float(row["lb"]) if _has_value(row.get("lb")) else -math.inf,
-            upper_bound=float(row["ub"]) if _has_value(row.get("ub")) else math.inf,
+            upper_bound=float(row["ub"]) if _has_value(row.get("ub")) else default_ub,
         )
         rxn.add_metabolites(stoich)
         if _has_value(row.get("grRules")):

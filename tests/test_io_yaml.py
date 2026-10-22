@@ -496,3 +496,13 @@ def test_duplicate_metabolite_names_warn(tmp_path):
     r.add_metabolites({x: -1, y: 1, other: 1})
     with pytest.warns(UserWarning, match=r"1 metabolite\(s\) share a name and compartment.*Y_c and X_c"):
         write_yaml_model(m, tmp_path / "m.yml")
+
+
+def test_only_the_stored_default_bound_is_written(tmp_path):
+    m = _edge_model()
+    m.notes["metaData"] = {"defaultLB": -1000.0}
+    out = tmp_path / "lb_only.yml"
+    write_yaml_model(m, out)
+    text = out.read_text()
+    assert "defaultLB" in text
+    assert "defaultUB" not in text

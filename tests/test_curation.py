@@ -205,6 +205,28 @@ def test_add_new_reaction_with_existing_mets():
     assert new.notes.get("confidence_score") == 3
 
 
+def test_new_reaction_without_ub_takes_the_stored_default_ub():
+    def curate(model):
+        rxns_df = pd.DataFrame([
+            {"rxnNames": "ADP phosphorylation", "grRules": "", "lb": "", "ub": "", "rev": 1,
+             "subSystems": "", "eccodes": "", "rxnNotes": "", "rxnReferences": ""},
+        ])
+        coeffs_df = pd.DataFrame([
+            {"rxnNames": "ADP phosphorylation", "metNames": "ADP", "comps": "c", "coefficient": -1.0},
+            {"rxnNames": "ADP phosphorylation", "metNames": "ATP", "comps": "c", "coefficient": 1.0},
+        ])
+        batch_curate(model, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+        return model.reactions.get_by_id("r_0002")
+
+    plain = curate(_base_model())
+    assert plain.upper_bound == float("inf")
+    m = _base_model()
+    m.notes["metaData"] = {"defaultUB": 1000.0}
+    stored = curate(m)
+    assert stored.upper_bound == 1000.0
+    assert stored.lower_bound == float("-inf")
+
+
 def test_add_new_reaction_joins_list_subsystems():
     # RAVEN allows a reaction in several subsystems (a list). The new-reaction
     # path must ``;``-join it like the update path does, not emit a str(list) repr.
