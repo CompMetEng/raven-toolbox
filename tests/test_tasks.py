@@ -6,7 +6,12 @@ import pytest
 
 from raven_toolbox.tasks import Task, check_tasks, parse_task_list
 
-TASK_TSV = (
+def _tsv(text):
+    """Prefix every line with an empty comment-marker column; ID may not be the first column."""
+    return "".join("\t" + line + "\n" for line in text.splitlines())
+
+
+TASK_TSV = _tsv(
     "ID\tDESCRIPTION\tIN\tIN UB\tOUT\tOUT LB\tEQU\tSHOULD FAIL\n"
     "T1\tgrowth\tglc[e];o2[e]\t10\tbio[c]\t1\t\t\n"
     "T2\tinfeasible\t\t\tatp[c]\t1\t\ttrue\n"
@@ -55,15 +60,23 @@ def test_parse_missing_id_column(tmp_path):
         parse_task_list(p)
 
 
+def test_parse_id_in_first_column_raises(tmp_path):
+    """The first column is reserved for comment markers, as in RAVEN's parseTaskList."""
+    p = tmp_path / "first.txt"
+    p.write_text("ID\tDESCRIPTION\tIN\tOUT\nT1\td\tA[c]\tB[c]\n")
+    with pytest.raises(ValueError, match="must have a column named ID that is not the first column"):
+        parse_task_list(p)
+
+
 def test_parse_warns_on_data_row_before_first_id(tmp_path):
     """Continuation rows appearing before the first task ID are malformed input;
     parse_task_list warns instead of silently dropping them."""
     p = tmp_path / "orphan.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tDESCRIPTION\tIN\tIN UB\tOUT\tOUT UB\tSHOULD FAIL\n"
         "\t\tglc[e]\t10\t\t\t\n"        # orphan data row, no ID seen yet
         "T1\tgrowth\t\t\tbio[c]\t1\t\n"
-    )
+    ))
     with pytest.warns(UserWarning, match="no task ID has been seen yet"):
         tasks = parse_task_list(p)
     assert [t.id for t in tasks] == ["T1"]
@@ -205,10 +218,10 @@ def test_open_exchange_is_closed_so_task_controls_io(model):
 
 def test_check_tasks_accepts_a_file_path(model, tmp_path):
     p = tmp_path / "t.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tDESCRIPTION\tIN\tOUT\tOUT LB\n"
         "make_B\tconvert\tA[c]\tB[c]\t1\n"
-    )
+    ))
     results = check_tasks(model, p)  # path, parsed internally
     assert _by_id(results)["make_B"].passed
 
@@ -218,23 +231,23 @@ def test_check_tasks_accepts_a_file_path(model, tmp_path):
 # --------------------------------------------------------------------------- #
 def test_parse_flags_false_texts(tmp_path):
     p = tmp_path / "flags.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tSHOULD FAIL\tPRINT FLUX\n"
         "A\tfalse\t0\n"
         "B\tNo\tFALSE\n"
         "C\tyes\t1\n"
         "D\t\tTRUE\n"
-    )
+    ))
     flags = {t.id: (t.should_fail, t.print_fluxes) for t in parse_task_list(p)}
     assert flags == {"A": (False, False), "B": (False, False), "C": (True, True), "D": (False, True)}
 
 
 def test_parse_semicolon_lists_are_trimmed_and_drop_empty_items(tmp_path):
     p = tmp_path / "lists.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tIN\tIN UB\tCHANGED RXN\tCHANGED UB\n"
         "T1\tA[c]; B[c];\t5\t;r1 ; r2\t10\n"
-    )
+    ))
     (t,) = parse_task_list(p)
     assert t.inputs == [("A[c]", 0.0, 5.0), ("B[c]", 0.0, 5.0)]
     assert [c[0] for c in t.changed] == ["r1", "r2"]
@@ -242,7 +255,7 @@ def test_parse_semicolon_lists_are_trimmed_and_drop_empty_items(tmp_path):
 
 def test_parse_empty_changed_bounds_are_none(tmp_path):
     p = tmp_path / "changed.txt"
-    p.write_text("ID\tCHANGED RXN\tCHANGED LB\tCHANGED UB\nT1\tr1\t\t10\nT2\tr1\t-5\t\nT3\tr1\t1\t2\n")
+    p.write_text(_tsv("ID\tCHANGED RXN\tCHANGED LB\tCHANGED UB\nT1\tr1\t\t10\nT2\tr1\t-5\t\nT3\tr1\t1\t2\n"))
     t1, t2, t3 = parse_task_list(p)
     assert t1.changed == [("r1", None, 10.0)]
     assert t2.changed == [("r1", -5.0, None)]
@@ -251,7 +264,7 @@ def test_parse_empty_changed_bounds_are_none(tmp_path):
 
 def test_parse_headers_ignore_case_and_whitespace(tmp_path):
     p = tmp_path / "hdr.txt"
-    p.write_text(" id \tIn\t in ub \nT1\tA[c]\t7\n")
+    p.write_text(_tsv(" id \tIn\t in ub \nT1\tA[c]\t7\n"))
     (t,) = parse_task_list(p)
     assert t.inputs == [("A[c]", 0.0, 7.0)]
 
