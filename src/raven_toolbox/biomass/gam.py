@@ -22,7 +22,7 @@ def set_gam(
 
     Scales every metabolite participating in the biomass pseudoreaction
     whose ``name`` is in ``cofactor_met_names`` (e.g. ATP, ADP, H2O,
-    H+, phosphate) to ``±value``, preserving the sign of its current
+    H+, phosphate) to exactly ``±value``, preserving the sign of its current
     coefficient.
 
     If both ``ngam_rxn`` and ``ngam_value`` are given, the NGAM
@@ -50,21 +50,28 @@ def set_gam(
     -------
     cobra.Model
         The (mutated) model, for chaining.
+
+    Raises
+    ------
+    KeyError
+        If ``biomass_rxn``, or ``ngam_rxn`` when NGAM is to be set, is not in the model.
+        Both reactions are looked up before anything is changed.
     """
     rxn = model.reactions.get_by_id(biomass_rxn)
+    ngam = None
+    if ngam_rxn is not None and ngam_value is not None:
+        ngam = model.reactions.get_by_id(ngam_rxn)
     cofactor_set = set(cofactor_met_names)
 
-    deltas: dict[cobra.Metabolite, float] = {}
+    targets: dict[cobra.Metabolite, float] = {}
     for met, coef in rxn.metabolites.items():
         if met.name in cofactor_set:
             target = (1 if coef > 0 else -1) * float(value)
-            # combine=True adds delta → new total = target
-            deltas[met] = target - coef
-    if deltas:
-        rxn.add_metabolites(deltas, combine=True)
+            targets[met] = target
+    if targets:
+        rxn.add_metabolites(targets, combine=False)  # replaces the coefficient, so it is exactly target
 
-    if ngam_rxn is not None and ngam_value is not None:
-        ngam = model.reactions.get_by_id(ngam_rxn)
+    if ngam is not None:
         ngam.bounds = (float(ngam_value), float(ngam_value))
 
     return model

@@ -281,3 +281,24 @@ def test_set_gam_ignores_non_cofactor_mets():
     set_gam(m, 80, biomass_rxn=cfg.biomass_rxn,
             cofactor_met_names=("ATP",))
     assert bio.metabolites[protein] == before
+
+
+@pytest.mark.parametrize("first,value", [(90.2, 0.1), (46.5, 0.7), (59.276, 0.001)])
+def test_set_gam_stores_the_requested_value_exactly(first, value):
+    m, cfg = _toy_biomass_model()
+    names = ("ATP", "ADP", "H2O", "H+", "phosphate")
+    set_gam(m, first, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=names)
+    set_gam(m, value, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=names)
+    bio = m.reactions.get_by_id(cfg.biomass_rxn)
+    assert bio.metabolites[m.metabolites.get_by_id("atp_c")] == -value
+    assert bio.metabolites[m.metabolites.get_by_id("adp_c")] == value
+
+
+def test_set_gam_missing_ngam_reaction_raises_before_changing_anything():
+    m, cfg = _toy_biomass_model()
+    bio = m.reactions.get_by_id(cfg.biomass_rxn)
+    before = dict(bio.metabolites)
+    with pytest.raises(KeyError):
+        set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
+                ngam_rxn="NOPE", ngam_value=1.0)
+    assert dict(bio.metabolites) == before
