@@ -51,9 +51,9 @@ def _toy_biomass_model() -> tuple[cobra.Model, BiomassConfig]:
                             charge=0, formula="C2H4N1O2")  # MW ≈ 74
     glc = cobra.Metabolite("glc_c", name="glucose", compartment="c",
                             charge=0, formula="C6H12O6")  # MW = 180.156
-    protein = cobra.Metabolite("protein_c", name="protein", compartment="c")
-    carb = cobra.Metabolite("carb_c", name="carbohydrate", compartment="c")
-    biomass = cobra.Metabolite("biomass_c", name="biomass", compartment="c")
+    protein = cobra.Metabolite("protein_c", name="protein", compartment="c", charge=0)
+    carb = cobra.Metabolite("carb_c", name="carbohydrate", compartment="c", charge=0)
+    biomass = cobra.Metabolite("biomass_c", name="biomass", compartment="c", charge=0)
     h = cobra.Metabolite("h_c", name="H+", compartment="c", charge=1)
     atp = cobra.Metabolite("atp_c", name="ATP", compartment="c", charge=-4)
     adp = cobra.Metabolite("adp_c", name="ADP", compartment="c", charge=-3)
@@ -302,3 +302,53 @@ def test_set_gam_missing_ngam_reaction_raises_before_changing_anything():
         set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
                 ngam_rxn="NOPE", ngam_value=1.0)
     assert dict(bio.metabolites) == before
+
+
+# --- charge handling and the post-rescale balance check ---------------------
+
+def test_rescale_pseudoreaction_unset_charge_raises_and_changes_nothing():
+    m, cfg = _toy_biomass_model()
+    m.metabolites.get_by_id("aa1_c").charge = None
+    rxn = m.reactions.get_by_id("PROT_pseudo")
+    before = dict(rxn.metabolites)
+    with pytest.raises(ValueError, match="aa1_c"):
+        rescale_pseudoreaction(m, cfg, "protein", 2.0)
+    assert dict(rxn.metabolites) == before
+
+
+def _proton_mass_model():
+    m = cobra.Model("grams")
+    mets = {
+        "a_c": cobra.Metabolite("a_c", name="ala", charge=-1, compartment="c"),
+        "h_c": cobra.Metabolite("h_c", name="H+", charge=1, compartment="c"),
+        "prot_c": cobra.Metabolite("prot_c", name="protein", charge=0, compartment="c"),
+        "d_c": cobra.Metabolite("d_c", name="dNMP", charge=0, compartment="c"),
+        "dna_c": cobra.Metabolite("dna_c", name="DNA", charge=0, compartment="c"),
+        "bio_c": cobra.Metabolite("bio_c", name="biomass", charge=0, compartment="c"),
+    }
+    m.add_metabolites(list(mets.values()))
+    for rid, name, stoich in [
+        ("P1", "protein pseudoreaction", {"a_c": -0.4, "prot_c": 1}),
+        ("D1", "DNA pseudoreaction", {"d_c": -0.5, "dna_c": 1}),
+    ]:
+        rxn = cobra.Reaction(rid, name=name)
+        m.add_reactions([rxn])
+        rxn.add_metabolites({mets[k]: v for k, v in stoich.items()})
+    cfg = BiomassConfig.from_components(
+        "P1", "h_c",
+        [
+            BiomassComponent("protein", "protein pseudoreaction", mass_strategy="grams"),
+            BiomassComponent("DNA", "DNA pseudoreaction", mass_strategy="grams"),
+        ],
+    )
+    return m, cfg
+
+
+def test_scale_biomass_balance_check_includes_the_proton_rebalance():
+    """The H+ added by the first rescale counts as mass, so protein = 0.8 ends at 1.6 g/gDW
+    and DNA cannot absorb it, although a linear estimate would let it through."""
+    m, cfg = _proton_mass_model()
+    before = {r.id: dict(r.metabolites) for r in m.reactions}
+    with pytest.raises(ValueError, match="DNA"):
+        scale_biomass(m, cfg, "protein", 0.8, balance_out="DNA")
+    assert {r.id: dict(r.metabolites) for r in m.reactions} == before
