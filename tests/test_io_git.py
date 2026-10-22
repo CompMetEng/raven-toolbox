@@ -62,9 +62,47 @@ def test_does_not_mutate_model(model, tmp_path):
 def test_txt_table_content(model, tmp_path):
     root = export_for_git(model, tmp_path, formats=("txt",))
     txt = (root / "txt" / "model.txt").read_text()
-    assert txt.splitlines()[0].startswith("Rxn name\t")
+    assert txt.splitlines()[0] == "Rxn id\tFormula\tGene-reaction association\tLB\tUB\tObjective"
     assert "R1" in txt
     assert "ATP[c]" in txt
+
+
+def test_txt_bounds_are_written_exactly(model, tmp_path):
+    reaction = model.reactions.get_by_id("R1")
+    reaction.bounds = (-1 / 3, 0.1)
+    reaction.objective_coefficient = 1e-7
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    fields = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")
+    assert fields[3:] == ["-0.3333333333333333", "0.1", "1e-07"]
+    assert (float(fields[3]), float(fields[4]), float(fields[5])) == (-1 / 3, 0.1, 1e-7)
+    assert not fields[1].endswith(" ")
+
+
+def test_txt_whole_and_infinite_bounds(model, tmp_path):
+    model.reactions.get_by_id("R1").bounds = (-1000.0, float("inf"))
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    fields = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")
+    assert fields[3:5] == ["-1000", "Inf"]
+
+
+def test_all_five_formats_are_written_by_default(model, tmp_path):
+    root = export_for_git(model, tmp_path)
+    for fmt in ("yml", "xml", "mat", "xlsx", "txt"):
+        assert (root / fmt / f"model.{fmt}").exists()
+
+
+def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
+    set_model_metadata(model, version="1.2.0", date="2026-10-05")
+    first = export_for_git(model, tmp_path / "a", formats=("yml",))
+    second = export_for_git(model, tmp_path / "b", formats=("yml",))
+    text = (first / "dependencies.txt").read_text()
+    assert text == (second / "dependencies.txt").read_text()
+    names = [line.split("\t")[0] for line in text.splitlines()]
+    assert names == [
+        "python", "cobra", "libSBML", "ruamel.yaml", "scipy", "openpyxl", "raven_toolbox",
+        "model_version", "model_date",
+    ]
+    assert "model_version\t1.2.0" in text
 
 
 def test_bad_format(model, tmp_path):
