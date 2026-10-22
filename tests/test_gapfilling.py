@@ -185,3 +185,13 @@ def test_positive_score_takes_the_least_negative_penalty():
     draft, template = _chain(1000.0, templates)
     res = connect_blocked_reactions(draft, template, scores={"T1": -1.0, "T2": -1.0, "T3": 0.5})
     assert "T3" not in res.added_reactions
+
+
+def test_template_reaction_with_a_draft_id_is_renamed_not_dropped():
+    draft, template = _chain(1000.0, [("T1", ["A"], ["C"])])
+    clash = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    clash.add_metabolites({_met("C"): -1, _met("E"): 1})
+    template.add_reactions([clash])
+    res = connect_blocked_reactions(draft, template)
+    assert "T1" in res.added_reactions
+    assert "R1" not in res.added_reactions

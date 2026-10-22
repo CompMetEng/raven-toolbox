@@ -30,6 +30,7 @@ import cobra
 from cobra.flux_analysis import find_blocked_reactions, flux_variability_analysis
 from cobra.util import ProcessPool
 
+from raven_toolbox.gapfilling.templates import unique_templates
 from raven_toolbox.manipulation.transfer import add_reactions_from_model
 
 
@@ -264,7 +265,7 @@ def fill_gaps_fast_lp(
     -------
     FastLPResult
     """
-    templates = _as_models(templates)
+    templates = unique_templates(model, _as_models(templates))
 
     # ---- Find blocked reactions in draft ----
     blocked = set(find_blocked_reactions(model, processes=1))

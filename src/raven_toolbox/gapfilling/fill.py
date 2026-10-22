@@ -25,6 +25,7 @@ import cobra
 from cobra.flux_analysis import flux_variability_analysis
 from optlang.interface import Variable  # untyped (resolves to Any); used for container hints
 
+from raven_toolbox.gapfilling.templates import unique_templates
 from raven_toolbox.manipulation.transfer import add_reactions_from_model
 
 
@@ -204,7 +205,7 @@ def connect_blocked_reactions(
     """
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")
-    templates = _as_models(templates)
+    templates = unique_templates(model, _as_models(templates))
     working, template_ids = _merge_templates(model, templates)
 
     draft_ids = [r.id for r in model.reactions]
