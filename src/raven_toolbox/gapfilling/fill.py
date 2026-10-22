@@ -11,7 +11,9 @@ metabolites are matched to the draft by ``name[compartment]`` (via
 :func:`add_reactions_from_model`), so templates in a different identifier namespace
 than the model still work. Per-reaction ``scores`` (higher = prefer to include) map to
 RAVEN's ``rxnScores``; the MILP minimises the penalty ``-score`` (default penalty
-``1.0``, i.e. minimise the number of reactions added).
+``1.0``, i.e. minimise the number of reactions added). As in RAVEN, a score that is not
+negative is replaced by the least negative score among the template reactions (or by 0
+when none is negative), so a reaction is never rewarded for being added.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 import cobra
-from cobra.flux_analysis import find_blocked_reactions, flux_variability_analysis
+from cobra.flux_analysis import flux_variability_analysis
 from optlang.interface import Variable  # untyped (resolves to Any); used for container hints
 
 from raven_toolbox.manipulation.transfer import add_reactions_from_model
@@ -59,6 +61,50 @@ def _merge_templates(model: cobra.Model, templates: list[cobra.Model]) -> tuple[
             added = add_reactions_from_model(working, template, new, genes=False, note=None)
             template_ids += [r.id for r in added]
     return working, template_ids
+
+
+def _carrying_flux(
+    model: cobra.Model, reaction_ids: list[str], *, threshold: float, net_production: bool
+) -> set[str]:
+    """Ids among ``reaction_ids`` that can carry a flux larger than ``threshold`` in either direction.
+
+    Infinite bounds count as +-10000, and with ``net_production`` the steady state is
+    relaxed to ``S @ v >= 0``, as in RAVEN's ``haveFlux`` on a model whose ``b`` upper
+    bound is infinite.
+    """
+    if not reaction_ids:
+        return set()
+    with model as m:
+        for rxn in m.reactions:
+            if rxn.lower_bound == -math.inf:
+                rxn.lower_bound = -10000.0
+            if rxn.upper_bound == math.inf:
+                rxn.upper_bound = 10000.0
+        if net_production:
+            for met in m.metabolites:
+                m.constraints[met.id].ub = None
+        fva = flux_variability_analysis(
+            m, reaction_list=reaction_ids, fraction_of_optimum=0.0, processes=1
+        )
+    return {
+        rid for rid in reaction_ids
+        if rid in fva.index
+        and (fva.at[rid, "maximum"] > threshold or fva.at[rid, "minimum"] < -threshold)
+    }
+
+
+def _penalties(
+    template_ids: list[str], scores: dict[str, float] | None, penalty: float
+) -> dict[str, float]:
+    """Penalty per template reaction: ``-score`` for negative scores.
+
+    A score that is not negative takes the penalty of the least negative score, or 0 when
+    no score is negative (RAVEN's ``getMinNrFluxes``).
+    """
+    raw = {rid: scores[rid] if scores and rid in scores else -penalty for rid in template_ids}
+    negatives = [v for v in raw.values() if v < 0]
+    fallback = -max(negatives) if negatives else 0.0
+    return {rid: -v if v < 0 else fallback for rid, v in raw.items()}
 
 
 def _solve_min_templates(
@@ -103,11 +149,9 @@ def _solve_min_templates(
         for met in working.metabolites:
             working.constraints[met.id].ub = None
 
-    def pen(rid: str) -> float:
-        return -scores[rid] if scores and rid in scores else penalty
-
+    penalties = _penalties(template_ids, scores, penalty)
     working.objective = prob.Objective(
-        sum(pen(rid) * indicators[rid] for rid in template_ids), direction="min"
+        sum(penalties[rid] * indicators[rid] for rid in template_ids), direction="min"
     )
     working.slim_optimize()
     if working.solver.status != "optimal":
@@ -133,16 +177,16 @@ def connect_blocked_reactions(
     scores: dict[str, float] | None = None,
     penalty: float = 1.0,
     allow_net_production: bool = False,
-    eps: float = 1.0,
+    threshold: float = 1.0,
+    min_flux: float = 0.1,
 ) -> GapFillResult:
     """Add template reactions so blocked draft reactions can carry flux.
 
-    Finds reactions that
-    cannot carry flux in ``model`` under its current bounds, then adds the minimum-penalty set of template
-    reactions that lets the (irreversible) ones carry flux, and returns the filled
-    model. Like RAVEN, only irreversible blocked reactions are forced — reversible
-    ones can carry flux trivially in the split formulation, so forcing them is
-    uninformative.
+    Finds reactions that cannot carry a flux larger than ``threshold`` in ``model`` under its current bounds,
+    then adds the minimum-penalty set of template reactions that lets the (irreversible)
+    ones carry flux, and returns the filled model. Like RAVEN, only irreversible blocked
+    reactions are forced — reversible ones can carry flux trivially in the split
+    formulation, so forcing them is uninformative.
 
     For the *other* gap-filling flavour — adding reactions to make the model's
     objective feasible — use ``cobra.flux_analysis.gapfill`` after aligning the
@@ -151,39 +195,35 @@ def connect_blocked_reactions(
     The draft is expected to have exchange reactions for its nutrients (otherwise most
     reactions are trivially blocked).
 
-    ``eps`` is the minimum flux a blocked reaction must be able to carry to count as
-    rescuable, and the flux forced through it while solving. ``allow_net_production``
+    ``threshold`` is the flux a reaction must be able to exceed to count as unblocked, in
+    the draft and, for a blocked reaction, with the templates added. ``min_flux`` is the
+    flux forced through each rescuable reaction while solving. ``allow_net_production``
     relaxes the steady-state balance from ``S @ v == 0`` to ``S @ v >= 0`` (metabolites
-    may accumulate), which can rescue reactions whose real fix is a missing
-    consumption route rather than a genuine connectivity gap.
+    may accumulate) in both checks and in the MILP, which can rescue reactions whose real
+    fix is a missing consumption route rather than a genuine connectivity gap.
     """
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")
     templates = _as_models(templates)
-    blocked = set(find_blocked_reactions(model, processes=1))
-    candidates = [r for r in blocked if model.reactions.get_by_id(r).lower_bound >= 0]
-
     working, template_ids = _merge_templates(model, templates)
 
-    target: list[str] = []
-    if candidates:
-        fva = flux_variability_analysis(
-            working, reaction_list=candidates, fraction_of_optimum=0.0, processes=1
-        )
-        # A reaction can be missing from the FVA frame if the solver dropped it
-        # (e.g. the reaction was eliminated upstream); treat that as "unreachable"
-        # rather than letting the KeyError propagate.
-        target = [
-            r for r in candidates
-            if r in fva.index and fva.at[r, "maximum"] > eps
-        ]
+    draft_ids = [r.id for r in model.reactions]
+    unblocked = _carrying_flux(
+        model, draft_ids, threshold=threshold, net_production=allow_net_production
+    )
+    blocked = {rid for rid in draft_ids if rid not in unblocked}
+    candidates = [r for r in draft_ids if r in blocked and model.reactions.get_by_id(r).lower_bound >= 0]
+    rescuable = _carrying_flux(
+        working, candidates, threshold=threshold, net_production=allow_net_production
+    )
+    target = [r for r in candidates if r in rescuable]
 
     cannot = sorted(blocked - set(target))
     if not target:
         return GapFillResult([], [], cannot, model.copy())
 
     for rid in target:
-        working.reactions.get_by_id(rid).lower_bound = eps
+        working.reactions.get_by_id(rid).lower_bound = min_flux
     chosen = _solve_min_templates(
         working, template_ids, scores=scores, penalty=penalty,
         allow_net_production=allow_net_production,
