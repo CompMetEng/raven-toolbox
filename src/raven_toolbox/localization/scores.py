@@ -35,6 +35,7 @@ import io
 import re
 import urllib.parse
 import urllib.request
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -308,8 +309,15 @@ def load_uniprot(path: str | Path, *,
     compartments, not probabilities — so each annotated compartment gets score ``1.0`` (a
     multi-location protein lands in several). The annotation text is scanned for the labels in
     ``compartment_map`` (which therefore doubles as the vocabulary), mapping them to your model's
-    compartment ids; evidence ``{ECO:…}`` braces and ``Note=…`` free text are stripped first so
-    incidental compartment mentions there are ignored.
+    compartment ids. Labels match as whole words (``cytoplasm`` does not match ``Cytoplasmic
+    vesicle``). Evidence ``{ECO:…}`` braces are stripped, the text is split into one block per
+    ``[Isoform …]:`` and the ``Note=…`` free text is cut within each block, so incidental mentions
+    there are ignored and a later isoform's locations are kept.
+
+    The columns are the distinct codes of ``compartment_map`` in the order they first occur when
+    the map keys are sorted, whether or not a gene has a hit in them, as in RAVEN. Genes without a
+    hit are absent. When a gene occurs in several rows, the first row is kept, the genes are
+    sorted and a ``UserWarning`` is issued.
 
     Export from https://rest.uniprot.org with ``fields=accession,gene_oln,cc_subcellular_location``
     (TSV). Pick ``id_column`` to match your model's gene ids — for yeast-GEM that is the
@@ -372,21 +380,40 @@ def _uniprot_scores(df: pd.DataFrame, *, id_column, location_column,
         if not cands:
             raise ValueError(f"no 'Subcellular location' column in {list(df.columns)}")
         location_column = cands[0]
-    vocab = {str(k).strip().lower(): v for k, v in (compartment_map or {}).items()}
-    if not vocab:
+    # Labels in the sorted order of the map keys; the output columns are the distinct codes
+    # in the order they first occur there (RAVEN's parseScores for the uniprot predictor).
+    terms = [(str(k).strip().lower(), v) for k, v in sorted(
+        (compartment_map or {}).items(), key=lambda kv: str(kv[0]))]
+    if not terms:
         raise ValueError("UniProt parsing needs a non-empty compartment_map (the term vocabulary)")
+    codes = list(dict.fromkeys(code for _label, code in terms))
+    # Whole-word patterns (RAVEN's \<...\>) so that a short label such as 'cytoplasm' does not
+    # match inside a longer term such as 'Cytoplasmic vesicle'.
+    patterns = [
+        (re.compile(r"(?<!\w)(?=\w)" + re.escape(label) + r"(?<=\w)(?!\w)"), code)
+        for label, code in terms
+    ]
 
-    rows: dict[str, dict[str, float]] = {}
+    ids: list[str] = []
+    hit_rows: list[dict[str, float]] = []
     for gid, text in zip(df[id_col].astype(str), df[location_column].astype(str), strict=True):
         gid = gid.strip()
         if not gid:
             continue
-        clean = re.sub(r"\{[^}]*\}", " ", text)              # drop evidence braces
-        clean = re.sub(r"note=.*", " ", clean, flags=re.IGNORECASE | re.DOTALL).lower()
-        hits = {code for label, code in vocab.items() if label in clean}
+        clean = re.sub(r"\{[^}]*\}", " ", text.lower())      # drop evidence braces
+        # One block per isoform; the Note= free text is cut within each block, so a later
+        # isoform's locations survive and Note prose is never read as a location.
+        hits: set[str] = set()
+        for block in re.split(r"\[isoform[^\]]*\]:", clean):
+            seg = re.sub(r"note=.*", " ", block, flags=re.DOTALL)
+            hits.update(code for pattern, code in patterns if pattern.search(seg))
         if hits:
-            rows.setdefault(gid, {}).update({c: 1.0 for c in hits})
-    out = pd.DataFrame.from_dict(rows, orient="index").fillna(0.0)
+            ids.append(gid)
+            hit_rows.append({c: 1.0 for c in hits})
+    out = pd.DataFrame(hit_rows, index=ids, columns=codes).fillna(0.0)
+    if out.index.has_duplicates:
+        warnings.warn("There are duplicate genes in the input file", stacklevel=3)
+        out = out[~out.index.duplicated(keep="first")].sort_index()
     out.index.name = "gene_id"
     return _normalise_rows(LocalizationScores(out))
 
