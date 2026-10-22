@@ -70,7 +70,7 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
                 "p_value": float(1.0 - norm.cdf(corrected)),
                 "n_genes": n,
                 "mean_z": float(zs.mean()),
-                "std_z": float(zs.std(ddof=1)) if n > 1 else float("nan"),
+                "std_z": float(zs.std(ddof=1)) if n > 1 else 0.0,
             }
         )
     table = pd.DataFrame(rows, columns=["metabolite", "name", "z_score", "p_value", "n_genes", "mean_z", "std_z"])
@@ -89,8 +89,10 @@ def reporter_metabolites(
     ``gene_pvalues`` maps gene id → p-value (genes not in the model, or with a NaN or
     out-of-``[0, 1]`` p-value, are dropped — a stray invalid p-value would otherwise
     turn the whole result NaN). If ``gene_fold_changes`` (gene id → log fold change)
-    is given, two extra results are returned for the up- (fc ≥ 0) and down- (fc < 0)
-    regulated gene subsets, in addition to ``"all"``.
+    has at least one non-zero value, two extra results are returned for the up- (fc ≥ 0)
+    and down- (fc < 0) regulated gene subsets, in addition to ``"all"``; with all fold
+    changes zero (or none given) only ``"all"`` is returned, as in RAVEN. A metabolite
+    with a single scored neighbouring gene has ``std_z`` 0.
 
     The background correction uses the population standard deviation
     (``ddof=0``) of the scored Z-scores, which the closed form requires. The
@@ -113,7 +115,7 @@ def reporter_metabolites(
     gene_z = _gene_z(scored)
     results = [_reporter_one(model, gene_z, "all")]
 
-    if gene_fold_changes is not None:
+    if gene_fold_changes is not None and any(v != 0 for v in gene_fold_changes.values()):
         up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) >= 0}
         down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) < 0}
         results.append(_reporter_one(model, up, "up"))

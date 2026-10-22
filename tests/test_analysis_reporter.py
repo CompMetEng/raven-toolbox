@@ -72,6 +72,22 @@ def test_fold_change_splits_up_down(model):
     assert set(down["metabolite"]) <= {"B_c", "C_c"}  # g2 touches B and C
 
 
+def test_all_zero_fold_changes_give_only_the_all_test(model):
+    res = reporter_metabolites(
+        model,
+        {"g1": 0.001, "g2": 0.001, "g3": 0.001},
+        gene_fold_changes={"g1": 0.0, "g2": 0.0, "g3": 0.0},
+    )
+    assert [r.test for r in res] == ["all"]
+
+
+def test_std_z_is_zero_for_a_single_neighbouring_gene(model):
+    (res,) = reporter_metabolites(model, {"g1": 0.001, "g2": 0.01, "g3": 0.5})
+    std = dict(zip(res.table["metabolite"], res.table["std_z"], strict=True))
+    assert std["A_c"] == 0.0
+    assert std["B_c"] > 0.0
+
+
 def test_filters_unknown_and_nan_genes(model):
     # gX not in model, gNaN has NaN p-value -> both ignored; result still computed.
     (res,) = reporter_metabolites(
