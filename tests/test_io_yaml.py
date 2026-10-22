@@ -453,3 +453,46 @@ def test_needs_quote_leaves_longer_words_plain(value):
     from raven_toolbox.io.yaml import _needs_quote
 
     assert not _needs_quote(value)
+
+
+def _edge_model():
+    m = cobra.Model("edge")
+    a = cobra.Metabolite("A_c", name="A", compartment="c")
+    b = cobra.Metabolite("B_c", name="B", compartment="c")
+    r1 = cobra.Reaction("R1", name="named")
+    r2 = cobra.Reaction("R2", name="")
+    m.add_reactions([r1, r2])
+    r1.add_metabolites({a: -1, b: 1})
+    r2.add_metabolites({b: -1})
+    return m
+
+
+def test_unnamed_reaction_has_no_name_key(tmp_path):
+    out = tmp_path / "m.yml"
+    write_yaml_model(_edge_model(), out)
+    text = out.read_text()
+    assert 'name: ""' not in text and "name: ''" not in text
+    assert read_yaml_model(out).reactions.get_by_id("R2").name == ""
+
+
+def test_default_bounds_are_written_only_when_the_model_stores_them(tmp_path):
+    plain = tmp_path / "plain.yml"
+    write_yaml_model(_edge_model(), plain)
+    assert "defaultLB" not in plain.read_text()
+    m = _edge_model()
+    m.notes["metaData"] = {"defaultLB": -1000.0, "defaultUB": 1000.0}
+    stored = tmp_path / "stored.yml"
+    write_yaml_model(m, stored)
+    assert "defaultLB" in stored.read_text()
+
+
+def test_duplicate_metabolite_names_warn(tmp_path):
+    m = cobra.Model("dup")
+    x = cobra.Metabolite("X_c", name="dup", compartment="c")
+    y = cobra.Metabolite("Y_c", name="dup", compartment="c")
+    other = cobra.Metabolite("Z_m", name="dup", compartment="m")
+    r = cobra.Reaction("Q")
+    m.add_reactions([r])
+    r.add_metabolites({x: -1, y: 1, other: 1})
+    with pytest.warns(UserWarning, match=r"1 metabolite\(s\) share a name and compartment.*Y_c and X_c"):
+        write_yaml_model(m, tmp_path / "m.yml")
