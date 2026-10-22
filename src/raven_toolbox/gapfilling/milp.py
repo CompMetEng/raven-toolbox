@@ -2,9 +2,15 @@
 
 Finds the smallest set of template reactions that makes the objective
 (biomass) >= *min_growth*, following the database repair of Kumar et al. 2007
-(BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212). Reactions already in
-the draft keep their bounds: a reaction with the wrong direction is a curation
-issue and is not changed here.
+(BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212). The floor applies to the
+objective as a whole (the sum of coefficient times flux), as in RAVEN. Reactions
+already in the draft keep their bounds: a reaction with the wrong direction is a
+curation issue and is not changed here.
+
+A template reaction that has the id of a draft reaction (or of an earlier template
+reaction) is renamed to ``<id>_<template model id>``, with ``_2``, ``_3``, ... added
+until the id is unique, as RAVEN's ``mergeModels`` does. The renamed reaction is a
+separate candidate and appears under its new id in ``added_reactions``.
 
 The universal template should include any exchange or transport reactions
 that are desired as repair candidates; they are treated identically to other
@@ -59,13 +65,40 @@ def _as_models(templates: cobra.Model | Iterable[cobra.Model]) -> list[cobra.Mod
     return [templates] if isinstance(templates, cobra.Model) else list(templates)
 
 
+def _unique_templates(model: cobra.Model, templates: list[cobra.Model]) -> list[cobra.Model]:
+    """Copies of ``templates`` whose reaction ids are unique against ``model`` and each other.
+
+    A colliding id becomes ``<id>_<template id>``, then ``<id>_<template id>_2``, ... as in
+    RAVEN's ``mergeModels``.
+    """
+    taken = {r.id for r in model.reactions}
+    out: list[cobra.Model] = []
+    for t in templates:
+        copy = t.copy()
+        own = {r.id for r in copy.reactions}
+        for rxn in list(copy.reactions):
+            if rxn.id not in taken:
+                continue
+            new_id = f"{rxn.id}_{t.id}"
+            suffix = 2
+            while new_id in taken or new_id in own:
+                new_id = f"{rxn.id}_{t.id}_{suffix}"
+                suffix += 1
+            own.discard(rxn.id)
+            own.add(new_id)
+            rxn.id = new_id
+        taken |= own
+        out.append(copy)
+    return out
+
+
 def _merge_templates(
     model: cobra.Model, templates: list[cobra.Model]
 ) -> tuple[cobra.Model, list[str]]:
     working = model.copy()
     template_ids: list[str] = []
     for t in templates:
-        new = [r.id for r in t.reactions if r.id not in working.reactions]
+        new = [r.id for r in t.reactions]
         if new:
             added = add_reactions_from_model(working, t, new, genes=False, note=None)
             template_ids += [r.id for r in added]
@@ -83,8 +116,9 @@ def fill_gaps_milp(
     """Gap-fill to make the model objective (biomass) >= min_growth.
 
     Solves a global MILP that selects the fewest template reactions that make
-    the model's objective reaction feasible at *min_growth*. The draft
-    reactions keep their bounds.
+    the model's objective (sum of coefficient times flux) reach *min_growth*. The
+    draft reactions keep their bounds. A template reaction with a positive lower
+    bound is only forced to carry that flux when it is selected.
 
     Parameters
     ----------
@@ -97,8 +131,8 @@ def fill_gaps_milp(
         Minimum required objective value. If ``None``, runs FBA on the
         merged model and uses 10% of the maximum as the floor.
     big_m:
-        Big-M constant for coupling constraints. Must exceed any expected
-        flux magnitude in the model.
+        Big-M constant for the coupling constraints of template reactions with
+        an infinite bound. A finite bound is used as it is.
     verbose:
         Print progress messages.
 
@@ -106,7 +140,7 @@ def fill_gaps_milp(
     -------
     MILPGapFillResult
     """
-    templates = _as_models(templates)
+    templates = _unique_templates(model, _as_models(templates))
 
     # ---- Merge draft + templates ----
     working, template_ids = _merge_templates(model, templates)
@@ -151,13 +185,6 @@ def fill_gaps_milp(
 
     # Database reaction candidates
     db_indicators: dict[str, Any] = {}
-    finite_bounds = [
-        abs(b)
-        for r in working.reactions
-        for b in (r.lower_bound, r.upper_bound)
-        if math.isfinite(b)
-    ]
-    effective_big_m = max(finite_bounds) if finite_bounds else big_m
 
     for rid in template_ids:
         rxn = working.reactions.get_by_id(rid)
@@ -166,8 +193,8 @@ def fill_gaps_milp(
         db_indicators[rid] = y
         obj_terms.append(y)
 
-        ub = rxn.upper_bound if math.isfinite(rxn.upper_bound) else effective_big_m
-        lb = rxn.lower_bound if math.isfinite(rxn.lower_bound) else -effective_big_m
+        ub = rxn.upper_bound if math.isfinite(rxn.upper_bound) else big_m
+        lb = rxn.lower_bound if math.isfinite(rxn.lower_bound) else -big_m
 
         # v_k <= ub * y (zero when y=0)
         extra_cons.append(
@@ -175,23 +202,27 @@ def fill_gaps_milp(
                 rxn.flux_expression - ub * y, ub=0, name=f"_gf_dbub_{rid}"
             )
         )
-        # v_k >= lb * y (zero when y=0, because lb*0 = 0 >= 0 forces v >= 0 together with c_ub)
+        # v_k >= lb * y: zero when y=0, at least lb when selected
         extra_cons.append(
             prob.Constraint(
                 rxn.flux_expression - lb * y, lb=0, name=f"_gf_dblb_{rid}"
             )
         )
+        # A positive lower bound only applies when the reaction is selected.
+        if rxn.lower_bound > 0:
+            rxn.lower_bound = 0
+        if rxn.upper_bound < 0:
+            rxn.upper_bound = 0
 
     working.add_cons_vars(indicators + extra_cons)
 
-    # Growth floor: set minimum lb on objective reactions
-    for rxn, coeff in obj_coeffs.items():
-        if rxn.id in working.reactions:
-            obj_rxn = working.reactions.get_by_id(rxn.id)
-            if coeff > 0:
-                obj_rxn.lower_bound = max(obj_rxn.lower_bound, min_growth)
-            elif coeff < 0:
-                obj_rxn.upper_bound = min(obj_rxn.upper_bound, -min_growth)
+    # Growth floor on the objective as a whole: sum(coeff * flux) >= min_growth
+    floor = prob.Constraint(
+        sum(coeff * working.reactions.get_by_id(rxn.id).flux_expression for rxn, coeff in obj_coeffs.items()),
+        lb=min_growth,
+        name="_gf_growth_floor",
+    )
+    working.add_cons_vars([floor])
 
     # MILP objective: minimise the number of added template reactions
     if obj_terms:
@@ -266,22 +297,14 @@ def fill_gaps_milp(
 def _meets_floor(model: cobra.Model, obj_coeffs: dict, min_growth: float) -> bool:
     """Whether ``model`` is feasible with the MILP's growth floor applied.
 
-    The floor is the same bound the MILP puts on each objective reaction,
-    relaxed by a relative 1e-6 for the LP feasibility tolerance.
+    The floor is the same constraint the MILP puts on the objective, relaxed by a
+    relative 1e-6 for the LP feasibility tolerance.
     """
     floor = min_growth * (1 - 1e-6)
+    if any(rxn.id not in model.reactions for rxn in obj_coeffs):
+        return False
     with model:
-        for rxn, coeff in obj_coeffs.items():
-            if rxn.id not in model.reactions:
-                return False
-            target = model.reactions.get_by_id(rxn.id)
-            if coeff > 0:
-                if target.upper_bound < floor:
-                    return False
-                target.lower_bound = max(target.lower_bound, floor)
-            elif coeff < 0:
-                if target.lower_bound > -floor:
-                    return False
-                target.upper_bound = min(target.upper_bound, -floor)
-        model.slim_optimize(error_value=math.nan)
-        return model.solver.status == "optimal"
+        expression = sum(coeff * model.reactions.get_by_id(rxn.id).flux_expression for rxn, coeff in obj_coeffs.items())
+        model.objective = model.problem.Objective(expression, direction="max")
+        value = model.slim_optimize(error_value=math.nan)
+        return model.solver.status == "optimal" and value >= floor
