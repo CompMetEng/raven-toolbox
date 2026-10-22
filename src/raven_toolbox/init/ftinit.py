@@ -960,6 +960,7 @@ def ftinit(
     # Keep the surviving originals plus all exchange reactions (always re-added).
     final_kept = (set(prep.orig_rxn_ids) - to_remove) | prep.masks.exchange
 
+    # ref_model carries the template's bounds and directions, so the output does too.
     out = prep.ref_model.copy()
     out.remove_reactions([r.id for r in out.reactions if r.id not in final_kept],
                          remove_orphans=True)

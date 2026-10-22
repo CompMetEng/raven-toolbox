@@ -288,3 +288,39 @@ def test_metabolomics_unknown_name_warns():
     with pytest.warns(UserWarning, match="matched no metabolite"):
         ftinit(prep, rxn_scores=_scores(model), fill_gaps=False,
               metabolomics=["not_a_real_metabolite"])
+
+
+def test_prep_keeps_the_template_bounds_and_directions_on_ref_model():
+    """Tightening reversibility and orienting essentials only affect the merged model; the
+    reference model, from which ftinit extracts the output, keeps the template's bounds,
+    stoichiometry and objective coefficients."""
+    import cobra
+
+    from raven_toolbox.tasks import Task
+
+    m = cobra.Model("keep")
+    a, b, c = (cobra.Metabolite(x, name=x, compartment="s") for x in "abc")
+    m.add_metabolites([a, b, c])
+    ex_a = cobra.Reaction("EX_a", lower_bound=-1000, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    ex_c = cobra.Reaction("EX_c", lower_bound=0, upper_bound=1000)
+    ex_c.add_metabolites({c: -1})
+    r1 = cobra.Reaction("R1", lower_bound=-1000, upper_bound=1000)
+    r1.add_metabolites({a: -1, b: 1})
+    r1.gene_reaction_rule = "g1"
+    r2 = cobra.Reaction("R2", lower_bound=-1000, upper_bound=1000)
+    r2.add_metabolites({b: -1, c: 1})
+    r2.gene_reaction_rule = "g2"
+    m.add_reactions([ex_a, ex_c, r1, r2])
+    task = Task(id="mk_c", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("c[s]", 1.0, 1000.0)])
+
+    def state(model):
+        return {
+            r.id: (r.bounds, {mt.id: co for mt, co in r.metabolites.items()}, r.objective_coefficient)
+            for r in model.reactions
+        }
+
+    template = state(m)
+    prep = prep_init_model(m, [task], ext_comp="s")
+    assert state(prep.ref_model) == template
+    assert state(m) == template  # the template itself is not modified

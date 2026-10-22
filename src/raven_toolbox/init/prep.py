@@ -127,7 +127,9 @@ class PrepData:
 
     Built once per template, reused across samples. ``min_model`` is the merged model
     the MILP runs on; ``orig_rxn_ids``/``group_ids`` map its reactions back to the
-    ``ref_model`` (the simplified, pre-merge reference). ``essential_rxns`` are in
+    ``ref_model`` (the reference after the first simplification; the orientation of the
+    essential reactions and the tightening of reversibility are undone on it after the merge,
+    so its bounds and stoichiometry are the template's). ``essential_rxns`` are in
     **merged** ids and pre-oriented irreversibly (so the MILP forces flux *forward*).
     ``masks`` is on ``ref_model`` (= original) ids.
     """
@@ -172,6 +174,18 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
             rxn.upper_bound = 1000.0
         if rxn.lower_bound < 0:
             rxn.lower_bound = -1000.0
+
+
+def _restore_reactions(model: cobra.Model, saved: dict) -> None:
+    """Put back the bounds, stoichiometry and objective coefficient saved per reaction id."""
+    for rid, (lb, ub, stoich, objective) in saved.items():
+        rxn = model.reactions.get_by_id(rid)
+        if dict(rxn.metabolites) != stoich:
+            rxn.add_metabolites(stoich, combine=False)
+        if (rxn.lower_bound, rxn.upper_bound) != (lb, ub):
+            rxn.bounds = (lb, ub)
+        if rxn.objective_coefficient != objective:
+            rxn.objective_coefficient = objective
 
 
 def _orient_forward(rxn: cobra.Reaction, direction: int) -> None:
@@ -272,6 +286,15 @@ def prep_init_model(
         task_mets = ess.task_metabolites
         kept_tasks = [t for t in tasks if t.id not in ess.failed_tasks]
 
+    # Orienting essentials and tightening reversibility change the bounds, the stoichiometry
+    # direction and the objective coefficient of these reactions only. They are restored on
+    # ref_model after the merge, so that the extracted model keeps the bounds of the template.
+    changeable = [r for r in ref_model.reactions if r.id in essential_pre or r.lower_bound < 0]
+    saved = {
+        r.id: (r.lower_bound, r.upper_bound, dict(r.metabolites), r.objective_coefficient)
+        for r in changeable
+    }
+
     # Orient essentials irreversibly (forced direction → forward) before merging, so
     # the merge keeps them forward and the MILP forces them with a simple lower bound.
     for rid, direction in essential_pre.items():
@@ -293,6 +316,7 @@ def prep_init_model(
                                spontaneous=spontaneous, custom=custom)
 
     min_model, orig_ids, group_ids, reversed_rxns = merge_linear(ref_model)
+    _restore_reactions(ref_model, saved)
     if scale:  # compress stoichiometric dynamic range so the MILP big-M fits all reactions
         if verbose:
             print("[prep] rescaling merged model", flush=True)
