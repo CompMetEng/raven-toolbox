@@ -433,7 +433,9 @@ def group_linear_reactions(
         # turn neighbours into single-producer/consumer chains in turn.
         touched = {m for m in r1.metabolites} | {m for m in r2.metabolites}
         # Merge r2*ratio into r1; the shared metabolite cancels and is dropped.
-        r1.add_metabolites({m: c * ratio for m, c in r2.metabolites.items()})
+        merged = {m: c * ratio for m, c in r2.metabolites.items()}
+        merged[met] = -c1  # cancels exactly, without floating-point residue
+        r1.add_metabolites(merged)
         model.remove_reactions([r2])
         r1.bounds = (new_lb, new_ub)
         r1.objective_coefficient = new_obj

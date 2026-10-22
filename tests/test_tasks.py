@@ -68,6 +68,21 @@ def test_parse_id_in_first_column_raises(tmp_path):
         parse_task_list(p)
 
 
+def test_parse_keeps_rows_with_text_in_a_column_before_id(tmp_path):
+    """Only the first column holds comment markers; a DESCRIPTION column before ID
+    does not drop the row."""
+    p = tmp_path / "desc_first.txt"
+    p.write_text("\tDESCRIPTION\tID\tIN\tOUT\n\tdesc\tT1\tA[c]\tB[c]\n")
+    (task,) = parse_task_list(p)
+    assert task.id == "T1" and task.description == "desc"
+
+
+def test_parse_skips_rows_with_a_comment_marker_in_the_first_column(tmp_path):
+    p = tmp_path / "marker.txt"
+    p.write_text("\tID\tIN\tOUT\n#\tSECTION\t\t\n\tT1\tA[c]\tB[c]\n")
+    assert [t.id for t in parse_task_list(p)] == ["T1"]
+
+
 def test_parse_warns_on_data_row_before_first_id(tmp_path):
     """Continuation rows appearing before the first task ID are malformed input;
     parse_task_list warns instead of silently dropping them."""

@@ -352,3 +352,15 @@ def test_scale_biomass_balance_check_includes_the_proton_rebalance():
     with pytest.raises(ValueError, match="DNA"):
         scale_biomass(m, cfg, "protein", 0.8, balance_out="DNA")
     assert {r.id: dict(r.metabolites) for r in m.reactions} == before
+
+
+def test_scale_biomass_balance_out_with_unset_charge_changes_nothing():
+    """The balancing rescale is tried on the scratch copy too, so the first
+    component is not rescaled when the balancing one raises."""
+    m, cfg = _proton_mass_model()
+    m.metabolites.get_by_id("a_c").charge = 0
+    m.metabolites.get_by_id("d_c").charge = None
+    before = {r.id: dict(r.metabolites) for r in m.reactions}
+    with pytest.raises(ValueError, match="d_c"):
+        scale_biomass(m, cfg, "protein", 0.2, balance_out="DNA")
+    assert {r.id: dict(r.metabolites) for r in m.reactions} == before

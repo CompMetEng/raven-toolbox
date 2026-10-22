@@ -103,3 +103,21 @@ def test_out_of_range_pvalue_dropped_not_poisoning(model):
     import numpy as np
 
     assert not np.isnan(res.table["z_score"].to_numpy()).any()  # no NaN poisoning
+
+
+def test_fold_changes_of_genes_outside_the_model_do_not_count(model):
+    res = reporter_metabolites(
+        model,
+        {"g1": 0.001, "g2": 0.01},
+        gene_fold_changes={"g1": 0.0, "g2": 0.0, "gX": 1.5},
+    )
+    assert [r.test for r in res] == ["all"]
+
+
+def test_nan_fold_changes_do_not_count(model):
+    res = reporter_metabolites(
+        model,
+        {"g1": 0.001, "g2": 0.01},
+        gene_fold_changes={"g1": 0.0, "g2": float("nan")},
+    )
+    assert [r.test for r in res] == ["all"]

@@ -232,10 +232,33 @@ def _chain_model():
 
 
 def test_group_linear_keeps_the_first_reaction_of_a_chain():
-    m = _chain_model()
+    n = 6
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(f"M{i}", compartment="c") for i in range(n + 1)])
+    eqs = [{"id": "IN", "equation": " --> M0"}]
+    eqs += [{"id": f"R{i}", "equation": f"M{i - 1} --> M{i}"} for i in range(1, n + 1)]
+    eqs += [{"id": "OUT", "equation": f"M{n} --> "}]
+    add_reactions_from_equations(m, eqs)
     group_linear_reactions(m, reserved=["IN", "OUT"])
     assert [r.id for r in m.reactions] == ["IN", "R1", "OUT"]
-    assert {mm.id for mm in m.reactions.get_by_id("R1").metabolites} == {"M0", "M3"}
+    assert {mm.id for mm in m.reactions.get_by_id("R1").metabolites} == {"M0", f"M{n}"}
+
+
+def test_group_linear_leaves_no_residue_for_non_representable_ratios():
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("A", "B", "C")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "IN", "equation": " --> A"},
+            {"id": "R1", "equation": "A --> 0.7 B"},
+            {"id": "R2", "equation": "0.3 B --> C"},
+            {"id": "OUT", "equation": "C --> "},
+        ],
+    )
+    group_linear_reactions(m, reserved=["IN", "OUT"])
+    assert {mm.id for mm in m.reactions.get_by_id("R1").metabolites} == {"A", "C"}
+    assert "B" not in m.metabolites
 
 
 def test_constrain_reversible_runs_before_group_linear():

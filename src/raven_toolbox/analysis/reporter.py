@@ -115,7 +115,11 @@ def reporter_metabolites(
     gene_z = _gene_z(scored)
     results = [_reporter_one(model, gene_z, "all")]
 
-    if gene_fold_changes is not None and any(v != 0 for v in gene_fold_changes.values()):
+    # RAVEN's any(geneFoldChanges) runs after genes outside the model or without a
+    # p-value are dropped, and ignores NaN.
+    if gene_fold_changes is not None and any(
+        v != 0 and not math.isnan(v) for g, v in gene_fold_changes.items() if g in scored
+    ):
         up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) >= 0}
         down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) < 0}
         results.append(_reporter_one(model, up, "up"))

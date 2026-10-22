@@ -309,13 +309,15 @@ def test_new_genes_are_added_in_sorted_order_whatever_the_hash_seed():
         "m = cobra.Model('t')\n"
         "add_reactions_from_equations(m, [{'id': 'PX', 'equation': 'a[c] --> b[c]', "
         "'gene_reaction_rule': 'YPROBE2 and YPROBE1 and YPROBE10'}], mets_by='name', compartment='c')\n"
-        "print(','.join(g.id for g in m.genes))\n"
+        "print('GENES:' + ','.join(g.id for g in m.genes))\n"
     )
-    orders = {
-        subprocess.run(
+    def genes_line(seed):
+        out = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, check=True,
             env={**os.environ, "PYTHONHASHSEED": seed},
-        ).stdout.strip().splitlines()[-1]
-        for seed in ("0", "3")
-    }
+        ).stdout
+        (line,) = [x for x in out.splitlines() if x.startswith("GENES:")]
+        return line.removeprefix("GENES:")
+
+    orders = {genes_line(seed) for seed in ("0", "3")}
     assert orders == {"YPROBE1,YPROBE10,YPROBE2"}

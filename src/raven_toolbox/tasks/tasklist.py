@@ -7,7 +7,7 @@ are checked with :func:`raven_toolbox.tasks.check_tasks`.
 The file is tab-delimited (``.txt``/``.tsv``) or Excel (``.xlsx``, sheet ``TASKS``;
 needs the ``[excel]`` extra). Recognised columns (the only required one is ``ID``, which
 must not be the first column; the first column is reserved for comment markers, and a row with
-text in a column before ``ID`` is skipped, as in RAVEN's ``parseTaskList``):
+text in the first column is skipped, as in RAVEN's ``parseTaskList``):
 
     ID · DESCRIPTION · IN · IN LB · IN UB · OUT · OUT LB · OUT UB ·
     EQU · EQU LB · EQU UB · CHANGED RXN · CHANGED LB · CHANGED UB ·
@@ -117,18 +117,16 @@ def parse_task_list(path: str | Path) -> list[Task]:
     # (vs. pure whitespace/comment), used by the orphan-row warning below.
     _DATA_COLS = ("IN", "OUT", "EQU", "CHANGED RXN")
 
-    id_col = col["ID"]
     tasks: list[Task] = []
     current: Task | None = None
     for row_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
         if not any(c.strip() for c in row):
             continue
         # RAVEN parseTaskList: "all rows starting with a non-empty [first] cell are
-        # removed" — comment / section-header rows carry a marker (e.g. "#") in a leading
-        # column before the ID, with the ID column holding descriptive text. Skip any row
-        # with a non-empty cell *before* the ID column, or it becomes a spurious empty task
-        # (69 vs RAVEN's 57 on metabolicTasks_Essential).
-        if any(j < len(row) and row[j].strip() for j in range(id_col)):
+        # removed". Comment / section-header rows carry a marker (e.g. "#") in the first
+        # column, with the ID column holding descriptive text; without this they become
+        # spurious empty tasks (69 vs RAVEN's 57 on metabolicTasks_Essential).
+        if row and row[0].strip():
             continue
         rid = cell(row, "ID")
         if rid.startswith("#"):

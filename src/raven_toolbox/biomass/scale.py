@@ -117,12 +117,16 @@ def scale_biomass(
     an in-place ``model`` mutation, not on a stale snapshot.
 
     With ``balance_out``, that component is rescaled so the components sum
-    to exactly ``target_total`` g/gDW (default 1), whatever the total was
-    before. It must be large enough to absorb the difference: a
+    to ``target_total`` g/gDW (default 1), whatever the total was before.
+    The sum equals ``target_total`` when the rescaled pseudoreaction needs
+    no change of its H+ coefficient; otherwise the H+ rebalance adds to its
+    fraction and the total exceeds ``target_total`` by that amount. The
+    balancing component must be large enough to absorb the difference: a
     ``ValueError`` is raised, before the model is changed, when its
     fraction is 0 or would become 0 or negative. ``target_total`` has no
-    effect without ``balance_out``. The check rescales a scratch copy of the
-    pseudoreactions first, because the H+ rebalance adds to the fractions and they
+    effect without ``balance_out``. Both rescalings are tried on a scratch copy
+    of the pseudoreactions first, so an error leaves the model unchanged. The
+    scratch copy is needed because the H+ rebalance adds to the fractions, which
     are therefore not linear in the scaling factor.
     """
     fractions = sum_biomass(model, config)
@@ -150,6 +154,7 @@ def scale_biomass(
                 f"{balance_out!r}: it would have to go from {balance_current:.4g} "
                 f"to {balance_new:.4g} g/gDW to bring the total to {target_total:g}."
             )
+        rescale_pseudoreaction(scratch, config, balance_out, balance_new / balance_current)
     factor = new_value / current
     rescale_pseudoreaction(model, config, component_name, factor)
 

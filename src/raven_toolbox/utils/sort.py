@@ -1,5 +1,5 @@
-"""Sort a model's identifiers alphabetically — useful for deterministic,
-diff-friendly output — and standardise reaction directions and ordering.
+"""Sort a model's identifiers alphabetically (useful for deterministic,
+diff-friendly output) and standardise reaction directions and ordering.
 
 cobra's ``DictList.sort`` reorders one list (and rebuilds its lookup index), but
 there is no single "sort the whole model" call; this provides it.
