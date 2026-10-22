@@ -326,3 +326,82 @@ def test_empty_call_no_op():
     result = batch_curate(m)
     assert not result
     assert result.added_metabolites == []
+
+
+# --- RAVEN parity -----------------------------------------------------
+
+def _two_hexokinases() -> tuple[pd.DataFrame, pd.DataFrame]:
+    rxns_df = pd.DataFrame([
+        {"rxnIdx": 1, "rxnNames": "hexokinase", "grRules": "G1"},
+        {"rxnIdx": 2, "rxnNames": "hexokinase", "grRules": "G2"},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": 1, "rxnNames": "hexokinase", "metNames": "ATP", "comps": "c", "coefficient": -1.0},
+        {"rxnIdx": 1, "rxnNames": "hexokinase", "metNames": "ADP", "comps": "c", "coefficient": 3.0},
+        {"rxnIdx": 2, "rxnNames": "hexokinase", "metNames": "ATP", "comps": "c", "coefficient": -2.0},
+        {"rxnIdx": 2, "rxnNames": "hexokinase", "metNames": "ADP", "comps": "c", "coefficient": 2.0},
+    ])
+    return rxns_df, coeffs_df
+
+
+def test_reactions_sharing_a_name_are_told_apart_by_rxn_idx():
+    m = _base_model()
+    rxns_df, coeffs_df = _two_hexokinases()
+    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert result.added_reactions == ["r_0002", "r_0003"]
+    first, second = (m.reactions.get_by_id(i) for i in result.added_reactions)
+    assert {met.name: c for met, c in first.metabolites.items()} == {"ATP": -1.0, "ADP": 3.0}
+    assert {met.name: c for met, c in second.metabolites.items()} == {"ATP": -2.0, "ADP": 2.0}
+    assert first.gene_reaction_rule == "G1"
+    assert second.gene_reaction_rule == "G2"
+
+
+def test_index_header_is_read_as_rxn_idx():
+    m = _base_model()
+    rxns_df, coeffs_df = _two_hexokinases()
+    result = batch_curate(
+        m,
+        rxns_df=rxns_df.rename(columns={"rxnIdx": "index"}),
+        rxns_coeffs_df=coeffs_df.rename(columns={"rxnIdx": "Index"}),
+        rxn_id_prefix="r_",
+    )
+    assert len(result.added_reactions) == 2
+
+
+def test_new_reaction_without_bounds_is_unbounded():
+    m = _base_model()
+    rxns_df, coeffs_df = _two_hexokinases()
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    rxn = m.reactions.get_by_id("r_0002")
+    assert rxn.lower_bound == float("-inf")
+    assert rxn.upper_bound == float("inf")
+
+
+def test_raven_header_spellings_are_read():
+    m = _base_model()
+    mets_df = pd.DataFrame([
+        {"metName": "NADH", "comp": "c", "metFormulas": "C21H27N7O14P2", "metCharges": -2},
+    ])
+    genes_df = pd.DataFrame([{"Gene": "G9", "geneShortName": "NINE"}])
+    batch_curate(m, mets_df=mets_df, genes_df=genes_df, met_id_prefix="s_")
+    nadh = m.metabolites.get_by_id("s_0004")
+    assert nadh.formula == "C21H27N7O14P2"
+    assert nadh.charge == -2
+    assert m.genes.get_by_id("G9").name == "NINE"
+
+
+def test_new_ids_use_four_digits_when_no_id_has_the_prefix():
+    m = cobra.Model("empty")
+    mets_df = pd.DataFrame([{"metNames": "A", "comps": "c"}])
+    result = batch_curate(m, mets_df=mets_df)
+    assert result.added_metabolites == ["M_0001"]
+
+
+def test_new_ids_follow_the_numerically_largest_id():
+    m = cobra.Model("unpadded")
+    m.add_reactions([cobra.Reaction("R_9"), cobra.Reaction("R_10")])
+    m.add_metabolites([cobra.Metabolite("M_1", name="A", compartment="c")])
+    rxns_df = pd.DataFrame([{"rxnNames": "x"}])
+    coeffs_df = pd.DataFrame([{"rxnNames": "x", "metNames": "A", "comps": "c", "coefficient": -1.0}])
+    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert result.added_reactions == ["R_11"]

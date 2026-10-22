@@ -1,6 +1,7 @@
 """Generic batch-curation engine driven by tabular data."""
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,11 +24,38 @@ DEFAULT_CORE_RXN_COLUMNS: tuple[str, ...] = (
     "subSystems", "eccodes", "rxnNotes", "rxnReferences", "rxnConfidenceScores",
 )
 #: Required columns in ``rxns_coeffs_df``. (Linkage column ``rxnNames``
-#: + one row per ``(reaction, metabolite)`` pair.) A leading ``index``
-#: column from the legacy yeast-GEM schema is silently ignored.
+#: + one row per ``(reaction, metabolite)`` pair.) An optional ``rxnIdx`` column
+#: (also read as ``index``) numbers the reactions; when both tables have it, a
+#: coefficient row belongs to the reaction with the same index and name.
 DEFAULT_CORE_RXN_COEFFS_COLUMNS: tuple[str, ...] = (
     "rxnNames", "metNames", "comps", "coefficient",
 )
+
+#: Header spellings read for each column, matched case-insensitively and mapped
+#: to the canonical name (the same spellings ``curateModelFromTables`` accepts).
+_MET_ALIASES = {
+    "metNames": ("metNames", "metName"),
+    "comps": ("comps", "comp"),
+    "formula": ("formula", "formulas", "metFormula", "metFormulas"),
+    "charge": ("charge", "charges", "metCharge", "metCharges"),
+    "inchi": ("inchi", "inchis"),
+    "metNotes": ("metNotes", "metNote"),
+}
+_GENE_ALIASES = {
+    "genes": ("genes", "gene"),
+    "geneShortNames": ("geneShortNames", "geneShortName"),
+}
+_RXN_ALIASES = {
+    "rxnIdx": ("rxnIdx", "index"),
+    "rxnNames": ("rxnNames", "rxnName"),
+}
+_COEFF_ALIASES = {
+    "rxnIdx": ("rxnIdx", "index"),
+    "rxnNames": ("rxnNames", "rxnName"),
+    "metNames": ("metNames", "metName"),
+    "comps": ("comps", "comp"),
+    "coefficient": ("coefficient", "coefficients", "coeffs", "stoichCoeffs"),
+}
 
 
 @dataclass
@@ -90,6 +118,15 @@ def batch_curate(
     A :class:`CurationResult` summarising the changes.
     """
     result = CurationResult()
+
+    if mets_df is not None:
+        mets_df = _canonical_columns(mets_df, _MET_ALIASES)
+    if genes_df is not None:
+        genes_df = _canonical_columns(genes_df, _GENE_ALIASES)
+    if rxns_df is not None:
+        rxns_df = _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True)
+    if rxns_coeffs_df is not None:
+        rxns_coeffs_df = _canonical_columns(rxns_coeffs_df, _COEFF_ALIASES)
 
     if mets_df is not None:
         _apply_mets(model, mets_df, met_id_prefix, result)
@@ -173,6 +210,26 @@ def _apply_mets(
             f"{'...' if len(result.updated_metabolites) > 5 else ''}",
             stacklevel=4,
         )
+
+
+def _canonical_columns(df: pd.DataFrame, aliases: dict[str, tuple[str, ...]], lower_rest: bool = False) -> pd.DataFrame:
+    """Rename the columns of ``df`` that match an alias (case-insensitive) to the canonical name.
+
+    The first column matching a canonical name wins and the others stay as they are.
+    With ``lower_rest`` a column that matches a core reaction column in another case
+    is renamed to that spelling.
+    """
+    lookup = {a.lower(): canonical for canonical, names in aliases.items() for a in names}
+    if lower_rest:
+        lookup.update({c.lower(): c for c in DEFAULT_CORE_RXN_COLUMNS})
+    rename: dict[str, str] = {}
+    taken: set[str] = set()
+    for col in df.columns:
+        canonical = lookup.get(str(col).strip().lower())
+        if canonical is not None and canonical not in taken:
+            rename[col] = canonical
+            taken.add(canonical)
+    return df.rename(columns=rename)
 
 
 def _name_compartment_index(model: cobra.Model) -> dict[tuple[str, str], cobra.Metabolite]:
@@ -266,9 +323,10 @@ def _apply_reactions(
     id_prefix: str,
     result: CurationResult,
 ) -> None:
-    miriam_cols = [c for c in rxns_df.columns if c not in DEFAULT_CORE_RXN_COLUMNS]
+    miriam_cols = [c for c in rxns_df.columns if c not in DEFAULT_CORE_RXN_COLUMNS and c != "rxnIdx"]
     _validate_rxns_coeffs(coeffs_df)
-    coeffs_by_name = _group_coeffs_by_rxn_name(model, coeffs_df)
+    by_index = "rxnIdx" in rxns_df.columns and "rxnIdx" in coeffs_df.columns
+    coeffs_by_key = _group_coeffs(model, coeffs_df, by_index)
 
     # Build {stoichiometry_signature: existing_reaction} for the lookup
     # of "is this reaction already in the model?".
@@ -279,12 +337,13 @@ def _apply_reactions(
     new_rows: list[tuple[pd.Series, dict[cobra.Metabolite, float]]] = []
     for _, row in rxns_df.iterrows():
         rxn_name = row["rxnNames"]
-        if rxn_name not in coeffs_by_name:
+        key = _reaction_key(row, by_index)
+        if key not in coeffs_by_key:
             raise ValueError(
                 f"Reaction {rxn_name!r} in rxns_df has no matching "
                 "row(s) in rxns_coeffs_df."
             )
-        stoich = coeffs_by_name[rxn_name]
+        stoich = coeffs_by_key[key]
         sig = _stoich_signature_from_dict(stoich)
         existing = by_signature.get(sig)
         if existing is not None:
@@ -316,11 +375,22 @@ def _validate_rxns_coeffs(df: pd.DataFrame) -> None:
         )
 
 
-def _group_coeffs_by_rxn_name(
+def _reaction_key(row: pd.Series, by_index: bool):
+    """Key linking a reaction row to its coefficient rows: ``(rxnIdx, name)`` or the name."""
+    if by_index:
+        return (str(row["rxnIdx"]).strip(), str(row["rxnNames"]))
+    return str(row["rxnNames"])
+
+
+def _group_coeffs(
     model: cobra.Model,
     coeffs_df: pd.DataFrame,
-) -> dict[str, dict[cobra.Metabolite, float]]:
-    """Group coefficient rows by rxn name and resolve the metabolites.
+    by_index: bool,
+) -> dict:
+    """Group coefficient rows by reaction and resolve the metabolites.
+
+    The key is ``(rxnIdx, name)`` when ``by_index`` and the reaction name otherwise,
+    so reactions that share a name stay apart when the tables number them.
 
     Each value is a ``{metabolite_object: coefficient}`` dict ready for
     ``cobra.Reaction.add_metabolites``. Metabolites are looked up by
@@ -329,7 +399,7 @@ def _group_coeffs_by_rxn_name(
     via ``mets_df`` first).
     """
     name_index = _name_compartment_index(model)
-    grouped: dict[str, dict[cobra.Metabolite, float]] = {}
+    grouped: dict = {}
     for _, row in coeffs_df.iterrows():
         rxn_name = str(row["rxnNames"])
         met_name = str(row["metNames"])
@@ -343,7 +413,7 @@ def _group_coeffs_by_rxn_name(
                 "Add it via mets_df first, or include it in the same "
                 "batch_curate call."
             )
-        grouped.setdefault(rxn_name, {})[met] = coef
+        grouped.setdefault(_reaction_key(row, by_index), {})[met] = coef
     return grouped
 
 
@@ -384,8 +454,8 @@ def _build_new_reactions(
         rxn = cobra.Reaction(
             id=new_id,
             name=str(row["rxnNames"]),
-            lower_bound=float(row["lb"]) if _has_value(row.get("lb")) else -1000.0,
-            upper_bound=float(row["ub"]) if _has_value(row.get("ub")) else 1000.0,
+            lower_bound=float(row["lb"]) if _has_value(row.get("lb")) else -math.inf,
+            upper_bound=float(row["ub"]) if _has_value(row.get("ub")) else math.inf,
         )
         rxn.add_metabolites(stoich)
         if _has_value(row.get("grRules")):
@@ -453,18 +523,19 @@ def _coerce_int(v) -> int:
 
 def _generate_ids(existing, prefix: str, count: int) -> list[str]:
     """Generate ``count`` fresh ids by incrementing from the largest
-    existing zero-padded suffix matching ``prefix``.
+    existing numeric suffix matching ``prefix``.
 
     e.g. with prefix ``s_`` and existing ``s_4100``, the next ids are
-    ``s_4101``, ``s_4102``, … Width is preserved.
+    ``s_4101``, ``s_4102``, … The suffix has the width of the largest existing
+    one, or 4 digits when no id has the prefix.
     """
     max_n = 0
-    width = 1
+    width = 4
     for entity in existing:
         if not entity.id.startswith(prefix):
             continue
         suffix = entity.id[len(prefix):]
-        if suffix.isdigit():
-            max_n = max(max_n, int(suffix))
-            width = max(width, len(suffix))
+        if suffix.isdigit() and int(suffix) >= max_n:
+            max_n = int(suffix)
+            width = len(suffix)
     return [f"{prefix}{(max_n + i):0{width}d}" for i in range(1, count + 1)]
