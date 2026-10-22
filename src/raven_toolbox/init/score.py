@@ -4,8 +4,8 @@ Maps per-gene scores (e.g. expression-derived: present → positive, absent → 
 to per-reaction scores by walking each reaction's GPR: genes joined by **OR**
 (isozymes) are combined with ``isozyme_scoring`` (default ``max``); genes joined by
 **AND** (complexes) with ``complex_scoring`` (default ``min``). Genes missing from
-``gene_scores``, or scored NaN, are *omitted*; a reaction with no genes — or whose genes are all
-missing or NaN — gets ``no_gene_score`` (default −2). These reaction scores feed
+``gene_scores``, or scored NaN, are *omitted*; a reaction with no genes or whose genes are all
+missing or NaN gets ``no_gene_score`` (default −2). These reaction scores feed
 :func:`raven_toolbox.init.ftinit`.
 
 Upstream — the omics-data → gene-score step (thresholding, expression levels) — lives

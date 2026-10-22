@@ -186,7 +186,7 @@ def connect_blocked_reactions(
     Finds reactions that cannot carry a flux larger than ``threshold`` in ``model`` under its current bounds,
     then adds the minimum-penalty set of template reactions that lets the (irreversible)
     ones carry flux, and returns the filled model. Like RAVEN, only irreversible blocked
-    reactions are forced — reversible ones can carry flux trivially in the split
+    reactions are forced; reversible ones can carry flux trivially in the split
     formulation, so forcing them is uninformative.
 
     For the *other* gap-filling flavour — adding reactions to make the model's

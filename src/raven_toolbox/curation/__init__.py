@@ -26,7 +26,7 @@ Schema (mirrors yeast-GEM's ``data/modelCuration/template/`` layout):
   is ``genes``.
 - **rxns_df**: ``rxnNames, grRules, lb, ub, rev, subSystems, eccodes,
   rxnNotes, rxnReferences, rxnConfidenceScores`` + MIRIAM columns, and an
-  optional ``rxnIdx``. Match key is the reaction's *stoichiometry* — same
+  optional ``rxnIdx``. Match key is the reaction's *stoichiometry*; the same
   metabolites and coefficients ⇒ same reaction. A new reaction without ``lb``
   or ``ub`` is unbounded in that direction, as in RAVEN.
 - **rxns_coeffs_df**: ``rxnNames, metNames, comps, coefficient``. One
