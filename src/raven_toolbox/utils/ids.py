@@ -28,7 +28,8 @@ def generate_new_ids(
     """Generate ``quantity`` new ids, sequentially numbered after the model's own.
 
     Existing ids are filtered to those starting with ``prefix`` and the prefix is
-    stripped. When any remainder reads as a number (as MATLAB ``str2double``), the
+    stripped. When any remainder reads as a finite whole number (as MATLAB ``str2double``; ``inf``,
+    ``1e400`` and ``2.5`` do not count), the
     largest number is the starting point and its text length is the width. When none
     does, the width is the length of the last remainder in string order and numbering
     starts at 1. ``num_length`` applies only when no id has the prefix. This is
@@ -74,6 +75,15 @@ def _str2double(text: str) -> float:
     return float(text)
 
 
+def _suffix_number(text: str) -> float:
+    """The numeric value of an id suffix, or NaN when the suffix is not a finite whole number
+    (``inf``, ``1e400``, ``2.5``, ``1d2`` and text)."""
+    number = _str2double(text)
+    if not math.isfinite(number) or number != math.floor(number):
+        return math.nan
+    return number
+
+
 def next_ids(
     existing_ids: Iterable[str],
     prefix: str,
@@ -87,7 +97,7 @@ def next_ids(
 
     last_id = 0
     if stripped:
-        numbers = [_str2double(x) for x in stripped]
+        numbers = [_suffix_number(x) for x in stripped]
         valid = [i for i, n in enumerate(numbers) if not math.isnan(n)]
         if valid:
             best = max(valid, key=lambda i: (numbers[i], -i))

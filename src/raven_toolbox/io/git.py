@@ -262,13 +262,13 @@ def export_for_git(
         Which formats to write; any of ``"yml"``, ``"xml"``, ``"mat"``,
         ``"xlsx"``, ``"txt"`` (default: all five, as RAVEN's ``exportForGit``).
     main_branch_flag
-        If True, raise ``RuntimeError`` when raven_toolbox runs from a git checkout that is not
+        A ``bool``. If True, raise ``RuntimeError`` when raven_toolbox runs from a git checkout that is not
         on ``main`` or ``master`` (default False), as RAVEN's ``mainBranchFlag``. The check
         passes when the package is not in a raven_toolbox checkout (for example a pip
         installation) and when git is missing or refuses the checkout (``OSError`` or a
         failing ``git`` call such as ``safe.directory``). GECKO is not checked.
     sub_dirs
-        If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
+        A ``bool``. If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
         layout); otherwise all files go directly in ``path``.
     varname
         Variable name for the MATLAB (``.mat``) struct. ``None`` (default) lets
@@ -283,7 +283,15 @@ def export_for_git(
     -------
     pathlib.Path
         The root directory written to.
+
+    Raises
+    ------
+    TypeError
+        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool``.
     """
+    for name, flag in (("main_branch_flag", main_branch_flag), ("sub_dirs", sub_dirs)):
+        if not isinstance(flag, bool):
+            raise TypeError(f"{name} must be a bool, got {type(flag).__name__}")
     if main_branch_flag:
         _check_main_branch()
     formats = list(formats)

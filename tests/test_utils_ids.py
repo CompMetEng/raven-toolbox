@@ -77,6 +77,20 @@ def test_generate_new_ids_a_d_exponent_is_not_a_number():
     assert generate_new_ids(_model_with_reactions(["r_1d2"]), "reactions", "r_") == ["r_001"]
 
 
+@pytest.mark.parametrize("suffix", ["inf", "Inf", "-inf", "1e400", "2.5", "1.5e-1", "nan"])
+def test_generate_new_ids_a_non_finite_or_fractional_suffix_is_not_a_number(suffix):
+    m = _model_with_reactions([f"r_{suffix}", "r_0003"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_0004"]
+    # Without any numeric suffix the width is that of the last remainder in string order.
+    alone = generate_new_ids(_model_with_reactions([f"r_{suffix}"]), "reactions", "r_")
+    assert alone == [f"r_{1:0{len(suffix)}d}"]
+
+
+def test_generate_new_ids_a_whole_number_in_exponent_form_still_counts():
+    m = _model_with_reactions(["r_1e2", "r_007"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_101"]
+
+
 def test_generate_new_ids_non_ascii_digits_are_not_a_number():
     m = _model_with_reactions(["r_١٢"])
     assert generate_new_ids(m, "reactions", "r_") == ["r_01"]

@@ -27,8 +27,8 @@ def set_gam(
 
     If both ``ngam_rxn`` and ``ngam_value`` are given, the NGAM
     reaction's bounds are fixed at ``(ngam_value, ngam_value)``. An empty
-    ``ngam_rxn`` counts as not given. A given ``ngam_rxn`` must be in the model,
-    also when no ``ngam_value`` is given.
+    ``ngam_rxn`` counts as not given, and ``ngam_value`` without an ``ngam_rxn`` is an
+    error. A given ``ngam_rxn`` must be in the model, also when no ``ngam_value`` is given.
 
     Parameters
     ----------
@@ -58,7 +58,11 @@ def set_gam(
     KeyError
         If ``biomass_rxn``, or a given ``ngam_rxn``, is not in the model. Both reactions
         are looked up before anything is changed.
+    ValueError
+        If ``ngam_value`` is given without an ``ngam_rxn``.
     """
+    if ngam_value is not None and not ngam_rxn:
+        raise ValueError("ngam_value needs an ngam_rxn: the NGAM reaction to set is not given")
     rxn = model.reactions.get_by_id(biomass_rxn)
     ngam = model.reactions.get_by_id(ngam_rxn) if ngam_rxn else None
     cofactor_set = set(cofactor_met_names)

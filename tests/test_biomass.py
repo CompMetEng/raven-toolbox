@@ -327,10 +327,20 @@ def test_set_gam_treats_an_empty_ngam_reaction_as_not_given():
     m, cfg = _toy_biomass_model()
     ref, _ = _toy_biomass_model()
     set_gam(ref, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",))
-    set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
-            ngam_rxn="", ngam_value=1.0)
+    set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",), ngam_rxn="")
     bio, bio_ref = (x.reactions.get_by_id(cfg.biomass_rxn) for x in (m, ref))
     assert {k.id: v for k, v in bio.metabolites.items()} == {k.id: v for k, v in bio_ref.metabolites.items()}
+
+
+@pytest.mark.parametrize("ngam_rxn", [None, ""])
+def test_set_gam_refuses_an_ngam_value_without_an_ngam_reaction(ngam_rxn):
+    m, cfg = _toy_biomass_model()
+    bio = m.reactions.get_by_id(cfg.biomass_rxn)
+    before = dict(bio.metabolites)
+    with pytest.raises(ValueError, match="ngam_value"):
+        set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
+                ngam_rxn=ngam_rxn, ngam_value=1.0)
+    assert dict(bio.metabolites) == before
 
 
 # --- charge handling and the post-rescale balance check ---------------------

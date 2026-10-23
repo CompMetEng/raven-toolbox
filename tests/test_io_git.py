@@ -107,6 +107,14 @@ def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     assert "model_version\t1.2.0" in text
 
 
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize("value", ["false", "true", "", 0, 1, None])
+def test_export_for_git_refuses_a_flag_that_is_not_a_bool(model, tmp_path, flag, value):
+    with pytest.raises(TypeError, match=flag):
+        export_for_git(model, tmp_path, formats=("yml",), **{flag: value})
+    assert not (tmp_path / "model").exists()
+
+
 def test_bad_format(model, tmp_path):
     with pytest.raises(ValueError, match="Unknown format"):
         export_for_git(model, tmp_path, formats=("yml", "json"))
