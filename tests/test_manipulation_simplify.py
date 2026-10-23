@@ -119,18 +119,23 @@ def test_irreversible_opposite_directions_are_kept():
     assert remove_duplicate_reactions(m) == []
 
 
-def test_duplicates_keep_reserved():
+def test_duplicates_ignore_reserved_like_contract_model():
+    """Reserved reactions are merged away; the survivor takes the widest bounds and all GPRs."""
     m = cobra.Model("t")
     m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("a", "b")])
     add_reactions_from_equations(
         m,
         [
-            {"id": "R1", "equation": "a --> b", "bounds": (0, 1000)},
-            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000)},
+            {"id": "R1", "equation": "a --> b", "bounds": (0, 10), "gene_reaction_rule": "g1"},
+            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000), "gene_reaction_rule": "g2"},
+            {"id": "R3", "equation": "a --> b", "bounds": (0, 10), "gene_reaction_rule": "g3"},
         ],
     )
-    remove_duplicate_reactions(m, reserved=["R1"])
-    assert "R1" in {r.id for r in m.reactions}  # reserved one kept
+    with pytest.warns(UserWarning, match="upper bounds"):
+        simplify_model(m, delete_duplicates=True, reserved=["R2"])
+    assert [r.id for r in m.reactions] == ["R1"]
+    assert m.reactions.R1.bounds == (0, 1000)
+    assert set(m.reactions.R1.gene_reaction_rule.split(" or ")) == {"g1", "g2", "g3"}
 
 
 # --- constrain_reversible_reactions ---------------------------------------

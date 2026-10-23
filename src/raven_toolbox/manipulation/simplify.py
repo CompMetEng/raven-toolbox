@@ -226,7 +226,6 @@ def find_duplicate_reactions(
 def remove_duplicate_reactions(
     model: cobra.Model,
     *,
-    reserved: Iterable[str] | None = None,
     restrict_to_metabolites: Iterable[cobra.Metabolite] | None = None,
 ) -> list[str]:
     """Remove all-but-one of each set of duplicate reactions.
@@ -237,8 +236,8 @@ def remove_duplicate_reactions(
     are duplicates. Bounds and objective coefficients may differ; the survivor takes the
     lowest lower bound, the highest upper bound and the highest objective coefficient of its
     group, with a warning where they differ (the values are taken as stored, not mirrored for
-    a reaction written in the opposite direction). One of each set is kept (reserved
-    reactions are never removed). Returns the removed reaction IDs.
+    a reaction written in the opposite direction). One of each set is kept; there is no
+    reserved-reaction option, as in ``contractModel``. Returns the removed reaction IDs.
 
     The survivor is the first-encountered reaction in ``model.reactions`` order
     (matching RAVEN's ``contractModel``). Its ``gene_reaction_rule`` becomes the
@@ -259,7 +258,6 @@ def remove_duplicate_reactions(
         if it is already a duplicate of another (matching ``contractModel``'s
         ``mets`` argument, used internally by ``replace_metabolite``).
     """
-    reserved = set(reserved or [])
     touching = (
         {r for m in restrict_to_metabolites for r in m.reactions}
         if restrict_to_metabolites is not None else None
@@ -275,9 +273,7 @@ def remove_duplicate_reactions(
         if len(rxns) <= 1:
             continue
         keep = rxns[0]
-        to_remove = [r for r in rxns if r is not keep and r.id not in reserved]
-        if not to_remove:
-            continue
+        to_remove = [r for r in rxns if r is not keep]
 
         _merge_bounds_and_objective(keep, rxns)
         _merge_gene_reaction_rules(keep, rxns)
@@ -503,14 +499,15 @@ def simplify_model(
     grouping, so reversible reactions that carry flux in one direction only are made
     irreversible before they are grouped. Each mode delegates to the dedicated function in
     this module. All operate in place. ``reserved`` reaction ids are never removed by the
-    zero-interval, dead-end, no-flux, duplicate and group-linear modes; ``open_exchanges``
+    zero-interval, dead-end, no-flux and group-linear modes (the duplicates mode ignores them, as
+    in RAVEN); ``open_exchanges``
     is forwarded to the no-flux pass.
 
     RAVEN's ``deleteUnconstrained`` (boundary-metabolite removal) has no analogue here:
     cobra models use explicit boundary reactions rather than an ``unconstrained`` field.
     """
     if delete_duplicates:
-        remove_duplicate_reactions(model, reserved=reserved)
+        remove_duplicate_reactions(model)
     if delete_zero_interval:
         remove_zero_interval_reactions(model, reserved=reserved)
     if delete_dead_end:
