@@ -1,4 +1,6 @@
 """Tests for raven_toolbox.io.git (exportForGit port)."""
+from pathlib import Path
+
 import cobra
 import libsbml
 import pytest
@@ -284,17 +286,60 @@ def test_num2str_of_infinity_and_negative_zero():
     assert _num2str(-0.0) == "0"
 
 
-def test_main_branch_flag(model, tmp_path, monkeypatch):
-    import subprocess as sp
+def test_main_branch_flag_runs_the_check_only_when_set(model, tmp_path, monkeypatch):
+    calls = []
 
-    def fake(branch):
-        def run(cmd, **kw):
-            return sp.CompletedProcess(cmd, 0, stdout=branch + "\n")
-        return run
+    def refuse():
+        calls.append(1)
+        raise RuntimeError("raven_toolbox is on branch 'feature'")
 
-    monkeypatch.setattr("raven_toolbox.io.git.subprocess.run", fake("feature"))
+    monkeypatch.setattr("raven_toolbox.io.git._check_main_branch", refuse)
+    export_for_git(model, tmp_path, formats=["txt"])
+    assert not calls
     with pytest.raises(RuntimeError, match="feature"):
         export_for_git(model, tmp_path, formats=["txt"], main_branch_flag=True)
-    export_for_git(model, tmp_path, formats=["txt"])
-    monkeypatch.setattr("raven_toolbox.io.git.subprocess.run", fake("main"))
-    export_for_git(model, tmp_path, formats=["txt"], main_branch_flag=True)
+
+
+def _git(cwd, *args):
+    import subprocess as sp
+    sp.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.org", *args],
+           check=True, capture_output=True)
+
+
+def _copy_package(dst):
+    import shutil
+    import raven_toolbox
+    shutil.copytree(Path(raven_toolbox.__file__).parent, dst,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def _run_check(package_dir):
+    import subprocess as sp
+    import sys
+    code = ("import sys; sys.path.insert(0, sys.argv[1]);"
+            "from raven_toolbox.io.git import _check_main_branch as c; c()")
+    return sp.run([sys.executable, "-c", code, str(package_dir)],
+                  capture_output=True, text=True)
+
+
+def test_main_branch_check_in_checkout_layout(tmp_path):
+    repo = tmp_path / "checkout"
+    _copy_package(repo / "src" / "raven_toolbox")
+    (repo / "pyproject.toml").write_text('[project]\nname = "raven-toolbox"\n')
+    _git(repo, "init", "-q", "-b", "feature")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "x")
+    out = _run_check(repo / "src")
+    assert out.returncode != 0 and "feature" in out.stderr
+    _git(repo, "checkout", "-q", "-b", "main")
+    assert _run_check(repo / "src").returncode == 0
+
+
+def test_main_branch_check_passes_in_unrelated_repository(tmp_path):
+    repo = tmp_path / "project"
+    _copy_package(repo / ".venv" / "lib" / "raven_toolbox")
+    (repo / "pyproject.toml").write_text('[project]\nname = "analysis"\n')
+    _git(repo, "init", "-q", "-b", "analysis")
+    _git(repo, "add", "pyproject.toml")
+    _git(repo, "commit", "-qm", "x")
+    assert _run_check(repo / ".venv" / "lib").returncode == 0

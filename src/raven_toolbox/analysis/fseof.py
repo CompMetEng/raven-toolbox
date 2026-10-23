@@ -11,9 +11,10 @@ weaknesses are noted in IMPROVEMENTS, FS1–FS4):
   **correlation** (|r|) is a quality score. A reaction is a target if it tracks the
   product cleanly (|r| ≥ ``correlation_threshold``), so one noisy step from LP
   alternative optima does not discard it (and pFBA per step keeps the scan stable).
-* **Direction classification RAVEN lacks.** Targets are labelled ``amplify`` (|flux|
+* **Direction classification.** Targets are labelled ``amplify`` (|flux|
   rises with the product → over-express), ``knockdown`` (|flux| falls), or ``knockout``
-  (|flux| → ~0 → delete). RAVEN only ever reports the amplification targets.
+  (|flux| → ~0 → delete), like the Amplify, Knockdown and Knockout labels of RAVEN's
+  ``FSEOF``.
 * **Gene-level view** via :attr:`FSEOFResult.gene_targets`, and the full flux scan is
   retained in :attr:`FSEOFResult.scan` — all as DataFrames, not a printed TSV.
 """
@@ -97,9 +98,12 @@ def fseof(
         product flux for it to be reported as a target; raise it to keep only
         the most cleanly-trending reactions.
     flux_eps:
-        Tolerance below which a flux or slope is treated as zero. A reaction whose absolute
-        flux is constant over the scan is therefore not reported, while RAVEN's ``FSEOF``
-        reports one with a slope of about 1e-6 as a target.
+        Tolerance below which a flux or slope is treated as zero. It differs from RAVEN's
+        ``FSEOF`` in two places. A reaction whose standard deviation of absolute flux or
+        whose absolute slope is below ``flux_eps`` is left out, while ``FSEOF`` reports any
+        correlated reaction with a standard deviation above 0. A reaction is labelled
+        ``knockout`` when its last absolute flux is below ``flux_eps``, while ``FSEOF`` uses
+        a threshold of 1e-8.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
         (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.

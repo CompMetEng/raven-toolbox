@@ -826,7 +826,10 @@ def ftinit(
     calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_.
 
-    ``mip_gap``/``time_limit`` are forwarded to each :func:`run_ftinit` solve. On
+    ``mip_gap`` and ``mip_gap_abs`` apply to a step without a run schedule; a step with a
+    schedule (every named series, including ``full``) uses the gaps of its own runs
+    (``full``: one run at 0.0004 and 10000 s). ``time_limit`` caps the time limit of each
+    run of every step, scheduled or not. On
     genome-scale models they are essential for tractability — see the `INIT parameter
     calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_

@@ -15,6 +15,7 @@ import datetime
 import importlib.metadata as _md
 import math
 import platform
+import re
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -208,14 +209,26 @@ def _write_dependencies(path: Path, model: cobra.Model) -> None:
 def _check_main_branch() -> None:
     """Raise when raven_toolbox is a git checkout that is not on ``main`` or ``master``.
 
-    An installed copy outside a git checkout passes.
+    The checkout is the repository whose top level holds this package as
+    ``src/raven_toolbox`` next to a ``pyproject.toml`` named ``raven-toolbox``. A package
+    outside such a checkout, including one installed in the ignored virtual environment of
+    an unrelated repository, passes. GECKO is not checked.
     """
-    here = Path(__file__).resolve().parent
-    try:
-        branch = subprocess.run(
-            ["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, check=True,
+    package = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(package), *args], capture_output=True, text=True, check=True,
         ).stdout.strip()
+
+    try:
+        top = Path(git("rev-parse", "--show-toplevel")).resolve()
+        if (top / "src" / "raven_toolbox").resolve() != package:
+            return
+        pyproject = (top / "pyproject.toml").read_text(encoding="utf-8")
+        if not re.search(r'^name\s*=\s*"raven-toolbox"', pyproject, re.MULTILINE):
+            return
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
     except (OSError, subprocess.CalledProcessError):
         return
     if branch not in ("main", "master"):

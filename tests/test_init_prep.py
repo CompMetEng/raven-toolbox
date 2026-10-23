@@ -34,3 +34,28 @@ def test_prep_init_model_resets_bounds():
     prep = prep_init_model(m, [], ext_comp="e", simplify=False, scale=True)
     for r in prep.min_model.reactions:
         assert r.upper_bound in (0.0, 1000.0)
+
+
+def test_prep_init_model_resets_reversible_lower_bound():
+    m = cobra.Model("t")
+    for i in "ABCD":
+        m.add_metabolites([cobra.Metabolite(i + "_c", compartment="c")])
+    rxns = {
+        "EX_A": (-5, 5, {"A_c": 1}),
+        "R1": (-50, 50, {"A_c": -1, "B_c": 1}),
+        "R2": (-50, 50, {"B_c": -1, "C_c": 1}),
+        "R3": (-50, 50, {"B_c": -1, "D_c": 1}),
+        "EX_C": (-10, 10, {"C_c": -1}),
+        "EX_D": (-10, 10, {"D_c": -1}),
+    }
+    for rid, (lb, ub, stoich) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=ub)
+        m.add_reactions([r])
+        r.add_metabolites({m.metabolites.get_by_id(k): v for k, v in stoich.items()})
+    prep = prep_init_model(m, [], ext_comp="e", simplify=False, scale=True)
+    assert any(r.lower_bound < 0 for r in prep.min_model.reactions)
+    for r in prep.min_model.reactions:
+        assert r.lower_bound in (0.0, -1000.0)
+        assert r.upper_bound in (0.0, 1000.0)
+
+
