@@ -197,3 +197,55 @@ def test_spread_of_a_few_ulps_between_many_identical_zscores_is_resolved():
     assert got["A_c"] == pytest.approx(expected([f"g{i}" for i in range(1, 11)]), rel=1e-6)
     assert got["B_c"] == pytest.approx(expected(["g0"]), rel=1e-6)
     assert np.isfinite(got).all()
+
+
+def test_scores_match_exact_moments_when_the_first_zscore_is_an_outlier():
+    """With one extreme z-score first and the others within a few ulps of each other, the scores
+    match the exact moments of the float z-scores."""
+    import math
+    from fractions import Fraction
+
+    from scipy.stats import norm
+
+    n_genes = 2000
+    pvalues = {f"g{i}": 0.37 for i in range(n_genes)}
+    pvalues["g0"] = 1e-12
+    shifted = 0.37
+    for _ in range(300):
+        shifted = math.nextafter(shifted, 1.0)
+    pvalues["g1"] = shifted
+
+    m = cobra.Model("outlier")
+    mets = {k: _met(f"{k}_c") for k in "ABC"}
+    m.add_metabolites(list(mets.values()))
+    rc = cobra.Reaction("rc")
+    rc.add_metabolites({mets["C"]: -1})
+    m.add_reactions([rc])
+    rc.gene_reaction_rule = "g0"
+    for start in range(0, n_genes, 100):
+        r = cobra.Reaction(f"bulk{start}")
+        r.add_metabolites({cobra.Metabolite(f"M{start}_c", compartment="c"): -1})
+        m.add_reactions([r])
+        r.gene_reaction_rule = " or ".join(f"g{i}" for i in range(start, start + 100) if i >= 12)
+    ra = cobra.Reaction("ra")
+    ra.add_metabolites({mets["A"]: -1})
+    rb = cobra.Reaction("rb")
+    rb.add_metabolites({mets["B"]: -1})
+    m.add_reactions([ra, rb])
+    ra.gene_reaction_rule = " or ".join(f"g{i}" for i in range(2, 12))
+    rb.gene_reaction_rule = "g1"
+
+    z = {g: float(-norm.ppf(p)) for g, p in pvalues.items()}
+    exact = {g: Fraction(v) for g, v in z.items()}
+    mu = sum(exact.values()) / n_genes
+    var = sum((v - mu) ** 2 for v in exact.values()) / n_genes
+    sigma = math.sqrt(float(var))
+
+    def expected(genes):
+        n = len(genes)
+        return float(sum(exact[g] for g in genes) - n * mu) / math.sqrt(n) / sigma
+
+    (res,) = reporter_metabolites(m, pvalues)
+    got = res.table.set_index("metabolite")["z_score"]
+    assert got["A_c"] == pytest.approx(expected([f"g{i}" for i in range(2, 12)]), rel=1e-13, abs=0)
+    assert got["B_c"] == pytest.approx(expected(["g1"]), rel=1e-13, abs=0)
