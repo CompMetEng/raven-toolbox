@@ -26,7 +26,9 @@ def set_gam(
     coefficient.
 
     If both ``ngam_rxn`` and ``ngam_value`` are given, the NGAM
-    reaction's bounds are fixed at ``(ngam_value, ngam_value)``.
+    reaction's bounds are fixed at ``(ngam_value, ngam_value)``. An empty
+    ``ngam_rxn`` counts as not given. A given ``ngam_rxn`` must be in the model,
+    also when no ``ngam_value`` is given.
 
     Parameters
     ----------
@@ -54,13 +56,11 @@ def set_gam(
     Raises
     ------
     KeyError
-        If ``biomass_rxn``, or ``ngam_rxn`` when NGAM is to be set, is not in the model.
-        Both reactions are looked up before anything is changed.
+        If ``biomass_rxn``, or a given ``ngam_rxn``, is not in the model. Both reactions
+        are looked up before anything is changed.
     """
     rxn = model.reactions.get_by_id(biomass_rxn)
-    ngam = None
-    if ngam_rxn is not None and ngam_value is not None:
-        ngam = model.reactions.get_by_id(ngam_rxn)
+    ngam = model.reactions.get_by_id(ngam_rxn) if ngam_rxn else None
     cofactor_set = set(cofactor_met_names)
 
     targets: dict[cobra.Metabolite, float] = {}

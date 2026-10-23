@@ -304,6 +304,35 @@ def test_set_gam_missing_ngam_reaction_raises_before_changing_anything():
     assert dict(bio.metabolites) == before
 
 
+def test_set_gam_checks_a_given_ngam_reaction_also_without_a_value():
+    m, cfg = _toy_biomass_model()
+    bio = m.reactions.get_by_id(cfg.biomass_rxn)
+    before = dict(bio.metabolites)
+    with pytest.raises(KeyError):
+        set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
+                ngam_rxn="NOPE")
+    assert dict(bio.metabolites) == before
+
+
+def test_set_gam_leaves_the_bounds_of_a_given_ngam_reaction_without_a_value():
+    m, cfg = _toy_biomass_model()
+    ngam = cobra.Reaction("NGAM", lower_bound=0, upper_bound=1000)
+    ngam.add_metabolites({m.metabolites.get_by_id("atp_c"): -1})
+    m.add_reactions([ngam])
+    set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",), ngam_rxn="NGAM")
+    assert m.reactions.get_by_id("NGAM").bounds == (0, 1000)
+
+
+def test_set_gam_treats_an_empty_ngam_reaction_as_not_given():
+    m, cfg = _toy_biomass_model()
+    ref, _ = _toy_biomass_model()
+    set_gam(ref, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",))
+    set_gam(m, 80, biomass_rxn=cfg.biomass_rxn, cofactor_met_names=("ATP",),
+            ngam_rxn="", ngam_value=1.0)
+    bio, bio_ref = (x.reactions.get_by_id(cfg.biomass_rxn) for x in (m, ref))
+    assert {k.id: v for k, v in bio.metabolites.items()} == {k.id: v for k, v in bio_ref.metabolites.items()}
+
+
 # --- charge handling and the post-rescale balance check ---------------------
 
 def test_rescale_pseudoreaction_unset_charge_raises_and_changes_nothing():
