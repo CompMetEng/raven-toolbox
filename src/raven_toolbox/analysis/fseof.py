@@ -97,7 +97,9 @@ def fseof(
         product flux for it to be reported as a target; raise it to keep only
         the most cleanly-trending reactions.
     flux_eps:
-        Tolerance below which a flux or slope is treated as zero.
+        Tolerance below which a flux or slope is treated as zero. A reaction whose absolute
+        flux is constant over the scan is therefore not reported, while RAVEN's ``FSEOF``
+        reports one with a slope of about 1e-6 as a target.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
         (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.
@@ -143,24 +145,19 @@ def _classify(model, scan, enforced, corr_threshold, flux_eps) -> pd.DataFrame:
         flux = scan.loc[rxn.id, enforced.tolist() if hasattr(enforced, "tolist") else enforced]
         flux = flux.to_numpy(dtype=float)
         initial, final = flux[0], flux[-1]
-        if flux.std() < flux_eps:  # flat -> no response
+        # Slope and correlation are taken on absolute flux, as in RAVEN's FSEOF, so a
+        # reversible reaction running backwards counts by its magnitude.
+        magnitude = np.abs(flux)
+        if magnitude.std() < flux_eps:  # flat -> no response
             continue
-        fit = linregress(enforced, flux)
+        fit = linregress(enforced, magnitude)
         slope, corr = float(fit.slope), float(fit.rvalue)
         if abs(corr) < corr_threshold or abs(slope) < flux_eps:
             continue
-        # Classify on the slope of |flux| vs the enforced product flux — the
-        # criterion the docstring states (|flux| rises = amplify, etc.), not an
-        # endpoint-only ``abs(final) vs abs(initial)`` comparison, which can
-        # mislabel a track whose first/last values straddle a peak/trough even
-        # though its overall trend runs the other way. Keep ``knockout`` for
-        # tracks the regression drives essentially to zero.
-        abs_fit = linregress(enforced, np.abs(flux))
-        abs_slope = float(abs_fit.slope)
-        if abs(final) < flux_eps and abs_slope < 0:
-            ttype = "knockout"
-        elif abs_slope > 0:
+        if slope > 0:
             ttype = "amplify"
+        elif abs(final) < flux_eps:
+            ttype = "knockout"
         else:
             ttype = "knockdown"
         rows.append({

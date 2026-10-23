@@ -121,3 +121,20 @@ def test_amplify_label_uses_abs_slope_not_endpoint_difference():
     table = _classify(m, scan, enforced, corr_threshold=0.0, flux_eps=1e-6)
     assert not table.empty
     assert table.iloc[0]["target_type"] == "amplify"
+
+
+def test_slope_is_taken_on_absolute_flux():
+    """A reversible reaction whose negative flux grows in magnitude has a positive slope."""
+    import numpy as np
+    import pandas as pd
+
+    from raven_toolbox.analysis.fseof import _classify
+
+    enforced = np.linspace(1.0, 5.0, 5)
+    scan = pd.DataFrame([-enforced, enforced], index=["r_neg", "r_pos"], columns=enforced)
+    m = cobra.Model("synth")
+    m.add_reactions([cobra.Reaction("r_neg"), cobra.Reaction("r_pos")])
+    table = _classify(m, scan, enforced, corr_threshold=0.9, flux_eps=1e-6).set_index("reaction")
+    assert table.loc["r_neg", "slope"] == pytest.approx(1.0)
+    assert table.loc["r_neg", "target_type"] == "amplify"
+    assert table.loc["r_pos", "slope"] == pytest.approx(1.0)
