@@ -58,6 +58,11 @@ def test_get_init_steps_default():
     assert full[0].milp_runs == ({"mip_gap": 0.0004, "time_limit": 10000, "abs_gap": 10.0},)
 
 
+def test_get_init_steps_full_ignores_no_metabolites():
+    assert get_init_steps("full", mets_to_ignore=["H2O"])[0].mets_to_ignore == ()
+    assert get_init_steps("1+1", mets_to_ignore=["H2O"])[0].mets_to_ignore == ("H2O",)
+
+
 # --------------------------------------------------------------------------- #
 # Full '1+1' pipeline — T0001 (no tasks) and T0002 (with task).
 # --------------------------------------------------------------------------- #
