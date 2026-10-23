@@ -47,11 +47,13 @@ def _gene_z(pvalues: dict[str, float]) -> dict[str, float]:
 
 def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> ReporterResult:
     z_values = np.fromiter(gene_z.values(), dtype=float)
-    mu = float(z_values.mean()) if z_values.size else 0.0
-    sigma = float(z_values.std(ddof=0)) if z_values.size else 0.0
-    # The mean of many identical z-scores carries a rounding error, which makes sigma a small
-    # positive number instead of 0. The spread is tested instead; it counts as 0 up to
-    # 100 * eps(max|z|), as in RAVEN.
+    # Moments are taken on z-scores centred on the first one, so that a spread of a few ulps
+    # between otherwise identical z-scores is not lost in the rounding of the mean.
+    z_ref = float(z_values[0]) if z_values.size else 0.0
+    centred = z_values - z_ref
+    mu_c = float(centred.mean()) if z_values.size else 0.0
+    sigma = float(centred.std(ddof=0)) if z_values.size else 0.0
+    # The spread is tested for being 0 up to 100 * eps(max|z|), as in RAVEN.
     spread = float(z_values.max() - z_values.min()) if z_values.size else 0.0
     has_spread = spread > 100 * float(np.spacing(np.abs(z_values).max())) if z_values.size else False
 
@@ -62,9 +64,9 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
             continue
         zs = np.array([gene_z[g] for g in neighbours])
         n = zs.size
-        raw = zs.sum() / math.sqrt(n)
+        raw_c = (zs - z_ref).sum() / math.sqrt(n)
         # Exact background correction for sampling-with-replacement (see module doc).
-        corrected = (raw - math.sqrt(n) * mu) / sigma if has_spread else 0.0
+        corrected = (raw_c - math.sqrt(n) * mu_c) / sigma if has_spread else 0.0
         if not math.isfinite(corrected):  # never on clamped z-scores; guards the p-value
             corrected = 0.0
         rows.append(
