@@ -36,11 +36,11 @@ import pandas as pd
 from raven_toolbox.init.score import gene_scores_from_expression
 
 # RAVEN's hpaLevelScores defaults (scoreModel.m). HPA reports either antibody-staining
-# levels (Strong/Moderate/Weak/Negative) or "APE" classes (High/Medium/Low/Not detected /
-# Ascending/Descending/...); the four common categories are mapped here. Unknown levels
+# levels (Strong/Moderate/Weak/Negative) or "APE" classes (High/Medium/Low/None/Not detected /
+# Ascending/Descending/...); the categories of RAVEN's table are mapped here. Unknown levels
 # (e.g. "Mixed", "N/A") fall through to NaN and are dropped during scoring.
 HPA_LEVEL_SCORES: dict[str, float] = {
-    "High": 20.0, "Medium": 15.0, "Low": 10.0, "Not detected": -8.0,
+    "High": 20.0, "Medium": 15.0, "Low": 10.0, "None": -8.0, "Not detected": -8.0,
     "Strong": 20.0, "Moderate": 15.0, "Weak": 10.0, "Negative": -8.0,
 }
 

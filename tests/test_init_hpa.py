@@ -107,6 +107,13 @@ def test_hpa_gene_scores_celltype_filter(hpa_tsv):
     assert g == {"ENSG1": HPA_LEVEL_SCORES["Low"]}     # 10; GeneB has no bile-duct row
 
 
+def test_hpa_level_none_scores_minus_eight(tmp_path):
+    p = tmp_path / "hpa_none.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "ENSG9\tGeneZ\tliver\thepatocytes\tNone\tApproved\n")
+    assert hpa_gene_scores(parse_hpa(p), "liver") == {"ENSG9": -8.0}
+
+
 def test_hpa_gene_scores_unknown_level_omitted(hpa_tsv):
     """A 'Mixed' / 'N/A' level is not in HPA_LEVEL_SCORES and is dropped (not -inf)."""
     g = hpa_gene_scores(parse_hpa(hpa_tsv), "liver")
