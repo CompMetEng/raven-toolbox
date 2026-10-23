@@ -282,3 +282,19 @@ def test_num2str_of_infinity_and_negative_zero():
 
     assert _num2str(float("-inf")) == "-Inf"
     assert _num2str(-0.0) == "0"
+
+
+def test_main_branch_flag(model, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    def fake(branch):
+        def run(cmd, **kw):
+            return sp.CompletedProcess(cmd, 0, stdout=branch + "\n")
+        return run
+
+    monkeypatch.setattr("raven_toolbox.io.git.subprocess.run", fake("feature"))
+    with pytest.raises(RuntimeError, match="feature"):
+        export_for_git(model, tmp_path, formats=["txt"], main_branch_flag=True)
+    export_for_git(model, tmp_path, formats=["txt"])
+    monkeypatch.setattr("raven_toolbox.io.git.subprocess.run", fake("main"))
+    export_for_git(model, tmp_path, formats=["txt"], main_branch_flag=True)

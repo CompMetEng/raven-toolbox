@@ -15,6 +15,7 @@ import datetime
 import importlib.metadata as _md
 import math
 import platform
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -204,12 +205,33 @@ def _write_dependencies(path: Path, model: cobra.Model) -> None:
             fh.write(f"{name}\t{value}\n")
 
 
+def _check_main_branch() -> None:
+    """Raise when raven_toolbox is a git checkout that is not on ``main`` or ``master``.
+
+    An installed copy outside a git checkout passes.
+    """
+    here = Path(__file__).resolve().parent
+    try:
+        branch = subprocess.run(
+            ["git", "-C", str(here), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return
+    if branch not in ("main", "master"):
+        raise RuntimeError(
+            f"raven_toolbox is on branch '{branch}', not main or master. Check out the main "
+            "branch before submitting a model to Git."
+        )
+
+
 def export_for_git(
     model: cobra.Model,
     path: str | Path = ".",
     *,
     prefix: str = "model",
     formats: Iterable[str] = _ALL_FORMATS,
+    main_branch_flag: bool = False,
     sub_dirs: bool = True,
     varname: str | None = None,
     version: str | None = None,
@@ -226,6 +248,9 @@ def export_for_git(
     formats
         Which formats to write; any of ``"yml"``, ``"xml"``, ``"mat"``,
         ``"xlsx"``, ``"txt"`` (default: all five, as RAVEN's ``exportForGit``).
+    main_branch_flag
+        If True, raise ``RuntimeError`` when raven_toolbox runs from a git checkout that is not
+        on ``main`` or ``master`` (default False), as RAVEN's ``mainBranchFlag``.
     sub_dirs
         If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
         layout); otherwise all files go directly in ``path``.
@@ -243,6 +268,8 @@ def export_for_git(
     pathlib.Path
         The root directory written to.
     """
+    if main_branch_flag:
+        _check_main_branch()
     formats = list(formats)
     unknown = set(formats) - set(_ALL_FORMATS)
     if unknown:
