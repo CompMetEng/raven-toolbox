@@ -120,10 +120,10 @@ def remove_zero_interval_reactions(
     """Remove reactions locked at zero flux (``lb == ub == 0``), pruning orphans.
 
     RAVEN ``simplifyModel``'s ``deleteZeroInterval`` mode: such reactions can never
-    carry flux, so they only enlarge downstream problems. Genes used only by the
-    removed reactions are removed with them, and every metabolite left without a
-    reaction is removed, including ones that were orphans before. ``reserved`` reaction
-    ids are never removed. Modifies in place; returns the removed reaction ids.
+    carry flux, so they only enlarge downstream problems. Every metabolite left without a
+    reaction is removed, including ones that were orphans before. Genes are kept, as in
+    RAVEN ``removeReactions`` with its defaults. ``reserved`` reaction ids are never
+    removed. Modifies in place; returns the removed reaction ids.
     """
     reserved = set(reserved or [])
     zero = [
@@ -131,7 +131,7 @@ def remove_zero_interval_reactions(
         if r.lower_bound == 0 and r.upper_bound == 0 and r.id not in reserved
     ]
     if zero:
-        model.remove_reactions(zero, remove_orphans=True)
+        model.remove_reactions(zero, remove_orphans=False)
     _prune_orphan_metabolites(model)
     return [r.id for r in zero]
 
@@ -152,9 +152,9 @@ def remove_no_flux_reactions(
     ``deleteMinMax`` does, which can remove more. A reaction that is blocked under these
     bounds stays blocked under any tighter ones, so removing it before task discovery /
     the merge is safe as long as no later step relaxes a sink, demand or internal
-    bound. ``reserved`` reaction ids are never removed. Genes used only by the removed
-    reactions are removed with them, and every metabolite left without a reaction is
-    removed. Modifies in place; returns the removed reaction ids.
+    bound. ``reserved`` reaction ids are never removed. Every metabolite left without a
+    reaction is removed; genes are kept, as in RAVEN ``removeReactions`` with its
+    defaults. Modifies in place; returns the removed reaction ids.
     """
     reserved = set(reserved or [])
     blocked = [
@@ -162,7 +162,7 @@ def remove_no_flux_reactions(
         if rid not in reserved
     ]
     if blocked:
-        model.remove_reactions(blocked, remove_orphans=True)
+        model.remove_reactions(blocked, remove_orphans=False)
     _prune_orphan_metabolites(model)
     return blocked
 

@@ -237,7 +237,20 @@ def prep_init_model(
     :func:`find_task_essential_reactions`. It does not affect the two ``simplify_model``
     passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
     (set that separately if you want them faster too).
+
+    With the first simplification, every gene left without a reaction is removed from the
+    reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
+    genes that had no reaction in the template. Raises :class:`ValueError` when two tasks
+    share an id.
     """
+    if tasks is not None:
+        tasks = list(tasks)
+        counts: dict[str, int] = {}
+        for t in tasks:
+            counts[t.id] = counts.get(t.id, 0) + 1
+        duplicated = sorted(i for i, n in counts.items() if n > 1)
+        if duplicated:
+            raise ValueError(f"Task ids must be unique; repeated: {', '.join(duplicated)}")
     ref_model = template.copy()
 
     if simplify:
@@ -252,6 +265,10 @@ def prep_init_model(
         # model and reaches a different (bypass-heavy) optimum.
         simplify_model(ref_model, delete_zero_interval=True, delete_dead_end=True,
                        delete_no_flux=True)
+        # prepINITModel removes the reactions with removeReactions(model, rxns, false, true),
+        # whose last argument removes every gene that no reaction uses.
+        for gene in [g for g in ref_model.genes if not g.reactions]:
+            ref_model.genes.remove(gene)
 
     essential_pre: dict[str, int] = {}
     task_mets: set[str] = set()

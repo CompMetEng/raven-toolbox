@@ -439,3 +439,116 @@ def test_new_ids_follow_the_numerically_largest_id():
     coeffs_df = pd.DataFrame([{"rxnNames": "x", "metNames": "A", "comps": "c", "coefficient": -1.0}])
     result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
     assert result.added_reactions == ["R_11"]
+
+
+# --- empty cells of existing entities ----------------------------------
+
+def _empty_mets_table():
+    return pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "formula": "", "charge": float("nan"), "metNotes": ""},
+        {"metNames": "ADP", "comps": "c", "formula": "C10H12N5O10P2", "charge": float("nan"),
+         "metNotes": ""},
+        {"metNames": "glucose", "comps": "e", "formula": "C6H12O6", "charge": -1.0, "metNotes": ""},
+    ])
+
+
+def test_empty_metabolite_cells_overwrite_by_default():
+    m = _base_model()
+    m.metabolites.get_by_id("s_0001").notes["note"] = "kept?"
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_empty_mets_table(), met_id_prefix="s_")
+    atp, adp, glc = (m.metabolites.get_by_id(i) for i in ("s_0001", "s_0002", "s_0003"))
+    assert atp.formula == "" and atp.charge == 0 and "note" not in atp.notes
+    assert adp.formula == "C10H12N5O10P2" and adp.charge == 0
+    assert glc.charge == -1
+
+
+def test_empty_metabolite_cells_are_kept_without_overwrite_with_empty():
+    m = _base_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_empty_mets_table(), met_id_prefix="s_",
+                     overwrite_with_empty=False)
+    atp, adp, glc = (m.metabolites.get_by_id(i) for i in ("s_0001", "s_0002", "s_0003"))
+    assert atp.formula == "C10H12N5O13P3" and atp.charge == -4
+    assert adp.formula == "C10H12N5O10P2" and adp.charge == -3
+    assert glc.charge == -1
+
+
+def test_a_charge_column_without_any_value_is_not_written():
+    m = _base_model()
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "formula": "X", "charge": float("nan")}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df, met_id_prefix="s_")
+    assert m.metabolites.get_by_id("s_0001").charge == -4
+
+
+def test_an_absent_column_is_not_written():
+    m = _base_model()
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": -2}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df, met_id_prefix="s_")
+    atp = m.metabolites.get_by_id("s_0001")
+    assert atp.formula == "C10H12N5O13P3" and atp.charge == -2
+
+
+@pytest.mark.parametrize("overwrite, name", [(True, ""), (False, "A1")])
+def test_empty_gene_short_name(overwrite, name):
+    m = _base_model()
+    df = pd.DataFrame([{"genes": "YAL001C", "geneShortNames": ""}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, genes_df=df, overwrite_with_empty=overwrite)
+    assert m.genes.get_by_id("YAL001C").name == name
+
+
+def _atp_tables(**cells):
+    rxns_df = pd.DataFrame([{"rxnNames": "ATP hydrolysis", **cells}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "metNames": "ATP", "comps": "c", "coefficient": -1.0},
+        {"rxnNames": "ATP hydrolysis", "metNames": "ADP", "comps": "c", "coefficient": 1.0},
+    ])
+    return rxns_df, coeffs_df
+
+
+@pytest.mark.parametrize("overwrite", [True, False])
+def test_empty_bounds_and_gene_rule_never_change_an_existing_reaction(overwrite):
+    m = _base_model()
+    rxns_df, coeffs_df = _atp_tables(lb=float("nan"), ub="", grRules="")
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_",
+                     overwrite_with_empty=overwrite)
+    rxn = m.reactions.get_by_id("r_0001")
+    assert rxn.bounds == (0, 1000)
+    assert rxn.gene_reaction_rule == "YAL001C"
+
+
+@pytest.mark.parametrize("overwrite, subsystem, ec", [(True, "", None), (False, "Energy", "3.6.1.3")])
+def test_empty_annotation_cells_of_an_existing_reaction(overwrite, subsystem, ec):
+    m = _base_model()
+    rxn = m.reactions.get_by_id("r_0001")
+    rxn.subsystem = "Energy"
+    rxn.annotation["ec-code"] = "3.6.1.3"
+    rxns_df, coeffs_df = _atp_tables(subSystems="", eccodes="")
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_",
+                     overwrite_with_empty=overwrite)
+    assert rxn.subsystem == subsystem
+    assert rxn.annotation.get("ec-code") == ec
+
+
+def test_new_reaction_bounds_with_an_empty_cell():
+    m = _base_model()
+    rxns_df = pd.DataFrame([
+        {"rxnNames": "bounded", "lb": -5, "ub": 7},
+        {"rxnNames": "openub", "lb": 0, "ub": float("nan")},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "bounded", "metNames": "ATP", "comps": "c", "coefficient": -2.0},
+        {"rxnNames": "bounded", "metNames": "ADP", "comps": "c", "coefficient": 3.0},
+        {"rxnNames": "openub", "metNames": "ATP", "comps": "c", "coefficient": -3.0},
+        {"rxnNames": "openub", "metNames": "ADP", "comps": "c", "coefficient": 5.0},
+    ])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    bounded = next(r for r in m.reactions if r.name == "bounded")
+    openub = next(r for r in m.reactions if r.name == "openub")
+    assert bounded.bounds == (-5, 7)
+    assert openub.lower_bound == 0 and openub.upper_bound == float("inf")

@@ -353,7 +353,7 @@ def test_zero_interval_prunes_every_orphan_metabolite():
     m = _zero_model()
     assert remove_zero_interval_reactions(m) == ["R2"]
     assert "ORPH" not in m.metabolites
-    assert "g2" not in m.genes
+    assert "g2" in m.genes
 
 
 def test_no_flux_honours_reserved_and_prunes_orphans():
@@ -363,3 +363,10 @@ def test_no_flux_honours_reserved_and_prunes_orphans():
     assert remove_no_flux_reactions(m, reserved=["R2"]) == ["R1"]
     assert "R2" in m.reactions
     assert "ORPH" not in m.metabolites
+
+
+def test_no_flux_keeps_the_genes_of_removed_reactions():
+    m = _zero_model()
+    m.reactions.get_by_id("R2").bounds = (0, 1000)
+    assert sorted(remove_no_flux_reactions(m)) == ["R1", "R2"]
+    assert "g2" in m.genes
