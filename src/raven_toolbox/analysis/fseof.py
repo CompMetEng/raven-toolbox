@@ -98,12 +98,12 @@ def fseof(
         product flux for it to be reported as a target; raise it to keep only
         the most cleanly-trending reactions.
     flux_eps:
-        Tolerance below which a flux or slope is treated as zero. It differs from RAVEN's
-        ``FSEOF`` in two places. A reaction whose standard deviation of absolute flux or
-        whose absolute slope is below ``flux_eps`` is left out, while ``FSEOF`` reports any
-        correlated reaction with a standard deviation above 0. A reaction is labelled
-        ``knockout`` when its last absolute flux is below ``flux_eps``, while ``FSEOF`` uses
-        a threshold of 1e-8.
+        Tolerance below which the theoretical maximum of the target flux is treated as zero
+        (the scan then raises). Reaction fluxes are classified as in RAVEN's ``FSEOF``: a
+        reaction is a target when some absolute flux exceeds 1e-10, the standard deviation of
+        its absolute flux is above 0 and the correlation reaches ``correlation_threshold``;
+        it is ``knockout`` when the slope is negative and the last absolute flux is at most
+        1e-8, ``knockdown`` for a negative slope otherwise.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
         (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.
@@ -139,11 +139,15 @@ def fseof(
         raise RuntimeError("FSEOF needs at least two feasible enforced-flux levels.")
 
     scan = pd.DataFrame(columns)
-    targets = _classify(model, scan, np.asarray(enforced), correlation_threshold, flux_eps)
+    targets = _classify(model, scan, np.asarray(enforced), correlation_threshold)
     return FSEOFResult(scan=scan, enforced=enforced, targets=targets)
 
 
-def _classify(model, scan, enforced, corr_threshold, flux_eps) -> pd.DataFrame:
+_TRACK_EPS = 1e-10  # a track must exceed this somewhere to be fitted, as in FSEOF.m
+_KNOCKOUT_EPS = 1e-8  # last absolute flux at or below this is a knockout, as in FSEOF.m
+
+
+def _classify(model, scan, enforced, corr_threshold) -> pd.DataFrame:
     rows = []
     for rxn in model.reactions:
         flux = scan.loc[rxn.id, enforced.tolist() if hasattr(enforced, "tolist") else enforced]
@@ -152,15 +156,15 @@ def _classify(model, scan, enforced, corr_threshold, flux_eps) -> pd.DataFrame:
         # Slope and correlation are taken on absolute flux, as in RAVEN's FSEOF, so a
         # reversible reaction running backwards counts by its magnitude.
         magnitude = np.abs(flux)
-        if magnitude.std() < flux_eps:  # flat -> no response
+        if not (magnitude > _TRACK_EPS).any() or magnitude.std() <= 0:
             continue
         fit = linregress(enforced, magnitude)
         slope, corr = float(fit.slope), float(fit.rvalue)
-        if abs(corr) < corr_threshold or abs(slope) < flux_eps:
+        if abs(corr) < corr_threshold or slope == 0:
             continue
         if slope > 0:
             ttype = "amplify"
-        elif abs(final) < flux_eps:
+        elif abs(final) <= _KNOCKOUT_EPS:
             ttype = "knockout"
         else:
             ttype = "knockdown"
