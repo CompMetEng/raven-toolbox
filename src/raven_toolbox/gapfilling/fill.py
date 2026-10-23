@@ -203,6 +203,14 @@ def connect_blocked_reactions(
     The draft is expected to have exchange reactions for its nutrients (otherwise most
     reactions are trivially blocked).
 
+    ``scores`` maps a template reaction id to its score; a negative score is the penalty
+    of adding that reaction, and the default penalty applies to a reaction without one.
+    A template reaction whose id is already taken by the draft or by an earlier template is
+    renamed ``<id>_<template id>`` (see :func:`~raven_toolbox.gapfilling.templates.unique_templates`).
+    A score under the renamed id applies to that reaction; otherwise the score under the
+    original id applies, so templates that share an id share that score unless the renamed
+    id is given too.
+
     ``threshold`` is the flux a reaction must be able to exceed to count as unblocked, in
     the draft and, for a blocked reaction, with the templates added. ``min_flux`` is the
     flux forced through each rescuable reaction while solving. ``allow_net_production``
