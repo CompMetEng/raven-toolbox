@@ -702,7 +702,7 @@ def _solve_step(
     gap made relative, which is safe when the step's objective is near zero — breaking as
     soon as the previous run's achieved gap already meets the next (looser) target. A
     caller ``time_limit`` caps each run's own limit. With no schedule (``step.milp_runs``
-    empty, e.g. the ``'full'`` series) this is a single solve at the caller's gap.
+    empty, as in an ad-hoc step) this is a single solve at the caller's gap.
     """
     def _run(mg, mga, tl, prove=None):
         return run_ftinit(

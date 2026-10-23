@@ -53,7 +53,9 @@ def test_get_init_steps_default():
     assert steps[0].ignore_mask == (1, 1, 1, 1, 1, 1, 1, 0)
     assert steps[1].how_to_use_prev == "essential"
     assert steps[1].ignore_mask == (1, 0, 0, 0, 1, 0, 0, 0)
-    assert len(get_init_steps("full")) == 1
+    full = get_init_steps("full")
+    assert len(full) == 1
+    assert full[0].milp_runs == ({"mip_gap": 0.0004, "time_limit": 10000, "abs_gap": 10.0},)
 
 
 # --------------------------------------------------------------------------- #
