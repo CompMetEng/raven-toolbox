@@ -621,8 +621,10 @@ def _collapse_singleton_annotations(entries) -> None:
     Matches writeYAMLmodel.m's MIRIAM handling: every annotation entry
     collapses to a scalar when it carries a single value, except
     ``ec-code``/``smiles`` — RAVEN's own writer marks exactly those two
-    ``forceList`` — which stay a list even for one value, since cobra and
-    geckopy read them as ``list[str]``. Normalises in place.
+    ``forceList``, which are always a list, even for one value, since cobra and
+    geckopy read them as ``list[str]``. cobra stores a single identifier as a
+    bare string, so a string under one of those keys is wrapped in a list.
+    Normalises in place.
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -631,11 +633,10 @@ def _collapse_singleton_annotations(entries) -> None:
         if not isinstance(annotation, dict):
             continue
         for key, value in annotation.items():
-            if (
-                key not in _LIST_ONLY_ANNOTATION_KEYS
-                and isinstance(value, list)
-                and len(value) == 1
-            ):
+            if key in _LIST_ONLY_ANNOTATION_KEYS:
+                if isinstance(value, str):
+                    annotation[key] = [value]
+            elif isinstance(value, list) and len(value) == 1:
                 annotation[key] = value[0]
 
 
