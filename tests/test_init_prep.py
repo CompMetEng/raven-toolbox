@@ -106,3 +106,42 @@ def test_prep_init_model_refuses_task_ids_that_are_not_text(ids):
     tasks = [Task(id=i) for i in ids]
     with pytest.raises(ValueError, match="Task ids must be text"):
         prep_init_model(_gene_model(), tasks, ext_comp="e", simplify=False, scale=False)
+
+
+def _task_met_model():
+    m = cobra.Model("t")
+    for name, comp in (("A", "e"), ("B", "c"), ("C", "c"), ("T", "c"), ("V", "c"), ("U", "c")):
+        m.add_metabolites([cobra.Metabolite(f"{name}_{comp}", name=name, compartment=comp)])
+    spec = [("EXA", (0, 1000), {"A_e": 1}), ("R1", (0, 1000), {"A_e": -1, "B_c": 1}),
+            ("R2", (-1000, 1000), {"B_c": -1, "C_c": 1}), ("R3", (0, 1000), {"B_c": -1, "T_c": 1}),
+            ("EXC", (0, 1000), {"C_c": -1})]
+    for rid, bounds, stoich in spec:
+        r = cobra.Reaction(rid)
+        m.add_reactions([r])
+        r.bounds = bounds
+        r.add_metabolites({m.metabolites.get_by_id(k): v for k, v in stoich.items()})
+    return m
+
+
+def _mets(model):
+    return [f"{m.name}[{m.compartment}]" for m in model.metabolites]
+
+
+def test_first_simplification_keeps_the_metabolites_that_tasks_name():
+    task = Task(id="MAKE_T", inputs=[("A[e]", 0.0, 1000.0)], outputs=[("T[c]", 0.0, 1000.0)],
+                equations=[("1 B[c] => 2 V[c]", 0.0, 1000.0)])
+    prep = prep_init_model(_task_met_model(), [task], ext_comp="e", scale=False)
+    assert "R3" not in prep.ref_model.reactions
+    assert _mets(prep.ref_model) == ["A[e]", "B[c]", "C[c]", "T[c]", "V[c]"]
+    assert [t.id for t in prep.tasks] == ["MAKE_T"]
+
+
+def test_first_simplification_removes_unused_metabolites_without_tasks():
+    prep = prep_init_model(_task_met_model(), [], ext_comp="e", scale=False)
+    assert _mets(prep.ref_model) == ["A[e]", "B[c]", "C[c]"]
+
+
+def test_task_metabolites_are_matched_by_exact_name_and_compartment():
+    task = Task(id="X", outputs=[("t[c]", 0.0, 1000.0), ("T[e]", 0.0, 1000.0)])
+    prep = prep_init_model(_task_met_model(), [task], ext_comp="e", scale=False)
+    assert _mets(prep.ref_model) == ["A[e]", "B[c]", "C[c]"]

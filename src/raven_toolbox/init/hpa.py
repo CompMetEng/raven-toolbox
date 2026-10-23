@@ -136,6 +136,26 @@ def parse_hpa_rna(path: str | Path) -> HPARnaData:
     return HPARnaData(df)
 
 
+def level_score_table(level_scores: Mapping[str, float]) -> dict[str, float]:
+    """Level scores keyed by upper-cased name; the first of names that differ only in case wins."""
+    table: dict[str, float] = {}
+    for name, value in level_scores.items():
+        table.setdefault(str(name).upper(), value)
+    return table
+
+
+def check_levels(df: pd.DataFrame, table: Mapping[str, float]) -> None:
+    """Raise :class:`ValueError` for a level in ``df`` that the upper-cased ``table`` lacks.
+
+    All rows count, whichever tissue is scored, as RAVEN's ``scoreModel`` checks every level of
+    ``hpaData.levels``.
+    """
+    unknown = sorted({str(level) for level in df["level"] if str(level).upper() not in table})
+    if unknown:
+        raise ValueError("There are expression level categories that do not match the level scores: "
+                         + ", ".join(unknown))
+
+
 def hpa_gene_scores(
     hpa: HPAData,
     tissue: str,
@@ -147,25 +167,27 @@ def hpa_gene_scores(
     """Numeric gene scores from HPA levels for one ``tissue`` (optionally one ``celltype``).
 
     Maps HPA's categorical levels to numbers via ``level_scores`` (default
-    :data:`HPA_LEVEL_SCORES`), comparing the level names case-insensitively as RAVEN's
-    ``scoreModel`` does. Genes absent from the tissue, or whose level is not in the
-    score table, are omitted from the output (downstream
-    :func:`score_reactions_from_genes` will then fall back to ``no_gene_score`` for any
-    reaction whose genes are all absent).
+    :data:`HPA_LEVEL_SCORES`). As in RAVEN's ``scoreModel``, level names, tissue and cell type
+    are compared case-insensitively, and when the table has several names that differ only in
+    case the first one is used. Genes absent from the tissue are omitted from the output
+    (downstream :func:`score_reactions_from_genes` then falls back to ``no_gene_score`` for any
+    reaction whose genes are all absent). A level that occurs anywhere in ``hpa`` and is not in
+    the score table raises :class:`ValueError`, whichever tissue is scored. A tissue or cell type
+    that ``hpa`` does not contain gives an empty result; RAVEN raises only when neither the HPA
+    nor the RNA data contain it, a check that needs both data sets and is not made here.
 
     When several cell types per tissue carry the gene, ``multiple_celltype`` chooses
     between ``"best"`` (max score, RAVEN default) and ``"average"`` (mean across cell types).
     """
     if multiple_celltype not in ("best", "average"):
         raise ValueError(f"multiple_celltype must be 'best' or 'average'; got {multiple_celltype!r}")
-    scores_table = {str(k).upper(): v
-                    for k, v in (HPA_LEVEL_SCORES if level_scores is None else level_scores).items()}
+    scores_table = level_score_table(HPA_LEVEL_SCORES if level_scores is None else level_scores)
+    check_levels(hpa.df, scores_table)
 
-    sub = hpa.df.loc[hpa.df["tissue"] == tissue].copy()
-    if celltype is not None:
-        sub = sub.loc[sub["celltype"] == celltype]
-    sub["score"] = sub["level"].map(lambda level: scores_table.get(str(level).upper())).astype(float)
-    sub = sub.dropna(subset=["score"])  # unknown HPA levels drop out (omitted, not -inf)
+    sub = hpa.df.loc[hpa.df["tissue"].astype(str).str.upper() == tissue.upper()].copy()
+    if celltype:
+        sub = sub.loc[sub["celltype"].astype(str).str.upper() == celltype.upper()]
+    sub["score"] = sub["level"].map(lambda level: scores_table[str(level).upper()]).astype(float)
     if sub.empty:
         return {}
     agg = {"best": "max", "average": "mean"}[multiple_celltype]

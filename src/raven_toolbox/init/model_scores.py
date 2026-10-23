@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import cobra
 import numpy as np
 
-from raven_toolbox.init.hpa import HPAData, HPARnaData
+from raven_toolbox.init.hpa import HPAData, HPARnaData, check_levels, level_score_table
 from raven_toolbox.init.score import gene_scores_from_expression, score_reactions_from_genes
 
 #: RAVEN's ``hpaLevelScores`` (compared case-insensitively).
@@ -91,10 +91,8 @@ def _hpa_gene_scores(
     if celltype:
         sel &= df["celltype"].str.upper() == celltype.upper()
     sub = df.loc[sel & df["gene_id"].isin(model_genes)]
-    table = {k.upper(): v for k, v in level_scores.items()}
-    unknown = sorted({lv for lv in sub["level"] if str(lv).upper() not in table})
-    if unknown:
-        raise ValueError(f"expression level categories {unknown} do not match the HPA level scores")
+    table = level_score_table(level_scores)
+    check_levels(df, table)
     scored = sub.assign(score=[table[str(lv).upper()] for lv in sub["level"]])
     agg = {"max": "max", "average": "mean"}[multiple_cell_scoring]
     return scored.groupby("gene_id")["score"].agg(agg).to_dict()

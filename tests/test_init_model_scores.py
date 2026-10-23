@@ -83,6 +83,19 @@ def test_one_tissue_needs_a_threshold():
     assert score_for_init(_model(), None, t, "liver")[1]["G1"] == 0.0
 
 
+def test_unknown_hpa_level_in_another_tissue_is_an_error():
+    rows = [["G1", "g1", "liver", "", "High", ""], ["G1", "g1", "kidney", "", "Mixed", ""]]
+    with pytest.raises(ValueError):
+        score_for_init(_model(), _hpa(rows), None, "liver")
+
+
+def test_hpa_levels_that_differ_in_case_use_the_first_table_entry():
+    rows = [["G1", "g1", "liver", "", "High", ""]]
+    scores = score_for_init(_model(), _hpa(rows), None, "liver",
+                            hpa_level_scores={"High": 1.0, "HIGH": 9.0})[1]
+    assert scores["G1"] == 1.0
+
+
 def test_unknown_hpa_level_is_an_error():
     with pytest.raises(ValueError):
         score_for_init(_model(), _hpa([["G1", "g1", "liver", "", "Mixed", ""]]), None, "liver")

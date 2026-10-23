@@ -183,6 +183,44 @@ def _restore_reactions(model: cobra.Model, saved: dict) -> None:
             rxn.objective_coefficient = objective
 
 
+def _equation_metabolites(equation: str) -> list[str]:
+    """Metabolite names of a task equation, as RAVEN ``parseRxnEqu`` reads them.
+
+    The equation is split at `` <=> ``, `` => `` and `` + ``; empty pieces are dropped, and a
+    leading number followed by a space is taken as the coefficient and removed.
+    """
+    text = equation.replace(" <=> ", "\u20ac").replace(" => ", "\u20ac").replace(" + ", "\u20ac").strip()
+    names: list[str] = []
+    for candidate in text.split("\u20ac"):
+        if not candidate:
+            continue
+        space = candidate.find(" ")
+        name = candidate
+        if space >= 0 and _is_number(candidate[:space]):
+            name = candidate[space + 1:]
+        names.append(name.strip())
+    return names
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _task_metabolite_names(tasks: Iterable[Task]) -> set[str]:
+    """``name[compartment]`` strings named by the inputs, outputs and equations of ``tasks``."""
+    names: set[str] = set()
+    for task in tasks:
+        names.update(token for token, _, _ in task.inputs)
+        names.update(token for token, _, _ in task.outputs)
+        for equation, _, _ in task.equations:
+            names.update(_equation_metabolites(equation))
+    return names
+
+
 def _orient_forward(rxn: cobra.Reaction, direction: int) -> None:
     """Make ``rxn`` carry flux only in its forced direction (irreversible forward).
 
@@ -238,6 +276,11 @@ def prep_init_model(
     passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
     (set that separately if you want them faster too).
 
+    The metabolites that tasks name (inputs, outputs and equations, matched by exact
+    ``name[compartment]``) stay in the reference model even when the first simplification leaves
+    them without a reaction, so that the tasks can still be checked; RAVEN ``prepINITModel`` keeps
+    them the same way.
+
     With the first simplification, every gene left without a reaction is removed from the
     reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
     genes that had no reaction in the template. Raises :class:`ValueError` when two tasks
@@ -266,8 +309,23 @@ def prep_init_model(
         # flux — zero-interval, topological dead-ends, then FVA-blocked (deleteMinMax).
         # Without the FVA-blocked and zero-interval passes the MILP runs on a ~10% larger
         # model and reaches a different (bypass-heavy) optimum.
+        # prepINITModel keeps the metabolites that tasks name even when no reaction uses them
+        # any more (they are matched by exact name[compartment]) and removes the other unused ones.
+        template_order = {m.id: i for i, m in enumerate(ref_model.metabolites)}
+        task_met_names = _task_metabolite_names(tasks) if tasks is not None else set()
+        named_mets = [m for m in ref_model.metabolites
+                      if f"{m.name}[{m.compartment}]" in task_met_names]
         simplify_model(ref_model, delete_zero_interval=True, delete_dead_end=True,
                        delete_no_flux=True)
+        lost = [m for m in named_mets if m.id not in ref_model.metabolites]
+        if lost:
+            restored = [cobra.Metabolite(m.id, formula=m.formula, name=m.name, charge=m.charge,
+                                         compartment=m.compartment) for m in lost]
+            for new, old in zip(restored, lost, strict=True):
+                new.annotation = dict(old.annotation)
+                new.notes = dict(old.notes)
+            ref_model.add_metabolites(restored)
+            ref_model.metabolites.sort(key=lambda m: template_order[m.id])
         # prepINITModel removes the reactions with removeReactions(model, rxns, false, true),
         # whose last argument removes every gene that no reaction uses.
         for gene in [g for g in ref_model.genes if not g.reactions]:

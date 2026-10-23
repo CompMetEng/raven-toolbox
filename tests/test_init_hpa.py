@@ -27,7 +27,7 @@ def hpa_tsv(tmp_path):
         ENSG1\tGeneA\tkidney\ttubular cells\tNot detected\tApproved
         ENSG2\tGeneB\tliver\thepatocytes\tMedium\tSupported
         ENSG2\tGeneB\tkidney\ttubular cells\tHigh\tEnhanced
-        ENSG3\tGeneC\tliver\thepatocytes\tMixed\tUncertain
+        ENSG3\tGeneC\tliver\thepatocytes\tNot detected\tUncertain
     """))
     return p
 
@@ -131,10 +131,14 @@ def test_hpa_level_none_scores_minus_eight(tmp_path):
     assert hpa_gene_scores(parse_hpa(p), "liver") == {"ENSG9": -8.0}
 
 
-def test_hpa_gene_scores_unknown_level_omitted(hpa_tsv):
-    """A 'Mixed' / 'N/A' level is not in HPA_LEVEL_SCORES and is dropped (not -inf)."""
-    g = hpa_gene_scores(parse_hpa(hpa_tsv), "liver")
-    assert "ENSG3" not in g    # the only ENSG3 row in liver has level='Mixed'
+def test_hpa_gene_scores_refuses_a_level_missing_from_the_table(tmp_path):
+    """Any level in the data that the table lacks raises, also when the scored tissue does not use it."""
+    p = tmp_path / "hpa_mixed.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "G1\tA\tliver\thepatocytes\tHigh\tApproved\n"
+                 "G3\tC\tkidney\ttubules\tMixed\tUncertain\n")
+    with pytest.raises(ValueError, match="Mixed"):
+        hpa_gene_scores(parse_hpa(p), "liver")
 
 
 def test_hpa_gene_scores_unknown_celltype_returns_empty(hpa_tsv):
@@ -146,7 +150,7 @@ def test_hpa_gene_scores_custom_level_table(hpa_tsv):
     """``level_scores`` overrides the default mapping."""
     g = hpa_gene_scores(parse_hpa(hpa_tsv), "liver",
                         level_scores={"High": 1.0, "Medium": 0.5, "Low": 0.1, "Not detected": -1.0})
-    assert g == {"ENSG1": 1.0, "ENSG2": 0.5}
+    assert g == {"ENSG1": 1.0, "ENSG2": 0.5, "ENSG3": -1.0}
 
 
 def test_hpa_gene_scores_compare_level_names_case_insensitively(tmp_path):
@@ -154,11 +158,26 @@ def test_hpa_gene_scores_compare_level_names_case_insensitively(tmp_path):
     p = tmp_path / "hpa_case.tsv"
     p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
                  "G1\tA\tliver\thepatocytes\tstrong\tApproved\n"
-                 "G2\tB\tliver\thepatocytes\tNOT DETECTED\tApproved\n"
-                 "G3\tC\tliver\thepatocytes\tMixed\tApproved\n")
+                 "G2\tB\tliver\thepatocytes\tNOT DETECTED\tApproved\n")
     hpa = parse_hpa(p)
     assert hpa_gene_scores(hpa, "liver") == {"G1": 20.0, "G2": -8.0}
-    assert hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0}) == {"G1": 1.0}
+    assert hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0, "not detected": 2.0}) == {"G1": 1.0, "G2": 2.0}
+    with pytest.raises(ValueError, match="NOT DETECTED"):
+        hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0})
+
+
+def test_hpa_gene_scores_use_the_first_of_level_names_that_differ_in_case(hpa_tsv):
+    table = {"High": 1.0, "HIGH": 2.0, "Medium": 3.0, "Low": 4.0, "Not detected": 5.0}
+    assert hpa_gene_scores(parse_hpa(hpa_tsv), "liver", level_scores=table)["ENSG1"] == 4.0
+    table = {"HIGH": 2.0, "High": 1.0, "Medium": 3.0, "Low": 0.5, "Not detected": 5.0}
+    assert hpa_gene_scores(parse_hpa(hpa_tsv), "liver", level_scores=table)["ENSG1"] == 2.0
+
+
+def test_hpa_gene_scores_match_tissue_and_celltype_case_insensitively(hpa_tsv):
+    hpa = parse_hpa(hpa_tsv)
+    assert hpa_gene_scores(hpa, "LIVER", celltype="Bile Duct Cells") == {"ENSG1": 10.0}
+    assert hpa_gene_scores(hpa, "Liver") == hpa_gene_scores(hpa, "liver")
+    assert hpa_gene_scores(hpa, "liver", celltype="") == hpa_gene_scores(hpa, "liver")
 
 
 def test_rna_gene_scores_against_per_gene_mean(rna_tsv):
