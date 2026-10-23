@@ -22,6 +22,7 @@ from pathlib import Path
 
 import cobra
 import libsbml
+import numpy as np
 from cobra.core import Group
 
 from raven_toolbox.io.excel import _equation, export_to_excel
@@ -287,11 +288,13 @@ def export_for_git(
     Raises
     ------
     TypeError
-        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool``.
+        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool`` or ``numpy.bool_``.
     """
     for name, flag in (("main_branch_flag", main_branch_flag), ("sub_dirs", sub_dirs)):
-        if not isinstance(flag, bool):
-            raise TypeError(f"{name} must be a bool, got {type(flag).__name__}")
+        if not isinstance(flag, (bool, np.bool_)):
+            raise TypeError(
+                f"{name} must be a bool or numpy.bool_, got {type(flag).__module__}.{type(flag).__qualname__}"
+            )
     if main_branch_flag:
         _check_main_branch()
     formats = list(formats)

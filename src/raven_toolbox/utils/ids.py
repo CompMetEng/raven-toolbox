@@ -28,9 +28,14 @@ def generate_new_ids(
     """Generate ``quantity`` new ids, sequentially numbered after the model's own.
 
     Existing ids are filtered to those starting with ``prefix`` and the prefix is
-    stripped. When any remainder reads as a finite whole number (as MATLAB ``str2double``; ``inf``,
-    ``1e400`` and ``2.5`` do not count), the
-    largest number is the starting point and its text length is the width. When none
+    stripped. When any remainder reads as a finite whole number, the largest number is the
+    starting point and its text length is the width. A remainder is read as a plain decimal
+    number with an optional sign, fraction and ``e`` exponent; ``inf``, ``nan``, ``2.5``,
+    ``1e400`` and text do not count. MATLAB ``str2double`` reads more as numbers than this
+    does (hexadecimal ``0x10``, a thousands separator ``1,000``, complex ``3+0i``, text
+    with embedded blanks), so ids with such suffixes are numbered differently by
+    ``generateNewIds``. Very large whole numbers are counted exactly here, while
+    ``generateNewIds`` rounds them to a double. When none
     does, the width is the length of the last remainder in string order and numbering
     starts at 1. ``num_length`` applies only when no id has the prefix. This is
     ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give ``r_11``, and ``r_0003``
@@ -67,8 +72,8 @@ _NUMBER = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?|[+-]?i
 
 
 def _str2double(text: str) -> float:
-    """The numbers of MATLAB ``str2double`` that appear in ids: signed decimals with an
-    ``e`` exponent, and ``inf``. Other text, including a ``d`` exponent, is NaN."""
+    """Signed decimal numbers with an ``e`` exponent, and ``inf``, as a float. Other text,
+    including a ``d`` exponent, hexadecimal and a thousands separator, is NaN."""
     text = text.strip()
     if not _NUMBER.fullmatch(text):
         return math.nan

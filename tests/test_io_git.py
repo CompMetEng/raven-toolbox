@@ -376,3 +376,17 @@ def test_main_branch_check_passes_with_project_name_but_other_layout(tmp_path):
 def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
     out = _run_check(_checkout(tmp_path, layout=True, name="raven-toolbox"))
     assert out.returncode != 0 and "feature" in out.stderr
+
+
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+def test_export_for_git_accepts_numpy_booleans(model, tmp_path, flag):
+    import numpy as np
+
+    kwargs = {"main_branch_flag": False, "sub_dirs": False, flag: np.False_}
+    export_for_git(model, tmp_path, formats=("yml",), **kwargs)
+    assert (tmp_path / "model.yml").exists()
+
+
+def test_export_for_git_flag_error_names_the_type(model, tmp_path):
+    with pytest.raises(TypeError, match=r"got builtins\.str"):
+        export_for_git(model, tmp_path, formats=("yml",), sub_dirs="no")

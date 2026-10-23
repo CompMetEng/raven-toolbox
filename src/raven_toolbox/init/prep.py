@@ -241,10 +241,13 @@ def prep_init_model(
     With the first simplification, every gene left without a reaction is removed from the
     reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
     genes that had no reaction in the template. Raises :class:`ValueError` when two tasks
-    share an id.
+    share an id or a task id is not text.
     """
     if tasks is not None:
         tasks = list(tasks)
+        bad = [t.id for t in tasks if not isinstance(t.id, str)]
+        if bad:
+            raise ValueError(f"Task ids must be text, got {bad[0]!r} of type {type(bad[0]).__name__}")
         counts: dict[str, int] = {}
         for t in tasks:
             counts[t.id] = counts.get(t.id, 0) + 1

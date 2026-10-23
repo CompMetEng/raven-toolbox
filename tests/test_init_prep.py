@@ -99,3 +99,10 @@ def test_prep_init_model_refuses_duplicate_task_ids():
     tasks = [Task(id="T1"), Task(id="T2"), Task(id="T1"), Task(id="T2"), Task(id="T3")]
     with pytest.raises(ValueError, match="T1, T2"):
         prep_init_model(_gene_model(), tasks, ext_comp="e", simplify=False, scale=False)
+
+
+@pytest.mark.parametrize("ids", [[None, None], [None, "T1"], [1, 1]])
+def test_prep_init_model_refuses_task_ids_that_are_not_text(ids):
+    tasks = [Task(id=i) for i in ids]
+    with pytest.raises(ValueError, match="Task ids must be text"):
+        prep_init_model(_gene_model(), tasks, ext_comp="e", simplify=False, scale=False)

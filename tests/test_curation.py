@@ -552,3 +552,163 @@ def test_new_reaction_bounds_with_an_empty_cell():
     openub = next(r for r in m.reactions if r.name == "openub")
     assert bounded.bounds == (-5, 7)
     assert openub.lower_bound == 0 and openub.upper_bound == float("inf")
+
+
+# --- MIRIAM, zero fill, text cells ------------------------------------
+
+def _annotated_model() -> cobra.Model:
+    m = _base_model()
+    m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] = "C1"
+    m.metabolites.get_by_id("s_0002").annotation["kegg.compound"] = "C2"
+    m.genes.get_by_id("YAL001C").annotation["ncbigene"] = "11"
+    m.reactions.get_by_id("r_0001").annotation["kegg.reaction"] = "R1"
+    return m
+
+
+def _kegg_mets_table(first, second):
+    return pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "kegg.compound": first},
+        {"metNames": "ADP", "comps": "c", "kegg.compound": second},
+    ])
+
+
+@pytest.mark.parametrize("overwrite, kept", [(True, False), (False, True)])
+def test_an_empty_miriam_cell_removes_the_namespace_unless_kept(overwrite, kept):
+    m = _annotated_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_kegg_mets_table("", "C9"), overwrite_with_empty=overwrite)
+    atp, adp = m.metabolites.get_by_id("s_0001"), m.metabolites.get_by_id("s_0002")
+    assert adp.annotation["kegg.compound"] == "C9"
+    assert ("kegg.compound" in atp.annotation) is kept
+
+
+@pytest.mark.parametrize("overwrite", [True, False])
+def test_a_miriam_column_without_any_value_is_not_written(overwrite):
+    m = _annotated_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_kegg_mets_table("", ""), overwrite_with_empty=overwrite)
+    assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"
+    assert m.metabolites.get_by_id("s_0002").annotation["kegg.compound"] == "C2"
+
+
+def test_a_miriam_column_counts_only_the_existing_entities():
+    m = _annotated_model()
+    df = pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "kegg.compound": ""},
+        {"metNames": "NADH", "comps": "c", "kegg.compound": "C4"},
+    ])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df, met_id_prefix="s_")
+    assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"
+    assert m.metabolites.get_by_id("s_0004").annotation["kegg.compound"] == "C4"
+
+
+def test_an_empty_gene_miriam_cell_removes_the_namespace():
+    m = _annotated_model()
+    from cobra.core.gene import Gene
+
+    m.genes.append(Gene("YAL002W"))
+    m.genes.get_by_id("YAL002W").annotation["ncbigene"] = "22"
+    df = pd.DataFrame([{"genes": "YAL001C", "ncbigene": ""}, {"genes": "YAL002W", "ncbigene": "33"}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, genes_df=df)
+    assert "ncbigene" not in m.genes.get_by_id("YAL001C").annotation
+    assert m.genes.get_by_id("YAL002W").annotation["ncbigene"] == "33"
+
+
+def test_an_empty_reaction_miriam_cell_removes_the_namespace():
+    m = _annotated_model()
+    atp, adp = m.metabolites.get_by_id("s_0001"), m.metabolites.get_by_id("s_0002")
+    reverse = cobra.Reaction("r_0002", name="ATP synthesis")
+    m.add_reactions([reverse])
+    reverse.add_metabolites({atp: 1, adp: -1})
+    reverse.annotation["kegg.reaction"] = "R2"
+    rxns_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "kegg.reaction": "", "metacyc": "RXN-1"},
+        {"rxnNames": "ATP synthesis", "kegg.reaction": "R5", "metacyc": ""},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "metNames": "ATP", "comps": "c", "coefficient": -1.0},
+        {"rxnNames": "ATP hydrolysis", "metNames": "ADP", "comps": "c", "coefficient": 1.0},
+        {"rxnNames": "ATP synthesis", "metNames": "ATP", "comps": "c", "coefficient": 1.0},
+        {"rxnNames": "ATP synthesis", "metNames": "ADP", "comps": "c", "coefficient": -1.0},
+    ])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    hydrolysis = m.reactions.get_by_id("r_0001")
+    assert "kegg.reaction" not in hydrolysis.annotation
+    assert hydrolysis.annotation["metacyc"] == "RXN-1"
+    assert reverse.annotation["kegg.reaction"] == "R5"
+    assert "metacyc" not in reverse.annotation
+
+
+def test_a_new_metabolite_without_a_charge_takes_zero_when_the_column_has_a_value():
+    m = _base_model()
+    df = pd.DataFrame([
+        {"metNames": "NADH", "comps": "c", "charge": float("nan")},
+        {"metNames": "NAD", "comps": "c", "charge": -1.0},
+    ])
+    batch_curate(m, mets_df=df, met_id_prefix="s_")
+    charges = {met.name: met.charge for met in m.metabolites if met.name in ("NADH", "NAD")}
+    assert charges == {"NADH": 0, "NAD": -1}
+
+
+def test_a_new_reaction_without_a_confidence_score_takes_zero_when_the_column_has_a_value():
+    m = _base_model()
+    rxns_df = pd.DataFrame([
+        {"rxnNames": "scored", "rxnConfidenceScores": 3},
+        {"rxnNames": "unscored", "rxnConfidenceScores": float("nan")},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "scored", "metNames": "ATP", "comps": "c", "coefficient": -2.0},
+        {"rxnNames": "scored", "metNames": "ADP", "comps": "c", "coefficient": 3.0},
+        {"rxnNames": "unscored", "metNames": "ATP", "comps": "c", "coefficient": -3.0},
+        {"rxnNames": "unscored", "metNames": "ADP", "comps": "c", "coefficient": 5.0},
+    ])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    scores = {r.name: r.notes.get("confidence_score") for r in m.reactions if r.name in ("scored", "unscored")}
+    assert scores == {"scored": 3, "unscored": 0}
+
+
+def test_tsv_cells_such_as_na_stay_text_and_numbers_stay_as_written(tmp_path):
+    m = _base_model()
+    genes = tmp_path / "genes.tsv"
+    genes.write_text("genes\tgeneShortNames\tncbigene\nYAL001C\tNA\t22\n")
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate_from_tsv(m, genes_tsv=genes)
+    gene = m.genes.get_by_id("YAL001C")
+    assert gene.name == "NA"
+    assert gene.annotation["ncbigene"] == "22"
+
+
+def test_tsv_blank_cells_are_empty(tmp_path):
+    m = _base_model()
+    genes = tmp_path / "genes.tsv"
+    genes.write_text("genes\tgeneShortNames\nYAL001C\t  \n")
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate_from_tsv(m, genes_tsv=genes)
+    assert m.genes.get_by_id("YAL001C").name == ""
+
+
+def test_nullable_pandas_dtypes_are_read_as_empty():
+    m = _base_model()
+    df = pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "charge": pd.NA},
+        {"metNames": "ADP", "comps": "c", "charge": -2},
+    ]).convert_dtypes()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df)
+    assert m.metabolites.get_by_id("s_0001").charge == 0
+    assert m.metabolites.get_by_id("s_0002").charge == -2
+
+
+@pytest.mark.parametrize("value", ["false", 0, 1, None, "True"])
+def test_overwrite_with_empty_must_be_a_bool(value):
+    with pytest.raises(TypeError, match="overwrite_with_empty"):
+        batch_curate(_base_model(), overwrite_with_empty=value)
+
+
+def test_overwrite_with_empty_accepts_a_numpy_bool():
+    import numpy as np
+
+    batch_curate(_base_model(), overwrite_with_empty=np.False_)

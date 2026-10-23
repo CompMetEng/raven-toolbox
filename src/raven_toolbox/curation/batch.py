@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import cobra
+import numpy as np
 import pandas as pd
 
 from raven_toolbox.utils.ids import next_ids
@@ -119,17 +120,26 @@ def batch_curate(
         How an empty cell is applied to an entity that already exists in the model, as
         ``curateModelFromTables``'s ``overwriteWithEmpty``. With True (default) a column
         present in the table overwrites the stored value, so an empty cell clears it: formula,
-        gene short name, reaction name, subsystem, EC code, notes and InchI become empty. For
+        gene short name, reaction name, subsystem, EC code, notes and InChI become empty. For
         charge and confidence score an empty cell becomes 0 when at least one cell of the
-        column has a value, and a column without any value is not written. With False an
-        empty cell leaves the stored value as it is. Independent of this option, an empty
-        cell never changes a gene rule, a lower or upper bound (no bound given) or a MIRIAM
-        annotation, and a new entity takes only the cells that have a value.
+        column has a value, and a column without any value is not written. For a MIRIAM
+        column an empty cell removes the namespace from the existing entity when at least
+        one existing entity of the table has a value in that column. With False an empty cell
+        leaves the stored value as it is. Independent of this option, an empty cell never
+        changes a gene rule or a lower or upper bound (no bound given). A new entity takes
+        the cells that have a value; an empty charge or confidence score is 0 when the column
+        has a value in some row of the table.
+        Must be a ``bool`` or ``numpy.bool_``, otherwise :class:`TypeError` is raised.
 
     Returns
     -------
     A :class:`CurationResult` summarising the changes.
     """
+    if not isinstance(overwrite_with_empty, (bool, np.bool_)):
+        raise TypeError(
+            f"overwrite_with_empty must be a bool, got {type(overwrite_with_empty).__name__}"
+        )
+    overwrite_with_empty = bool(overwrite_with_empty)
     result = CurationResult()
 
     if mets_df is not None:
@@ -171,12 +181,14 @@ def batch_curate_from_tsv(
 ) -> CurationResult:
     """File-path convenience wrapper for :func:`batch_curate`.
 
-    Each path is optional. TSVs are read with pandas' default
-    ``read_csv(sep='\\t')``; empty cells become ``NaN`` (not the
-    empty string), which the engine treats as "skip this field".
+    Each path is optional. TSVs are read as text (``dtype=str``) without pandas' conversion of
+    strings such as ``NA`` or ``null`` to missing values, so a cell is empty only when it has
+    no text or only blanks; ``22`` stays ``22``.
     """
     def _read(path):
-        return pd.read_csv(path, sep="\t") if path is not None else None
+        if path is None:
+            return None
+        return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
 
     return batch_curate(
         model,
@@ -204,18 +216,23 @@ def _apply_mets(
     name_index = _name_compartment_index(model)
 
     new_rows: list[pd.Series] = []
+    updates: list[tuple[cobra.Metabolite, pd.Series]] = []
     for _, row in df.iterrows():
         name = row["metNames"]
         comp = row["comps"]
         existing = name_index.get((name, comp))
         if existing is not None:
-            _update_metabolite(existing, row, miriam_cols, overwrite_with_empty, any_charge)
-            result.updated_metabolites.append(existing.id)
+            updates.append((existing, row))
         else:
             new_rows.append(row)
 
+    active = _miriam_with_values(miriam_cols, [r for _, r in updates])
+    for existing, row in updates:
+        _update_metabolite(existing, row, miriam_cols, active, overwrite_with_empty, any_charge)
+        result.updated_metabolites.append(existing.id)
+
     if new_rows:
-        new_mets = _build_new_metabolites(model, new_rows, miriam_cols, id_prefix)
+        new_mets = _build_new_metabolites(model, new_rows, miriam_cols, id_prefix, any_charge)
         model.add_metabolites(new_mets)
         result.added_metabolites.extend(m.id for m in new_mets)
 
@@ -257,6 +274,7 @@ def _update_metabolite(
     met: cobra.Metabolite,
     row: pd.Series,
     miriam_cols: list[str],
+    active_miriam: set[str],
     overwrite_with_empty: bool,
     any_charge: bool,
 ) -> None:
@@ -265,7 +283,7 @@ def _update_metabolite(
     if _is_written(row, "charge", overwrite_with_empty) and any_charge:
         met.charge = _coerce_int(row["charge"]) if _has_value(row["charge"]) else 0
     _apply_met_notes(met, row, overwrite_with_empty)
-    _apply_miriam(met, row, miriam_cols)
+    _apply_miriam(met, row, miriam_cols, active_miriam, overwrite_with_empty)
 
 
 def _build_new_metabolites(
@@ -273,6 +291,7 @@ def _build_new_metabolites(
     rows: list[pd.Series],
     miriam_cols: list[str],
     id_prefix: str,
+    any_charge: bool,
 ) -> list[cobra.Metabolite]:
     ids = _generate_ids(model.metabolites, id_prefix, len(rows))
     new_mets: list[cobra.Metabolite] = []
@@ -286,6 +305,8 @@ def _build_new_metabolites(
             met.formula = str(row["formula"])
         if _has_value(row.get("charge")):
             met.charge = _coerce_int(row["charge"])
+        elif any_charge:
+            met.charge = 0
         _apply_met_notes(met, row)
         _apply_miriam(met, row, miriam_cols)
         new_mets.append(met)
@@ -301,14 +322,19 @@ def _apply_genes(
     existing_genes = {g.id: g for g in model.genes}
 
     new_rows: list[pd.Series] = []
+    updates: list[tuple[cobra.Gene, pd.Series]] = []
     for _, row in df.iterrows():
         gid = str(row["genes"])
         existing = existing_genes.get(gid)
         if existing is not None:
-            _update_gene(existing, row, miriam_cols, overwrite_with_empty)
-            result.updated_genes.append(gid)
+            updates.append((existing, row))
         else:
             new_rows.append(row)
+
+    active = _miriam_with_values(miriam_cols, [r for _, r in updates])
+    for existing, row in updates:
+        _update_gene(existing, row, miriam_cols, active, overwrite_with_empty)
+        result.updated_genes.append(existing.id)
 
     if new_rows:
         # cobrapy doesn't have a direct "add a free-standing gene" API;
@@ -333,10 +359,12 @@ def _apply_genes(
         )
 
 
-def _update_gene(gene, row: pd.Series, miriam_cols: list[str], overwrite_with_empty: bool) -> None:
+def _update_gene(
+    gene, row: pd.Series, miriam_cols: list[str], active_miriam: set[str], overwrite_with_empty: bool
+) -> None:
     if _is_written(row, "geneShortNames", overwrite_with_empty):
         gene.name = _text(row["geneShortNames"])
-    _apply_miriam(gene, row, miriam_cols)
+    _apply_miriam(gene, row, miriam_cols, active_miriam, overwrite_with_empty)
 
 
 # --- reactions --------------------------------------------------------
@@ -365,6 +393,7 @@ def _apply_reactions(
     }
 
     new_rows: list[tuple[pd.Series, dict[cobra.Metabolite, float]]] = []
+    updates: list[tuple[cobra.Reaction, pd.Series]] = []
     for _, row in rxns_df.iterrows():
         rxn_name = row["rxnNames"]
         key = _reaction_key(row, by_index)
@@ -377,13 +406,17 @@ def _apply_reactions(
         sig = _stoich_signature_from_dict(stoich)
         existing = by_signature.get(sig)
         if existing is not None:
-            _update_reaction(existing, row, miriam_cols, overwrite_with_empty, any_score)
-            result.updated_reactions.append(existing.id)
+            updates.append((existing, row))
         else:
             new_rows.append((row, stoich))
 
+    active = _miriam_with_values(miriam_cols, [r for _, r in updates])
+    for existing, row in updates:
+        _update_reaction(existing, row, miriam_cols, active, overwrite_with_empty, any_score)
+        result.updated_reactions.append(existing.id)
+
     if new_rows:
-        new_rxns = _build_new_reactions(model, new_rows, miriam_cols, id_prefix)
+        new_rxns = _build_new_reactions(model, new_rows, miriam_cols, id_prefix, any_score)
         model.add_reactions(new_rxns)
         result.added_reactions.extend(r.id for r in new_rxns)
 
@@ -459,6 +492,7 @@ def _update_reaction(
     rxn: cobra.Reaction,
     row: pd.Series,
     miriam_cols: list[str],
+    active_miriam: set[str],
     overwrite_with_empty: bool,
     any_score: bool,
 ) -> None:
@@ -478,7 +512,7 @@ def _update_reaction(
         else:
             rxn.annotation.pop("ec-code", None)
     _apply_rxn_notes(rxn, row, overwrite_with_empty, any_score)
-    _apply_miriam(rxn, row, miriam_cols)
+    _apply_miriam(rxn, row, miriam_cols, active_miriam, overwrite_with_empty)
 
 
 def _stored_default_ub(model: cobra.Model) -> float:
@@ -504,6 +538,7 @@ def _build_new_reactions(
     rows: list[tuple[pd.Series, dict[cobra.Metabolite, float]]],
     miriam_cols: list[str],
     id_prefix: str,
+    any_score: bool,
 ) -> list[cobra.Reaction]:
     ids = _generate_ids(model.reactions, id_prefix, len(rows))
     default_ub = _stored_default_ub(model)
@@ -523,6 +558,8 @@ def _build_new_reactions(
         if _has_value(row.get("eccodes")):
             rxn.annotation["ec-code"] = str(row["eccodes"])
         _apply_rxn_notes(rxn, row)
+        if any_score and not _has_value(row.get("rxnConfidenceScores")):
+            rxn.notes["confidence_score"] = 0
         _apply_miriam(rxn, row, miriam_cols)
         new_rxns.append(rxn)
     return new_rxns
@@ -564,11 +601,25 @@ def _apply_rxn_notes(
         rxn.notes["confidence_score"] = int(score) if score.is_integer() else score
 
 
-def _apply_miriam(entity, row: pd.Series, miriam_cols: list[str]) -> None:
+def _miriam_with_values(miriam_cols: list[str], rows: list[pd.Series]) -> set[str]:
+    """The MIRIAM columns with a value in at least one of ``rows`` (the existing entities of
+    the table); an empty cell of such a column removes the namespace from its entity."""
+    return {c for c in miriam_cols if any(_has_value(r.get(c)) for r in rows)}
+
+
+def _apply_miriam(
+    entity,
+    row: pd.Series,
+    miriam_cols: list[str],
+    active_miriam: frozenset[str] | set[str] = frozenset(),
+    overwrite_with_empty: bool = False,
+) -> None:
     for col in miriam_cols:
         value = row.get(col)
         if _has_value(value):
             entity.annotation[col] = str(value).strip()
+        elif overwrite_with_empty and col in active_miriam:
+            entity.annotation.pop(col, None)
 
 
 def _is_written(row: pd.Series, col: str, overwrite_with_empty: bool) -> bool:
@@ -592,9 +643,9 @@ def _set_note(notes: dict, key: str, value) -> None:
 
 def _has_value(v) -> bool:
     """Return True if ``v`` is a non-empty, non-NaN cell value."""
-    if v is None:
+    if v is None or v is pd.NA or v is pd.NaT:
         return False
-    if isinstance(v, float) and v != v:  # NaN
+    if isinstance(v, (float, np.floating)) and v != v:  # NaN
         return False
     if isinstance(v, str) and v.strip() == "":
         return False
