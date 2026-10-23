@@ -225,6 +225,9 @@ def test_new_reaction_without_ub_takes_the_stored_default_ub():
     stored = curate(m)
     assert stored.upper_bound == 1000.0
     assert stored.lower_bound == float("-inf")
+    annotated = _base_model()
+    annotated.annotation["defaultUB"] = 500.0
+    assert curate(annotated).upper_bound == 500.0
     both = _base_model()
     both.notes["metaData"] = {"defaultLB": -1000.0, "defaultUB": 1000.0}
     new = curate(both)
