@@ -263,7 +263,10 @@ def export_for_git(
         ``"xlsx"``, ``"txt"`` (default: all five, as RAVEN's ``exportForGit``).
     main_branch_flag
         If True, raise ``RuntimeError`` when raven_toolbox runs from a git checkout that is not
-        on ``main`` or ``master`` (default False), as RAVEN's ``mainBranchFlag``.
+        on ``main`` or ``master`` (default False), as RAVEN's ``mainBranchFlag``. The check
+        passes when the package is not in a raven_toolbox checkout (for example a pip
+        installation) and when git is missing or refuses the checkout (``OSError`` or a
+        failing ``git`` call such as ``safe.directory``). GECKO is not checked.
     sub_dirs
         If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
         layout); otherwise all files go directly in ``path``.

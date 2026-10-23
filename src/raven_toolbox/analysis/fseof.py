@@ -1,22 +1,19 @@
-"""Flux Scanning based on Enforced Objective Flux — FSEOF (port + redesign).
+"""Flux Scanning based on Enforced Objective Flux (FSEOF).
 
 FSEOF (Choi et al., Appl Environ Microbiol 2010) finds metabolic-engineering targets
 for over-producing a metabolite: enforce an increasing flux toward the target product
-while optimising growth, and watch how each reaction's flux responds. This is a port
-of RAVEN's ``FSEOF`` with a substantially richer, more robust output (RAVEN's
-weaknesses are noted in IMPROVEMENTS, FS1–FS4):
+while optimising growth, and watch how each reaction's flux responds. This follows
+RAVEN's ``FSEOF`` and returns tables instead of a printed list:
 
-* **Robust trend, not strict monotonicity.** Each reaction's flux is regressed against
-  the enforced product flux across the scan; the **slope** is the response and the
-  **correlation** (|r|) is a quality score. A reaction is a target if it tracks the
-  product cleanly (|r| ≥ ``correlation_threshold``), so one noisy step from LP
-  alternative optima does not discard it (and pFBA per step keeps the scan stable).
-* **Direction classification.** Targets are labelled ``amplify`` (|flux|
-  rises with the product → over-express), ``knockdown`` (|flux| falls), or ``knockout``
-  (|flux| → ~0 → delete), like the Amplify, Knockdown and Knockout labels of RAVEN's
-  ``FSEOF``.
-* **Gene-level view** via :attr:`FSEOFResult.gene_targets`, and the full flux scan is
-  retained in :attr:`FSEOFResult.scan` — all as DataFrames, not a printed TSV.
+* **Trend of the absolute flux.** Each reaction's absolute flux is regressed against the
+  enforced product flux across the scan; the **slope** is the response and the
+  **correlation** (|r|) is a quality score. A reaction is a target when its track is not
+  constant and |r| >= ``correlation_threshold``. Every step is solved with pFBA.
+* **Direction classification.** Targets are labelled ``amplify`` (the absolute flux
+  rises with the product), ``knockdown`` (it falls) or ``knockout`` (it falls to at most
+  1e-8), like the Amplify, Knockdown and Knockout labels of RAVEN's ``FSEOF``.
+* **Gene-level view** via :attr:`FSEOFResult.gene_targets`, and the full flux scan in
+  :attr:`FSEOFResult.scan`, both as DataFrames.
 """
 from __future__ import annotations
 
@@ -104,6 +101,11 @@ def fseof(
         its absolute flux is above 0 and the correlation reaches ``correlation_threshold``;
         it is ``knockout`` when the slope is negative and the last absolute flux is at most
         1e-8, ``knockdown`` for a negative slope otherwise.
+
+        Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
+        so the last absolute flux used for the knockout label is that of the last feasible
+        level; ``targets`` is sorted by ``|slope| * |r|`` and not grouped by label; and
+        ``flux_eps`` only gates the check of the theoretical maximum.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
         (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.
@@ -133,7 +135,7 @@ def fseof(
             try:
                 columns[level] = pfba(model).fluxes
             except OptimizationError:
-                break  # enforced flux became infeasible — stop scanning
+                break  # enforced flux became infeasible: stop scanning
             enforced.append(level)
     if len(enforced) < 2:
         raise RuntimeError("FSEOF needs at least two feasible enforced-flux levels.")

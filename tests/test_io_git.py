@@ -343,3 +343,27 @@ def test_main_branch_check_passes_in_unrelated_repository(tmp_path):
     _git(repo, "add", "pyproject.toml")
     _git(repo, "commit", "-qm", "x")
     assert _run_check(repo / ".venv" / "lib").returncode == 0
+
+
+def _checkout(tmp_path, *, layout, name):
+    repo = tmp_path / "repo"
+    pkg = repo / "src" / "raven_toolbox" if layout else repo / "lib" / "raven_toolbox"
+    _copy_package(pkg)
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+    _git(repo, "init", "-q", "-b", "feature")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "x")
+    return repo / ("src" if layout else "lib")
+
+
+def test_main_branch_check_passes_with_layout_but_other_project_name(tmp_path):
+    assert _run_check(_checkout(tmp_path, layout=True, name="analysis")).returncode == 0
+
+
+def test_main_branch_check_passes_with_project_name_but_other_layout(tmp_path):
+    assert _run_check(_checkout(tmp_path, layout=False, name="raven-toolbox")).returncode == 0
+
+
+def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
+    out = _run_check(_checkout(tmp_path, layout=True, name="raven-toolbox"))
+    assert out.returncode != 0 and "feature" in out.stderr

@@ -228,6 +228,10 @@ def test_new_reaction_without_ub_takes_the_stored_default_ub():
     annotated = _base_model()
     annotated.annotation["defaultUB"] = 500.0
     assert curate(annotated).upper_bound == 500.0
+    precedence = _base_model()
+    precedence.notes["metaData"] = {"defaultUB": 1000.0}
+    precedence.annotation["defaultUB"] = 500.0
+    assert curate(precedence).upper_bound == 1000.0
     both = _base_model()
     both.notes["metaData"] = {"defaultLB": -1000.0, "defaultUB": 1000.0}
     new = curate(both)
