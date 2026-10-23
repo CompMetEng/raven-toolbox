@@ -5,6 +5,9 @@ Ported from RAVEN MATLAB: manipulation/generateNewIds.m.
 from __future__ import annotations
 
 import logging
+import math
+import re
+from collections.abc import Iterable
 from typing import Literal
 
 import cobra
@@ -24,17 +27,13 @@ def generate_new_ids(
 ) -> list[str]:
     """Generate ``quantity`` new ids, sequentially numbered after the model's own.
 
-    Existing ids are filtered to those starting with ``prefix``, the prefix is
-    stripped, and the numeric width and starting point are both taken from
-    whatever the model already has for that prefix -- matching
-    generateNewIds.m exactly, quirks included: the highest existing number is
-    found by sorting the stripped ids as strings, not as integers, and
-    ``num_length`` is overridden by the length of that string whenever at
-    least one matching id already exists. For a model whose own ids for this
-    prefix are all the same width (the normal case, e.g. every id zero-padded
-    to 4 digits), a string sort of zero-padded numbers agrees with a numeric
-    sort; it can disagree if a prefix mixes widths (``rxn_1`` alongside
-    ``rxn_0002``), the same as it would in RAVEN.
+    Existing ids are filtered to those starting with ``prefix`` and the prefix is
+    stripped. When any remainder reads as a number (as MATLAB ``str2double``), the
+    largest number is the starting point and its text length is the width. When none
+    does, the width is the length of the last remainder in string order and numbering
+    starts at 1. ``num_length`` applies only when no id has the prefix. This is
+    ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give ``r_11``, and ``r_0003``
+    beside ``r_abc`` gives ``r_0004``.
 
     Parameters
     ----------
@@ -60,22 +59,45 @@ def generate_new_ids(
     if entity_type not in _ENTITY_ATTR:
         raise ValueError(f"entity_type must be 'reactions' or 'metabolites', got {entity_type!r}")
     existing_ids = [e.id for e in getattr(model, _ENTITY_ATTR[entity_type])]
+    return next_ids(existing_ids, prefix, quantity, num_length, label=entity_type)
 
-    stripped = sorted(eid[len(prefix):] for eid in existing_ids if eid.startswith(prefix))
 
+_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][+-]?\d+)?|[+-]?inf", re.IGNORECASE)
+
+
+def _str2double(text: str) -> float:
+    text = text.strip()
+    if not _NUMBER.fullmatch(text):
+        return math.nan
+    return float(text.replace("d", "e").replace("D", "e"))
+
+
+def next_ids(
+    existing_ids: Iterable[str],
+    prefix: str,
+    quantity: int = 1,
+    num_length: int = 4,
+    *,
+    label: str = "entity",
+) -> list[str]:
+    """The id sequence of :func:`generate_new_ids` for a list of existing ids."""
+    stripped = [eid[len(prefix):] for eid in existing_ids if eid.startswith(prefix)]
+
+    last_id = 0
     if stripped:
-        last = stripped[-1]
-        num_length = len(last)
-        try:
-            last_id = int(last)
-        except ValueError:
-            last_id = 0
+        numbers = [_str2double(x) for x in stripped]
+        valid = [i for i, n in enumerate(numbers) if not math.isnan(n)]
+        if valid:
+            best = max(valid, key=lambda i: (numbers[i], -i))
+            last_id = int(numbers[best])
+            num_length = len(stripped[best])
+        else:
+            num_length = len(sorted(stripped)[-1])
     else:
-        last_id = 0
         logger.info(
             "No %s ids with prefix %r currently exist in the model. "
             "The first new id will be %r.",
-            entity_type, prefix, f"{prefix}{1:0{num_length}d}",
+            label, prefix, f"{prefix}{1:0{num_length}d}",
         )
 
     return [f"{prefix}{k + last_id:0{num_length}d}" for k in range(1, quantity + 1)]

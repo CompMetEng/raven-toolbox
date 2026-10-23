@@ -9,6 +9,7 @@ from pathlib import Path
 import cobra
 import pandas as pd
 
+from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
 
 #: Core columns recognised in ``mets_df``. Anything else is treated as a
@@ -537,20 +538,10 @@ def _coerce_int(v) -> int:
 
 
 def _generate_ids(existing, prefix: str, count: int) -> list[str]:
-    """Generate ``count`` fresh ids by incrementing from the largest
-    existing numeric suffix matching ``prefix``.
+    """Generate ``count`` fresh ids after the largest existing number behind ``prefix``.
 
-    e.g. with prefix ``s_`` and existing ``s_4100``, the next ids are
-    ``s_4101``, ``s_4102``, … The suffix has the width of the largest existing
-    one, or 4 digits when no id has the prefix.
+    Same rule as :func:`raven_toolbox.utils.ids.generate_new_ids`: with prefix ``s_`` and
+    existing ``s_4100``, the next ids are ``s_4101``, ``s_4102``, … The suffix has the width of
+    the largest existing one, or 4 digits when no id has the prefix.
     """
-    max_n = 0
-    width = 4
-    for entity in existing:
-        if not entity.id.startswith(prefix):
-            continue
-        suffix = entity.id[len(prefix):]
-        if suffix.isdigit() and int(suffix) >= max_n:
-            max_n = int(suffix)
-            width = len(suffix)
-    return [f"{prefix}{(max_n + i):0{width}d}" for i in range(1, count + 1)]
+    return next_ids([e.id for e in existing], prefix, count)
