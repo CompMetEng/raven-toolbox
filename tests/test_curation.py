@@ -1,6 +1,8 @@
 """Tests for raven_toolbox.curation.batch."""
 from __future__ import annotations
 
+import math
+
 import cobra
 import pandas as pd
 import pytest
@@ -584,6 +586,7 @@ def test_an_empty_miriam_cell_removes_the_namespace_unless_kept(overwrite, kept)
 
 @pytest.mark.parametrize("overwrite", [True, False])
 def test_a_miriam_column_without_any_value_is_not_written(overwrite):
+    # Pin: a column without any value is not written, in both modes.
     m = _annotated_model()
     with pytest.warns(UserWarning, match="overwritten"):
         batch_curate(m, mets_df=_kegg_mets_table("", ""), overwrite_with_empty=overwrite)
@@ -592,6 +595,7 @@ def test_a_miriam_column_without_any_value_is_not_written(overwrite):
 
 
 def test_a_miriam_column_counts_only_the_existing_entities():
+    # Pin: the existing entity keeps its namespace because the only value of the column is on a new one.
     m = _annotated_model()
     df = pd.DataFrame([
         {"metNames": "ATP", "comps": "c", "kegg.compound": ""},
@@ -682,6 +686,7 @@ def test_tsv_cells_such_as_na_stay_text_and_numbers_stay_as_written(tmp_path):
 
 
 def test_tsv_blank_cells_are_empty(tmp_path):
+    # Pin: a blank-only cell was empty before, and RAVEN reads it as empty as well.
     m = _base_model()
     genes = tmp_path / "genes.tsv"
     genes.write_text("genes\tgeneShortNames\nYAL001C\t  \n")
@@ -711,4 +716,102 @@ def test_overwrite_with_empty_must_be_a_bool(value):
 def test_overwrite_with_empty_accepts_a_numpy_bool():
     import numpy as np
 
-    batch_curate(_base_model(), overwrite_with_empty=np.False_)
+    m = _annotated_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_kegg_mets_table("", "C9"), overwrite_with_empty=np.False_)
+    assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_kegg_mets_table("", "C9"), overwrite_with_empty=np.True_)
+    assert "kegg.compound" not in m.metabolites.get_by_id("s_0001").annotation
+
+
+def test_the_overwrite_with_empty_error_names_both_bool_types():
+    with pytest.raises(TypeError, match=r"bool or numpy\.bool_"):
+        batch_curate(_base_model(), overwrite_with_empty="no")
+
+
+@pytest.mark.parametrize("blank", [" ", "   "])
+@pytest.mark.parametrize("overwrite, kept", [(True, False), (False, True)])
+def test_a_blank_only_miriam_cell_is_empty_in_both_modes(blank, overwrite, kept):
+    m = _annotated_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=_kegg_mets_table(blank, "C9"), overwrite_with_empty=overwrite)
+    assert ("kegg.compound" in m.metabolites.get_by_id("s_0001").annotation) is kept
+
+
+# --- numeric cells ----------------------------------------------------
+
+def _bound_tables(**cells):
+    rxns_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", **{k: v[0] for k, v in cells.items()}},
+        {"rxnNames": "fresh", **{k: v[1] for k, v in cells.items()}},
+    ])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "metNames": "ATP", "comps": "c", "coefficient": -1.0},
+        {"rxnNames": "ATP hydrolysis", "metNames": "ADP", "comps": "c", "coefficient": 1.0},
+        {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": -3.0},
+        {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": 5.0},
+    ])
+    return rxns_df, coeffs_df
+
+
+def _by_name(m, name):
+    return next(r for r in m.reactions if r.name == name)
+
+
+@pytest.mark.parametrize("nan", ["NaN", "nan", " NAN ", float("nan")])
+def test_a_nan_bound_is_not_given_for_existing_and_new_reactions(nan):
+    m = _base_model()
+    old = _by_name(m, "ATP hydrolysis").bounds
+    rxns_df, coeffs_df = _bound_tables(lb=(nan, nan), ub=(nan, nan))
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _by_name(m, "ATP hydrolysis").bounds == old
+    assert _by_name(m, "fresh").bounds == (-math.inf, math.inf)
+
+
+@pytest.mark.parametrize("text, value", [("true", 1.0), ("FALSE", 0.0), (" True ", 1.0)])
+def test_true_and_false_cells_are_read_as_one_and_zero(text, value):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(lb=(text, text), ub=("1000", "1000"), rev=(text, text))
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _by_name(m, "ATP hydrolysis").lower_bound == value
+    assert _by_name(m, "fresh").lower_bound == value
+
+
+@pytest.mark.parametrize("column", ["lb", "ub", "rev"])
+@pytest.mark.parametrize("text", ["abc", "NA", "None", "1 0", "pi", "1i"])
+def test_a_reaction_cell_that_is_not_a_number_is_refused(column, text):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(**{column: ("1", text)})
+    with pytest.raises(ValueError, match=f'{column} value "{text}"'):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+@pytest.mark.parametrize("text", ["abc", "NA", "None", "pi", "1i"])
+def test_a_charge_that_is_not_a_number_is_refused(text):
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": text},
+                       {"metNames": "ADP", "comps": "c", "charge": -2}])
+    with pytest.raises(ValueError, match=f'charge value "{text}"'):
+        batch_curate(_base_model(), mets_df=df)
+
+
+@pytest.mark.parametrize("text", ["abc", "NA", "None"])
+def test_a_confidence_score_that_is_not_a_number_is_refused(text):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(rxnConfidenceScores=("3", text))
+    with pytest.raises(ValueError, match="rxnConfidenceScores value"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+def test_charges_and_scores_are_read_from_text_with_a_separator_or_an_exponent():
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": "-4"},
+                       {"metNames": "ADP", "comps": "c", "charge": " 2 "}])
+    m = _base_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df)
+    assert [m.metabolites.get_by_id(i).charge for i in ("s_0001", "s_0002")] == [-4, 2]
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(lb=("1,000", "1e2"), ub=("Inf", "+inf"))
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _by_name(m, "ATP hydrolysis").bounds == (1000.0, math.inf)
+    assert _by_name(m, "fresh").bounds == (100.0, math.inf)

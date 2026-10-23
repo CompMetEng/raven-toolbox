@@ -28,18 +28,16 @@ def generate_new_ids(
     """Generate ``quantity`` new ids, sequentially numbered after the model's own.
 
     Existing ids are filtered to those starting with ``prefix`` and the prefix is
-    stripped. When any remainder reads as a finite whole number, the largest number is the
-    starting point and its text length is the width. A remainder is read as a plain decimal
-    number with an optional sign, fraction and ``e`` exponent; ``inf``, ``nan``, ``2.5``,
-    ``1e400`` and text do not count. MATLAB ``str2double`` reads more as numbers than this
-    does (hexadecimal ``0x10``, a thousands separator ``1,000``, complex ``3+0i``, text
-    with embedded blanks), so ids with such suffixes are numbered differently by
-    ``generateNewIds``. Very large whole numbers are counted exactly here, while
-    ``generateNewIds`` rounds them to a double. When none
-    does, the width is the length of the last remainder in string order and numbering
-    starts at 1. ``num_length`` applies only when no id has the prefix. This is
-    ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give ``r_11``, and ``r_0003``
-    beside ``r_abc`` gives ``r_0004``.
+    stripped. When any remainder reads as a finite whole number of absolute value below 2**52,
+    the largest number is the starting point and its text length is the width. A remainder is
+    read as a plain decimal number with an optional sign, fraction and ``e`` exponent; ``inf``,
+    ``nan``, ``2.5``, ``1e20``, ``1e400`` and text do not count. MATLAB ``str2double`` reads
+    more as numbers than this does (hexadecimal ``0x10``, a thousands separator ``1,000``,
+    complex ``3+0i``), so ids with such suffixes are numbered differently by
+    ``generateNewIds``. When no remainder counts, the width is the length of the last remainder
+    in string order and numbering starts at 1. ``num_length`` applies only when no id has the
+    prefix. This is ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give ``r_11``, and
+    ``r_0003`` beside ``r_abc`` gives ``r_0004``.
 
     Parameters
     ----------
@@ -82,9 +80,10 @@ def _str2double(text: str) -> float:
 
 def _suffix_number(text: str) -> float:
     """The numeric value of an id suffix, or NaN when the suffix is not a finite whole number
-    (``inf``, ``1e400``, ``2.5``, ``1d2`` and text)."""
+    (``inf``, ``1e400``, ``2.5``, ``1d2`` and text) or has an absolute value of 2**52 or more,
+    where a double no longer separates consecutive whole numbers (RAVEN uses ``flintmax/2``)."""
     number = _str2double(text)
-    if not math.isfinite(number) or number != math.floor(number):
+    if not math.isfinite(number) or number != math.floor(number) or abs(number) >= 2.0**52:
         return math.nan
     return number
 

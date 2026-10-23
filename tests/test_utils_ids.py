@@ -94,3 +94,15 @@ def test_generate_new_ids_a_whole_number_in_exponent_form_still_counts():
 def test_generate_new_ids_non_ascii_digits_are_not_a_number():
     m = _model_with_reactions(["r_١٢"])
     assert generate_new_ids(m, "reactions", "r_") == ["r_01"]
+
+
+def test_generate_new_ids_a_number_of_2_to_the_52_or_more_is_not_a_number():
+    # RAVEN counts a suffix only when its absolute value is below flintmax/2 = 2^52.
+    m = _model_with_reactions(["r_9007199254740993"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_0000000000000001"]
+    m = _model_with_reactions(["r_1e20", "r_0003"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_0004"]
+    m = _model_with_reactions(["r_4503599627370496", "r_0003"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_0004"]
+    m = _model_with_reactions(["r_4503599627370495"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_4503599627370496"]

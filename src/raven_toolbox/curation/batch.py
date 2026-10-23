@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -137,17 +138,21 @@ def batch_curate(
     """
     if not isinstance(overwrite_with_empty, (bool, np.bool_)):
         raise TypeError(
-            f"overwrite_with_empty must be a bool, got {type(overwrite_with_empty).__name__}"
+            "overwrite_with_empty must be a bool or numpy.bool_, "
+            f"got {type(overwrite_with_empty).__name__}"
         )
     overwrite_with_empty = bool(overwrite_with_empty)
     result = CurationResult()
 
     if mets_df is not None:
-        mets_df = _canonical_columns(mets_df, _MET_ALIASES)
+        mets_df = _parse_numeric_columns(
+            _canonical_columns(mets_df, _MET_ALIASES), ("charge",), "metsInfo")
     if genes_df is not None:
         genes_df = _canonical_columns(genes_df, _GENE_ALIASES)
     if rxns_df is not None:
-        rxns_df = _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True)
+        rxns_df = _parse_numeric_columns(
+            _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True),
+            ("lb", "ub", "rev", "rxnConfidenceScores"), "rxnsInfo")
     if rxns_coeffs_df is not None:
         rxns_coeffs_df = _canonical_columns(rxns_coeffs_df, _COEFF_ALIASES)
 
@@ -639,6 +644,48 @@ def _set_note(notes: dict, key: str, value) -> None:
         notes[key] = str(value)
     else:
         notes.pop(key, None)
+
+
+_DECIMAL = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+
+
+def _number_cell(value, field: str, label: str) -> float:
+    """Number in a table cell, as RAVEN reads it: NaN for an empty cell or a cell saying NaN.
+
+    ``true`` and ``false`` in any case are 1 and 0. Other text must be a decimal number
+    (a thousands separator ``,`` is dropped, ``Inf`` is accepted); nothing is evaluated. Any
+    other text raises :class:`ValueError`.
+    """
+    if not _has_value(value):
+        return math.nan
+    if isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)):
+        return float(value)
+    text = str(value).strip()
+    low = text.lower()
+    if low == "true":
+        return 1.0
+    if low == "false":
+        return 0.0
+    if low == "nan":
+        return math.nan
+    if re.fullmatch(r"[+-]?inf", low):
+        return float(low)
+    compact = text.replace(",", "")
+    if _DECIMAL.fullmatch(compact):
+        return float(compact)
+    raise ValueError(f'The {field} value "{text}" in the {label} table is not a number')
+
+
+def _parse_numeric_columns(df: pd.DataFrame, columns, label: str) -> pd.DataFrame:
+    """Copy of ``df`` whose numeric columns hold floats, NaN where the cell is empty."""
+    present = [c for c in columns if c in df.columns]
+    if not present:
+        return df
+    df = df.copy()
+    for column in present:
+        df[column] = pd.Series(
+            [_number_cell(v, column, label) for v in df[column]], index=df.index, dtype=float)
+    return df
 
 
 def _has_value(v) -> bool:
