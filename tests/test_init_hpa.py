@@ -73,17 +73,34 @@ def test_parse_hpa_rna_tidy(rna_tsv):
     assert rna.expression("liver") == {"ENSG1": 100.0, "ENSG2": 5.0}
 
 
-def test_parse_hpa_rna_wide_layout(tmp_path):
-    """The older wide layout (one TPM column per tissue) is melted to the tidy form."""
-    p = tmp_path / "rna_wide.tsv"
-    p.write_text(dedent("""\
-        Gene\tGene name\tliver\tkidney
-        ENSG1\tGeneA\t100\t10
-        ENSG2\tGeneB\t5\t50
-    """))
+def test_parse_hpa_rna_v18_layout(tmp_path):
+    p = tmp_path / "rna_v18.tsv"
+    p.write_text("Gene\tGene name\tSample\tValue\nENSG1\tGeneA\tliver\t100\nENSG1\tGeneA\tkidney\t10\n")
     rna = parse_hpa_rna(p)
-    assert rna.expression("liver") == {"ENSG1": 100.0, "ENSG2": 5.0}
-    assert rna.expression("kidney") == {"ENSG1": 10.0, "ENSG2": 50.0}
+    assert rna.tissues() == ["kidney", "liver"]
+    assert rna.expression("liver") == {"ENSG1": 100.0}
+
+
+def test_parse_hpa_rna_wide_layout_raises(tmp_path):
+    p = tmp_path / "rna_wide.tsv"
+    p.write_text("Gene\tGene name\tliver\tkidney\nENSG1\tGeneA\t100\t10\n")
+    with pytest.raises(ValueError, match="tissue column"):
+        parse_hpa_rna(p)
+
+
+def test_parse_hpa_rna_without_value_column_raises(tmp_path):
+    p = tmp_path / "rna_novalue.tsv"
+    p.write_text("Gene\tGene name\tTissue\nENSG1\tGeneA\tliver\n")
+    with pytest.raises(ValueError, match="value column"):
+        parse_hpa_rna(p)
+
+
+def test_parse_hpa_rna_repeated_gene_tissue_keeps_last(tmp_path):
+    p = tmp_path / "rna_dup.tsv"
+    p.write_text("Gene\tGene name\tTissue\tTPM\nENSG1\tGeneA\tliver\t1\nENSG1\tGeneA\tliver\t7\n")
+    with pytest.warns(UserWarning, match="repeat a gene and tissue"):
+        rna = parse_hpa_rna(p)
+    assert rna.expression("liver") == {"ENSG1": 7.0}
 
 
 # ---------------------------------------------------------------------- scoring

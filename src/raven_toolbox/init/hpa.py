@@ -27,6 +27,7 @@ or for RNA-seq:
 """
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,26 +103,35 @@ def parse_hpa(path: str | Path) -> HPAData:
 
 
 def parse_hpa_rna(path: str | Path) -> HPARnaData:
-    """Parse an HPA RNA-seq dump.
+    """Parse an HPA RNA-seq dump, as RAVEN's ``parseHPArna``.
 
-    Accepts the canonical ≥v17 tidy layout (``Gene  Gene name  Tissue  TPM``, one row per
-    gene × tissue) or the older wide layout with one TPM column per tissue
-    (``Gene  Gene name  TissueA  TissueB  ...``) — the latter is melted into the same
-    tidy shape.
+    One row per gene and tissue. The tissue column is ``Tissue`` (v19) or ``Sample`` (v18); the
+    value column is ``TPM`` (v19) or ``Value`` (v18); ``Gene`` and ``Gene name`` are required.
+    A file without a tissue or value column (for example one TPM column per tissue) raises
+    ``ValueError``. When a gene and tissue occur more than once, the last row is kept and a
+    warning is issued. Values that are not numbers are dropped.
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
-    if {"Gene", "Gene name", "Tissue", "TPM"}.issubset(df.columns):
-        df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name",
-                                 "Tissue": "tissue", "TPM": "tpm"})
-        df = df[["gene_id", "gene_name", "tissue", "tpm"]]
-    elif {"Gene", "Gene name"}.issubset(df.columns):
-        # Wide layout: tissues are extra columns to melt.
-        df = df.melt(id_vars=["Gene", "Gene name"], var_name="tissue", value_name="tpm")
-        df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name"})
-    else:
-        raise ValueError(f"{path}: expected Gene/Gene name/Tissue/TPM columns "
-                         f"(got {list(df.columns)})")
-    df["tpm"] = pd.to_numeric(df["tpm"], errors="coerce")
+    for col in ("Gene", "Gene name"):
+        if col not in df.columns:
+            raise ValueError(f'{path}: could not find the column "{col}" (got {list(df.columns)})')
+    tissue_col = "Tissue" if "Tissue" in df.columns else "Sample" if "Sample" in df.columns else None
+    if tissue_col is None:
+        raise ValueError(f'{path}: could not find a tissue column ("Tissue" or "Sample"; '
+                         f"got {list(df.columns)})")
+    value_col = "TPM" if "TPM" in df.columns else "Value" if "Value" in df.columns else None
+    if value_col is None:
+        raise ValueError(f'{path}: could not find an expression value column ("TPM" or "Value"; '
+                         f"got {list(df.columns)})")
+    df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name",
+                            tissue_col: "tissue", value_col: "tpm"})
+    df = df[["gene_id", "gene_name", "tissue", "tpm"]]
+    repeated = df.duplicated(["gene_id", "tissue"], keep="last")
+    if repeated.any():
+        warnings.warn(f"{path}: {int(repeated.sum())} rows repeat a gene and tissue; "
+                      "the last row of each is kept", stacklevel=2)
+        df = df[~repeated]
+    df = df.assign(tpm=pd.to_numeric(df["tpm"], errors="coerce"))
     df = df.dropna(subset=["tpm"]).reset_index(drop=True)
     return HPARnaData(df)
 
