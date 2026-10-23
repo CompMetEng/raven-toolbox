@@ -156,7 +156,7 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
     coefficients from 1e-3 to 1e2) force correspondingly extreme flux magnitudes, so no
     single MILP big-M fits all reactions. RAVEN, per reaction: caps every ``|coeff|`` at
     ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole reaction so its
-    mean ``|coeff|`` is 1. Bounds are reset to ``±1000`` afterwards. Modifies ``model`` in
+    mean ``|coeff|`` is 1. Bounds are not changed. Modifies ``model`` in
     place; only the merged MILP model is scaled (the final output maps back to the
     unscaled ``ref_model`` by reaction id, so reaction *selection* is unaffected).
     """
@@ -169,11 +169,6 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
         total = sum(abs(c) for c in capped.values())
         scale = (len(capped) / total) if total else 1.0
         rxn.add_metabolites({m: c * scale for m, c in capped.items()}, combine=False)
-    for rxn in model.reactions:  # RAVEN resets bounds to the standard ±1000 after scaling
-        if rxn.upper_bound > 0:
-            rxn.upper_bound = 1000.0
-        if rxn.lower_bound < 0:
-            rxn.lower_bound = -1000.0
 
 
 def _restore_reactions(model: cobra.Model, saved: dict) -> None:
@@ -321,6 +316,11 @@ def prep_init_model(
         if verbose:
             print("[prep] rescaling merged model", flush=True)
         rescale_for_init(min_model)
+        for rxn in min_model.reactions:  # prepINITModel: bounds back to the standard ±1000
+            if rxn.upper_bound > 0:
+                rxn.upper_bound = 1000.0
+            if rxn.lower_bound < 0:
+                rxn.lower_bound = -1000.0
     if verbose:
         print(f"[prep] done: {len(min_model.reactions)} reactions in min_model, "
               f"{len(essential_pre)} essential (pre-merge)", flush=True)
