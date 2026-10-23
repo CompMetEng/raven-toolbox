@@ -38,8 +38,8 @@ from raven_toolbox.init.score import gene_scores_from_expression
 
 # RAVEN's hpaLevelScores defaults (scoreModel.m). HPA reports either antibody-staining
 # levels (Strong/Moderate/Weak/Negative) or "APE" classes (High/Medium/Low/None/Not detected /
-# Ascending/Descending/...); the categories of RAVEN's table are mapped here. Unknown levels
-# (e.g. "Mixed", "N/A") fall through to NaN and are dropped during scoring.
+# Ascending/Descending/...); the categories of RAVEN's table are mapped here. A level of the
+# data that the table lacks (e.g. "Mixed", "N/A") raises ValueError in hpa_gene_scores.
 HPA_LEVEL_SCORES: dict[str, float] = {
     "High": 20.0, "Medium": 15.0, "Low": 10.0, "None": -8.0, "Not detected": -8.0,
     "Strong": 20.0, "Moderate": 15.0, "Weak": 10.0, "Negative": -8.0,
@@ -150,7 +150,8 @@ def check_levels(df: pd.DataFrame, table: Mapping[str, float]) -> None:
     All rows count, whichever tissue is scored, as RAVEN's ``scoreModel`` checks every level of
     ``hpaData.levels``.
     """
-    unknown = sorted({str(level) for level in df["level"] if str(level).upper() not in table})
+    unknown = sorted({str(level) or "<blank>" for level in df["level"]
+                      if str(level).upper() not in table})
     if unknown:
         raise ValueError("There are expression level categories that do not match the level scores: "
                          + ", ".join(unknown))

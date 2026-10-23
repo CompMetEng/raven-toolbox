@@ -145,3 +145,20 @@ def test_task_metabolites_are_matched_by_exact_name_and_compartment():
     task = Task(id="X", outputs=[("t[c]", 0.0, 1000.0), ("T[e]", 0.0, 1000.0)])
     prep = prep_init_model(_task_met_model(), [task], ext_comp="e", scale=False)
     assert _mets(prep.ref_model) == ["A[e]", "B[c]", "C[c]"]
+
+
+def test_a_task_naming_a_metabolite_in_other_letter_case_is_still_checked_against_it():
+    # Every metabolite is present while the tasks are checked, so the task is kept; the metabolite
+    # is removed afterwards because its name does not match exactly.
+    task = Task(id="X", outputs=[("t[c]", 0.0, 1000.0)])
+    prep = prep_init_model(_task_met_model(), [task], ext_comp="e", scale=False)
+    assert [t.id for t in prep.tasks] == ["X"]
+    assert _mets(prep.ref_model) == ["A[e]", "B[c]", "C[c]"]
+
+
+def test_of_metabolites_sharing_a_name_and_compartment_only_the_first_is_kept():
+    model = _task_met_model()
+    model.add_metabolites([cobra.Metabolite("T2_c", name="T", compartment="c")])
+    task = Task(id="MAKE_T", outputs=[("T[c]", 0.0, 1000.0)])
+    prep = prep_init_model(model, [task], ext_comp="e", scale=False)
+    assert [m.id for m in prep.ref_model.metabolites] == ["A_e", "B_c", "C_c", "T_c"]

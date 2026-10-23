@@ -276,10 +276,12 @@ def prep_init_model(
     passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
     (set that separately if you want them faster too).
 
-    The metabolites that tasks name (inputs, outputs and equations, matched by exact
-    ``name[compartment]``) stay in the reference model even when the first simplification leaves
-    them without a reaction, so that the tasks can still be checked; RAVEN ``prepINITModel`` keeps
-    them the same way.
+    The first simplification removes reactions only; every metabolite stays in the reference model
+    while the tasks are checked, so a task names a metabolite whatever its letter case. Afterwards
+    the metabolites without a reaction are removed, except the ones that tasks name (inputs,
+    outputs and equations, matched by exact ``name[compartment]``, failed tasks included; when
+    several metabolites share a ``name[compartment]``, only the first in model order is kept).
+    RAVEN ``prepINITModel`` does the same.
 
     With the first simplification, every gene left without a reaction is removed from the
     reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
@@ -309,16 +311,14 @@ def prep_init_model(
         # flux — zero-interval, topological dead-ends, then FVA-blocked (deleteMinMax).
         # Without the FVA-blocked and zero-interval passes the MILP runs on a ~10% larger
         # model and reaches a different (bypass-heavy) optimum.
-        # prepINITModel keeps the metabolites that tasks name even when no reaction uses them
-        # any more (they are matched by exact name[compartment]) and removes the other unused ones.
+        # prepINITModel removes the reactions but keeps every metabolite through the task check;
+        # it removes the unused metabolites afterwards, except those that tasks name (below).
         template_order = {m.id: i for i, m in enumerate(ref_model.metabolites)}
-        task_met_names = _task_metabolite_names(tasks) if tasks is not None else set()
-        named_mets = [m for m in ref_model.metabolites
-                      if f"{m.name}[{m.compartment}]" in task_met_names]
+        before = list(ref_model.metabolites)
         simplify_model(ref_model, delete_zero_interval=True, delete_dead_end=True,
                        delete_no_flux=True)
-        lost = [m for m in named_mets if m.id not in ref_model.metabolites]
-        if lost:
+        lost = [m for m in before if m.id not in ref_model.metabolites]
+        if lost and tasks is not None:
             restored = [cobra.Metabolite(m.id, formula=m.formula, name=m.name, charge=m.charge,
                                          compartment=m.compartment) for m in lost]
             for new, old in zip(restored, lost, strict=True):
@@ -358,6 +358,21 @@ def prep_init_model(
         essential_pre = ess.reactions
         task_mets = ess.task_metabolites
         kept_tasks = [t for t in tasks if t.id not in ess.failed_tasks]
+
+        if simplify:
+            # prepINITModel: removeMets(cModel, setdiff(unusedMets, essentialMetsForTasks)), where
+            # essentialMetsForTasks holds, for each name[compartment] that a task names (failed
+            # tasks included), the first metabolite of the model with exactly that name.
+            task_met_names = _task_metabolite_names(tasks)
+            named_first: dict[str, cobra.Metabolite] = {}
+            for met in ref_model.metabolites:
+                key = f"{met.name}[{met.compartment}]"
+                if key in task_met_names:
+                    named_first.setdefault(key, met)
+            keep_ids = {met.id for met in named_first.values()}
+            ref_model.remove_metabolites(
+                [m for m in ref_model.metabolites if not m.reactions and m.id not in keep_ids]
+            )
 
     # Orienting essentials and tightening reversibility change the bounds, the stoichiometry
     # direction and the objective coefficient of these reactions only. They are restored on

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
+import pandas as pd
 import pytest
 
 from raven_toolbox.init import (
@@ -139,6 +140,14 @@ def test_hpa_gene_scores_refuses_a_level_missing_from_the_table(tmp_path):
                  "G3\tC\tkidney\ttubules\tMixed\tUncertain\n")
     with pytest.raises(ValueError, match="Mixed"):
         hpa_gene_scores(parse_hpa(p), "liver")
+
+
+def test_a_blank_level_is_named_in_the_error_message():
+    from raven_toolbox.init.hpa import check_levels
+
+    df = pd.DataFrame({"level": ["High", "", "Mixed"]})
+    with pytest.raises(ValueError, match="<blank>, Mixed"):
+        check_levels(df, {"HIGH": 20.0})
 
 
 def test_hpa_gene_scores_unknown_celltype_returns_empty(hpa_tsv):

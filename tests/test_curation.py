@@ -686,7 +686,7 @@ def test_tsv_cells_such_as_na_stay_text_and_numbers_stay_as_written(tmp_path):
 
 
 def test_tsv_blank_cells_are_empty(tmp_path):
-    # Pin: a blank-only cell was empty before, and RAVEN reads it as empty as well.
+    # Pin: a cell with only blanks is empty, as RAVEN reads it.
     m = _base_model()
     genes = tmp_path / "genes.tsv"
     genes.write_text("genes\tgeneShortNames\nYAL001C\t  \n")
@@ -779,7 +779,8 @@ def test_true_and_false_cells_are_read_as_one_and_zero(text, value):
 
 
 @pytest.mark.parametrize("column", ["lb", "ub", "rev"])
-@pytest.mark.parametrize("text", ["abc", "NA", "None", "1 0", "pi", "1i"])
+@pytest.mark.parametrize("text", ["abc", "NA", "None", "1 0", "pi", "1i", "1,5", "1,000", "0x10",
+                                  "1d3", "1_0", "Infinity", "٣", "１"])
 def test_a_reaction_cell_that_is_not_a_number_is_refused(column, text):
     m = _base_model()
     rxns_df, coeffs_df = _bound_tables(**{column: ("1", text)})
@@ -787,7 +788,7 @@ def test_a_reaction_cell_that_is_not_a_number_is_refused(column, text):
         batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
 
 
-@pytest.mark.parametrize("text", ["abc", "NA", "None", "pi", "1i"])
+@pytest.mark.parametrize("text", ["abc", "NA", "None", "pi", "1i", "1,5", "0x10"])
 def test_a_charge_that_is_not_a_number_is_refused(text):
     df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": text},
                        {"metNames": "ADP", "comps": "c", "charge": -2}])
@@ -803,7 +804,7 @@ def test_a_confidence_score_that_is_not_a_number_is_refused(text):
         batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
 
 
-def test_charges_and_scores_are_read_from_text_with_a_separator_or_an_exponent():
+def test_charges_bounds_and_scores_are_read_as_plain_decimal_numbers():
     df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": "-4"},
                        {"metNames": "ADP", "comps": "c", "charge": " 2 "}])
     m = _base_model()
@@ -811,7 +812,48 @@ def test_charges_and_scores_are_read_from_text_with_a_separator_or_an_exponent()
         batch_curate(m, mets_df=df)
     assert [m.metabolites.get_by_id(i).charge for i in ("s_0001", "s_0002")] == [-4, 2]
     m = _base_model()
-    rxns_df, coeffs_df = _bound_tables(lb=("1,000", "1e2"), ub=("Inf", "+inf"))
+    rxns_df, coeffs_df = _bound_tables(lb=(".5", "1e2"), ub=("Inf", "+inf"),
+                                       rxnConfidenceScores=("2", " 1e0 "))
     batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
-    assert _by_name(m, "ATP hydrolysis").bounds == (1000.0, math.inf)
+    assert _by_name(m, "ATP hydrolysis").bounds == (0.5, math.inf)
     assert _by_name(m, "fresh").bounds == (100.0, math.inf)
+    assert _by_name(m, "ATP hydrolysis").notes["confidence_score"] == 2
+    assert _by_name(m, "fresh").notes["confidence_score"] == 1
+
+
+def test_a_non_breaking_space_is_not_trimmed_from_a_cell():
+    rxns_df, coeffs_df = _bound_tables(lb=("1", "5\u00a0"))
+    with pytest.raises(ValueError, match="lb value"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    m = _base_model()
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "formula": "\u00a0"}])
+    batch_curate(m, mets_df=df, overwrite_with_empty=False)
+    assert m.metabolites.get_by_id("s_0001").formula == "\u00a0"
+    m = _base_model()
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "formula": "\t \n"}])
+    batch_curate(m, mets_df=df, overwrite_with_empty=False)
+    assert m.metabolites.get_by_id("s_0001").formula == "C10H12N5O13P3"
+
+
+@pytest.mark.parametrize("value", [math.inf, -math.inf, "Inf", "-inf"])
+def test_a_charge_that_is_not_finite_is_refused(value):
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": value}])
+    with pytest.raises(ValueError, match="not a finite number"):
+        batch_curate(_base_model(), mets_df=df)
+
+
+@pytest.mark.parametrize("coefficient", ["abc", "1,5", "0x10", "", "NaN"])
+def test_a_coefficient_that_is_not_a_number_is_refused(coefficient):
+    rxns_df, coeffs_df = _bound_tables(lb=("0", "0"))
+    coeffs_df = coeffs_df.astype({"coefficient": object})
+    coeffs_df.loc[3, "coefficient"] = coefficient
+    with pytest.raises(ValueError, match="coefficient|number"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+def test_a_reaction_index_that_is_not_a_number_is_refused():
+    rxns_df, coeffs_df = _bound_tables(lb=("0", "0"))
+    rxns_df["rxnIdx"] = ["1", "x2"]
+    coeffs_df["rxnIdx"] = ["1", "1", "x2", "x2"]
+    with pytest.raises(ValueError, match="rxnIdx value"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
