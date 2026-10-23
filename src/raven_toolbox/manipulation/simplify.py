@@ -13,7 +13,7 @@ Individual reduction modes (each removes a specific class of reaction, in place)
   zero); RAVEN ``deleteMinMax``. Catches blocked reactions that are not topological
   dead-ends.
 * ``remove_duplicate_reactions`` — all-but-one of each set of reactions with identical
-  stoichiometry/bounds; RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
+  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
 * ``constrain_reversible_reactions`` — does not remove reactions; tightens bounds, making
   reversible reactions that can only carry flux one way irreversible (via FVA); RAVEN
   ``constrainReversible``.
@@ -30,12 +30,14 @@ from __future__ import annotations
 import ast
 import math
 import re
+import warnings
 from collections.abc import Iterable
 
 import cobra
 from cobra.flux_analysis import find_blocked_reactions, flux_variability_analysis
 
 from raven_toolbox.manipulation.irreversible import convert_to_irreversible
+from raven_toolbox.utils.sort import reversible_orientation
 
 _EXP_SUFFIX = re.compile(r"_EXP_\d+$")
 
@@ -165,9 +167,12 @@ def remove_no_flux_reactions(
     return blocked
 
 
-def _signature(rxn):
-    mets = frozenset((m.id, c) for m, c in rxn.metabolites.items())
-    return (mets, rxn.lower_bound, rxn.upper_bound, rxn.objective_coefficient)
+def _signature(rxn, met_index: dict[str, int]):
+    """Stoichiometry (reversible reactions written in the ``sort_model`` direction) and
+    reversibility, as RAVEN ``contractModel`` compares reactions."""
+    sign = reversible_orientation(rxn, met_index)
+    mets = frozenset((m.id, sign * c) for m, c in rxn.metabolites.items())
+    return (mets, rxn.reversibility)
 
 
 def _stoich_signature(rxn, *, ignore_direction: bool) -> frozenset:
@@ -226,9 +231,14 @@ def remove_duplicate_reactions(
 ) -> list[str]:
     """Remove all-but-one of each set of duplicate reactions.
 
-    Reactions are duplicates when they have identical stoichiometry, bounds, and
-    objective coefficient. One of each set is kept (reserved reactions are never
-    removed). Returns the removed reaction IDs.
+    Reactions are duplicates when they have identical stoichiometry and the same
+    reversibility, as in RAVEN ``contractModel``: reversible reactions are compared in the
+    direction ``sort_model(sort_reversible=True)`` gives them, so ``A <=> B`` and ``B <=> A``
+    are duplicates. Bounds and objective coefficients may differ; the survivor takes the
+    lowest lower bound, the highest upper bound and the highest objective coefficient of its
+    group, with a warning where they differ (the values are taken as stored, not mirrored for
+    a reaction written in the opposite direction). One of each set is kept (reserved
+    reactions are never removed). Returns the removed reaction IDs.
 
     The survivor is the first-encountered reaction in ``model.reactions`` order
     (matching RAVEN's ``contractModel``). Its ``gene_reaction_rule`` becomes the
@@ -254,9 +264,10 @@ def remove_duplicate_reactions(
         {r for m in restrict_to_metabolites for r in m.reactions}
         if restrict_to_metabolites is not None else None
     )
+    met_index = {m.id: i for i, m in enumerate(model.metabolites)}
     groups: dict = {}
     for i, rxn in enumerate(model.reactions):
-        key = _signature(rxn) if touching is None or rxn in touching else (object(), i)
+        key = _signature(rxn, met_index) if touching is None or rxn in touching else (object(), i)
         groups.setdefault(key, []).append(rxn)
 
     removed: list[str] = []
@@ -268,6 +279,7 @@ def remove_duplicate_reactions(
         if not to_remove:
             continue
 
+        _merge_bounds_and_objective(keep, rxns)
         _merge_gene_reaction_rules(keep, rxns)
         if all(_EXP_SUFFIX.search(r.id) for r in rxns):
             keep.id = _EXP_SUFFIX.sub("", keep.id)
@@ -275,6 +287,24 @@ def remove_duplicate_reactions(
         removed += [r.id for r in to_remove]
         model.remove_reactions(to_remove)
     return removed
+
+
+def _merge_bounds_and_objective(keep: cobra.Reaction, group: list[cobra.Reaction]) -> None:
+    """Give ``keep`` the widest bounds and the largest objective coefficient of ``group``."""
+    lower = min(r.lower_bound for r in group)
+    upper = max(r.upper_bound for r in group)
+    objective = max(r.objective_coefficient for r in group)
+    if len({r.lower_bound for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different lower bounds. "
+                      "Uses the lowest.", stacklevel=3)
+    if len({r.upper_bound for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different upper bounds. "
+                      "Uses the highest.", stacklevel=3)
+    if len({r.objective_coefficient for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different objective coefficients. "
+                      "Uses the largest.", stacklevel=3)
+    keep.bounds = (lower, upper)
+    keep.objective_coefficient = objective
 
 
 def _top_level_or_clauses(gpr: cobra.core.gene.GPR) -> list[str]:

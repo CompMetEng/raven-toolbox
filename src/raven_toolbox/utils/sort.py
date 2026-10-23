@@ -84,16 +84,22 @@ def _flip(rxn: cobra.Reaction) -> None:
         rxn.add_metabolites({met: -coef}, combine=False)
 
 
+def reversible_orientation(rxn: cobra.Reaction, met_index: dict[str, int]) -> int:
+    """``-1`` when a reversible reaction is written with its first metabolite (sorted by name and
+    compartment) as a product, so ``sort_reversible`` would reverse it; ``1`` otherwise."""
+    if not rxn.reversibility:
+        return 1
+    mets = sorted((m for m, c in rxn.metabolites.items() if c != 0), key=lambda m: met_index[m.id])
+    if not mets:
+        return 1
+    first = sorted(mets, key=lambda m: f"{m.name}{m.compartment}")[0]
+    return -1 if rxn.metabolites[first] > 0 else 1
+
+
 def _sort_reversible(model: cobra.Model) -> None:
     met_index = {m.id: i for i, m in enumerate(model.metabolites)}
     for rxn in model.reactions:
-        if not rxn.reversibility:
-            continue
-        mets = sorted((m for m, c in rxn.metabolites.items() if c != 0), key=lambda m: met_index[m.id])
-        if not mets:
-            continue
-        first = sorted(mets, key=lambda m: f"{m.name}{m.compartment}")[0]
-        if rxn.metabolites[first] > 0:
+        if reversible_orientation(rxn, met_index) < 0:
             _flip(rxn)
 
 

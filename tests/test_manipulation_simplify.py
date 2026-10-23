@@ -74,21 +74,49 @@ def test_dead_end_ignores_bounds_on_its_own_matching_raven():
 
 # --- remove_duplicate_reactions -------------------------------------------
 
-def test_duplicates_removed():
+def _two_rxn_model(eq1, b1, eq2, b2, c2=0.0):
     m = cobra.Model("t")
-    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("a", "b")])
+    m.add_metabolites([cobra.Metabolite(x, name=x, compartment="c") for x in ("a", "b")])
     add_reactions_from_equations(
         m,
         [
-            {"id": "R1", "equation": "a --> b", "bounds": (0, 1000)},
-            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000)},  # duplicate of R1
-            {"id": "R3", "equation": "a --> b", "bounds": (0, 500)},   # different bounds
+            {"id": "R1", "equation": eq1, "bounds": b1},
+            {"id": "R2", "equation": eq2, "bounds": b2},
         ],
     )
-    removed = remove_duplicate_reactions(m)
-    assert len(removed) == 1  # one of R1/R2 removed
-    assert {"R3"} <= {r.id for r in m.reactions}
-    assert sum(r.id in ("R1", "R2") for r in m.reactions) == 1
+    m.reactions.R2.objective_coefficient = c2
+    return m
+
+
+def test_duplicates_removed():
+    m = _two_rxn_model("a --> b", (0, 1000), "a --> b", (0, 1000))
+    assert remove_duplicate_reactions(m) == ["R2"]
+    assert [r.id for r in m.reactions] == ["R1"]
+
+
+def test_duplicates_with_different_bounds_merge_to_the_widest():
+    m = _two_rxn_model("a <=> b", (-5, 10), "a <=> b", (-10, 20), c2=1.0)
+    with pytest.warns(UserWarning) as rec:
+        removed = remove_duplicate_reactions(m)
+    assert removed == ["R2"]
+    assert m.reactions.R1.bounds == (-10, 20)
+    assert m.reactions.R1.objective_coefficient == 1.0
+    assert len(rec) == 3
+
+
+def test_duplicates_differing_in_reversibility_are_kept():
+    m = _two_rxn_model("a --> b", (0, 10), "a <=> b", (-10, 10))
+    assert remove_duplicate_reactions(m) == []
+
+
+def test_reversible_duplicates_in_opposite_directions_merge():
+    m = _two_rxn_model("a <=> b", (-10, 10), "b <=> a", (-10, 10))
+    assert remove_duplicate_reactions(m) == ["R2"]
+
+
+def test_irreversible_opposite_directions_are_kept():
+    m = _two_rxn_model("a --> b", (0, 10), "b --> a", (0, 10))
+    assert remove_duplicate_reactions(m) == []
 
 
 def test_duplicates_keep_reserved():
