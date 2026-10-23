@@ -147,7 +147,8 @@ def hpa_gene_scores(
     """Numeric gene scores from HPA levels for one ``tissue`` (optionally one ``celltype``).
 
     Maps HPA's categorical levels to numbers via ``level_scores`` (default
-    :data:`HPA_LEVEL_SCORES`). Genes absent from the tissue, or whose level is not in the
+    :data:`HPA_LEVEL_SCORES`), comparing the level names case-insensitively as RAVEN's
+    ``scoreModel`` does. Genes absent from the tissue, or whose level is not in the
     score table, are omitted from the output (downstream
     :func:`score_reactions_from_genes` will then fall back to ``no_gene_score`` for any
     reaction whose genes are all absent).
@@ -157,12 +158,13 @@ def hpa_gene_scores(
     """
     if multiple_celltype not in ("best", "average"):
         raise ValueError(f"multiple_celltype must be 'best' or 'average'; got {multiple_celltype!r}")
-    scores_table = dict(level_scores) if level_scores is not None else HPA_LEVEL_SCORES
+    scores_table = {str(k).upper(): v
+                    for k, v in (HPA_LEVEL_SCORES if level_scores is None else level_scores).items()}
 
     sub = hpa.df.loc[hpa.df["tissue"] == tissue].copy()
     if celltype is not None:
         sub = sub.loc[sub["celltype"] == celltype]
-    sub["score"] = sub["level"].map(scores_table)
+    sub["score"] = sub["level"].map(lambda level: scores_table.get(str(level).upper())).astype(float)
     sub = sub.dropna(subset=["score"])  # unknown HPA levels drop out (omitted, not -inf)
     if sub.empty:
         return {}

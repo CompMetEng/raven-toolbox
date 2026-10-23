@@ -149,6 +149,18 @@ def test_hpa_gene_scores_custom_level_table(hpa_tsv):
     assert g == {"ENSG1": 1.0, "ENSG2": 0.5}
 
 
+def test_hpa_gene_scores_compare_level_names_case_insensitively(tmp_path):
+    """RAVEN's scoreModel compares upper-cased level names, for the default and a custom table."""
+    p = tmp_path / "hpa_case.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "G1\tA\tliver\thepatocytes\tstrong\tApproved\n"
+                 "G2\tB\tliver\thepatocytes\tNOT DETECTED\tApproved\n"
+                 "G3\tC\tliver\thepatocytes\tMixed\tApproved\n")
+    hpa = parse_hpa(p)
+    assert hpa_gene_scores(hpa, "liver") == {"G1": 20.0, "G2": -8.0}
+    assert hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0}) == {"G1": 1.0}
+
+
 def test_rna_gene_scores_against_per_gene_mean(rna_tsv):
     """Default reference is per-gene cross-tissue mean (RAVEN arrayData.threshold default).
 
