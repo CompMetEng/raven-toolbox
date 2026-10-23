@@ -6,6 +6,7 @@ import pytest
 
 from raven_toolbox.tasks import Task, check_tasks, parse_task_list
 
+
 def _tsv(text):
     """Prefix every line with an empty comment-marker column; ID may not be the first column."""
     return "".join("\t" + line + "\n" for line in text.splitlines())

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -213,7 +214,7 @@ def _apply_mets(
         )
 
 
-def _canonical_columns(df: pd.DataFrame, aliases: dict[str, tuple[str, ...]], lower_rest: bool = False) -> pd.DataFrame:
+def _canonical_columns(df: pd.DataFrame, aliases: Mapping[str, tuple[str, ...]], lower_rest: bool = False) -> pd.DataFrame:
     """Rename the columns of ``df`` that match an alias (case-insensitive) to the canonical name.
 
     The first column matching a canonical name wins and the others stay as they are.

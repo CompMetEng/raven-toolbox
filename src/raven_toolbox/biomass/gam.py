@@ -71,7 +71,7 @@ def set_gam(
     if targets:
         rxn.add_metabolites(targets, combine=False)  # replaces the coefficient, so it is exactly target
 
-    if ngam is not None:
+    if ngam is not None and ngam_value is not None:
         ngam.bounds = (float(ngam_value), float(ngam_value))
 
     return model

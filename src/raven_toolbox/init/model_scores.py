@@ -64,7 +64,7 @@ def _array_gene_scores(
         cols &= _match(data.celltypes, celltype)
     threshold = data.threshold
     if threshold is not None and np.ndim(threshold) == 0:
-        threshold = np.full(len(data.genes), float(threshold))
+        threshold = np.full(len(data.genes), np.asarray(threshold, dtype=float))
     keep = np.array([g in model_genes for g in data.genes], dtype=bool)
     keep &= ~np.all(np.isnan(levels[:, cols]), axis=1) if cols.any() else False
     zeroed = np.where(np.isnan(levels), 0.0, levels)
@@ -76,8 +76,8 @@ def _array_gene_scores(
             current = zeroed[:, cols].max(axis=1) if cols.any() else np.zeros(len(data.genes))
         else:
             current = zeroed[:, cols].sum(axis=1) / n_selected
-    current_d = {g: float(c) for g, c, k in zip(data.genes, current, keep) if k}
-    average_d = {g: float(a) for g, a, k in zip(data.genes, average, keep) if k}
+    current_d = {g: float(c) for g, c, k in zip(data.genes, current, keep, strict=False) if k}
+    average_d = {g: float(a) for g, a, k in zip(data.genes, average, keep, strict=False) if k}
     return gene_scores_from_expression(
         {g: v for g, v in current_d.items() if not math.isnan(v)}, average_d)
 

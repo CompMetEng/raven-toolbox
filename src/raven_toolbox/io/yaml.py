@@ -819,8 +819,8 @@ def write_yaml_model(
     # genuine notes the caller stored on the model.
     doc_notes = doc.get("notes")
     if isinstance(doc_notes, dict):
-        for key in ("metaData", "version", "_yaml_sections"):
-            doc_notes.pop(key, None)
+        for note_key in ("metaData", "version", "_yaml_sections"):
+            doc_notes.pop(note_key, None)
         if not doc_notes:
             doc.pop("notes", None)
 
@@ -900,9 +900,9 @@ def write_yaml_model(
 
     ordered = OrderedDict()
     ordered["metaData"] = metadata
-    for key in ("metabolites", "reactions", "genes", "compartments", "notes"):
-        if key in doc:
-            ordered[key] = doc.pop(key)
+    for section in ("metabolites", "reactions", "genes", "compartments", "notes"):
+        if section in doc:
+            ordered[section] = doc.pop(section)
     if ec_sections is not None:
         ordered["gecko_light"] = ec_sections["gecko_light"]
         ordered["ec-rxns"] = ec_sections["ec-rxns"]

@@ -308,6 +308,7 @@ def _git(cwd, *args):
 
 def _copy_package(dst):
     import shutil
+
     import raven_toolbox
     shutil.copytree(Path(raven_toolbox.__file__).parent, dst,
                     ignore=shutil.ignore_patterns("__pycache__"))
