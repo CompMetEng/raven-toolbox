@@ -68,3 +68,15 @@ def test_generate_new_ids_prefix_without_separator():
 def test_generate_new_ids_all_non_numeric_uses_last_in_string_order_for_width():
     m = _model_with_reactions(["r_ab", "r_xyz"])
     assert generate_new_ids(m, "reactions", "r_") == ["r_001"]
+
+
+def test_generate_new_ids_a_d_exponent_is_not_a_number():
+    # MATLAB str2double reads "1d2" as NaN, so the suffix does not count as a number.
+    m = _model_with_reactions(["r_1d2", "r_0003"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_0004"]
+    assert generate_new_ids(_model_with_reactions(["r_1d2"]), "reactions", "r_") == ["r_001"]
+
+
+def test_generate_new_ids_non_ascii_digits_are_not_a_number():
+    m = _model_with_reactions(["r_١٢"])
+    assert generate_new_ids(m, "reactions", "r_") == ["r_01"]

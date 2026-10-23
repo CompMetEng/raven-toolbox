@@ -62,14 +62,16 @@ def generate_new_ids(
     return next_ids(existing_ids, prefix, quantity, num_length, label=entity_type)
 
 
-_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][+-]?\d+)?|[+-]?inf", re.IGNORECASE)
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?|[+-]?inf", re.IGNORECASE)
 
 
 def _str2double(text: str) -> float:
+    """The numbers of MATLAB ``str2double`` that appear in ids: signed decimals with an
+    ``e`` exponent, and ``inf``. Other text, including a ``d`` exponent, is NaN."""
     text = text.strip()
     if not _NUMBER.fullmatch(text):
         return math.nan
-    return float(text.replace("d", "e").replace("D", "e"))
+    return float(text)
 
 
 def next_ids(
