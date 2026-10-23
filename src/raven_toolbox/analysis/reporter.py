@@ -95,9 +95,10 @@ def reporter_metabolites(
 ) -> list[ReporterResult]:
     """Compute Reporter Metabolites from per-gene differential-expression p-values.
 
-    ``gene_pvalues`` maps gene id → p-value (genes not in the model, or with a NaN or
-    out-of-``[0, 1]`` p-value, are dropped — a stray invalid p-value would otherwise
-    turn the whole result NaN). If ``gene_fold_changes`` (gene id → log fold change)
+    ``gene_pvalues`` maps gene id → p-value. Genes not in the model and genes with a
+    NaN (or ``None``) p-value are dropped. Any other p-value outside ``[0, 1]``,
+    including ±inf and for genes that are not in the model, raises ``ValueError``
+    (RAVEN raises ``RAVEN:badInput``). If ``gene_fold_changes`` (gene id → log fold change)
     has at least one non-zero value, two extra results are returned for the up- (fc ≥ 0)
     and down- (fc < 0) regulated gene subsets, in addition to ``"all"``; with all fold
     changes zero (or none given) only ``"all"`` is returned, as in RAVEN. A metabolite
@@ -115,12 +116,17 @@ def reporter_metabolites(
     z-scores smaller by a factor ``√(N/(N−1))`` for N scored genes; the
     ranking is the same.
     """
+    given = {g: float(p) for g, p in gene_pvalues.items() if p is not None and not math.isnan(p)}
+    invalid = [(g, p) for g, p in given.items() if not 0.0 <= p <= 1.0]
+    if invalid:
+        gene, value = invalid[0]
+        msg = (
+            f"The P-values must lie between 0 and 1, but {len(invalid)} of them do not. "
+            f"The first is {value:g} (gene {gene})"
+        )
+        raise ValueError(msg)
     model_genes = {g.id for g in model.genes}
-    scored = {
-        g: float(p)
-        for g, p in gene_pvalues.items()
-        if g in model_genes and p is not None and not math.isnan(p) and 0.0 <= p <= 1.0
-    }
+    scored = {g: p for g, p in given.items() if g in model_genes}
     gene_z = _gene_z(scored)
     results = [_reporter_one(model, gene_z, "all")]
 

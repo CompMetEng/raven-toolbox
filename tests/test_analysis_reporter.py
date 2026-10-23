@@ -1,4 +1,6 @@
 """Tests for Reporter Metabolites (analysis/reporter.py)."""
+import math
+
 import cobra
 import pytest
 
@@ -27,6 +29,22 @@ def model():
     r1.gene_reaction_rule = "g1"
     r2.gene_reaction_rule = "g2"
     r3.gene_reaction_rule = "g3"
+    return m
+
+
+@pytest.fixture
+def three_gene_pair_model():
+    """Metabolites A, B and C, each around one reaction with two genes: {g1, g2}, {g3, g4}, {g5, g6}."""
+    m = cobra.Model("pairs")
+    rxns = []
+    for mid, rule in (("A", "g1 or g2"), ("B", "g3 or g4"), ("C", "g5 or g6")):
+        met = cobra.Metabolite(mid, name=mid, compartment="c")
+        rxn = cobra.Reaction(f"r{mid}")
+        rxn.add_metabolites({met: -1})
+        rxns.append((rxn, rule))
+    m.add_reactions([r for r, _ in rxns])
+    for rxn, rule in rxns:
+        rxn.gene_reaction_rule = rule
     return m
 
 
@@ -97,12 +115,38 @@ def test_filters_unknown_and_nan_genes(model):
     assert len(res.table) == 3  # A, B, C scored from the three real genes
 
 
-def test_out_of_range_pvalue_dropped_not_poisoning(model):
-    """A p-value outside [0,1] is dropped, not propagated as NaN through all scores."""
-    (res,) = reporter_metabolites(model, {"g1": 0.01, "g2": 0.01, "g3": 1.7})  # g3 invalid
-    import numpy as np
+@pytest.mark.parametrize(
+    "pvalues",
+    [
+        [0.2, 0.4, 0.7, 0.3, 0.1, 1 + 2.220446049250313e-16],
+        [math.inf, 0.2, 0.4, 0.7, -math.inf, 0.1],
+        [0.2, 0.4, 0.7, 0.3, 0.1, -2.220446049250313e-16],
+        [0.2, 0.4, 0.7, 0.3, 0.1, -math.inf],
+    ],
+)
+def test_pvalues_outside_zero_one_raise(three_gene_pair_model, pvalues):
+    genes = [f"g{i}" for i in range(1, 7)]
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        reporter_metabolites(three_gene_pair_model, dict(zip(genes, pvalues, strict=True)))
 
-    assert not np.isnan(res.table["z_score"].to_numpy()).any()  # no NaN poisoning
+
+def test_pvalue_error_names_the_count_and_the_first_value(three_gene_pair_model):
+    genes = [f"g{i}" for i in range(1, 7)]
+    with pytest.raises(ValueError, match=r"2 of them.*1\.5 \(gene g2\)"):
+        reporter_metabolites(three_gene_pair_model, dict(zip(genes, [0.2, 1.5, 0.7, 0.3, -0.1, 0.1], strict=True)))
+
+
+def test_pvalue_outside_zero_one_raises_for_a_gene_outside_the_model(three_gene_pair_model):
+    genes = [f"g{i}" for i in range(1, 7)] + ["gX"]
+    with pytest.raises(ValueError, match="gene gX"):
+        reporter_metabolites(three_gene_pair_model, dict(zip(genes, [0.2, 0.4, 0.7, 0.3, 0.1, 0.5, 2.0], strict=True)))
+
+
+def test_pvalues_of_zero_and_one_are_valid_and_nan_is_ignored(three_gene_pair_model):
+    genes = [f"g{i}" for i in range(1, 7)]
+    (res,) = reporter_metabolites(three_gene_pair_model, dict(zip(genes, [0.0, 0.4, 0.7, 0.3, math.nan, 1.0], strict=True)))
+    assert len(res.table) == 3
+    assert res.table.set_index("metabolite").loc["C", "n_genes"] == 1
 
 
 def test_fold_changes_of_genes_outside_the_model_do_not_count(model):
