@@ -588,3 +588,11 @@ def test_load_uniprot_keeps_input_order_without_duplicates(tmp_path):
         ("Y2", "SUBCELLULAR LOCATION: Vacuole."),
     ])
     assert load_uniprot(p).genes == ["Y9", "Y2"]
+
+
+def test_write_fasta_empty_sequence_has_no_body_line(tmp_path):
+    from raven_toolbox.localization import write_fasta
+
+    p = tmp_path / "x.fasta"
+    write_fasta({"P3": "MKV", "P4": ""}, p)
+    assert p.read_text() == ">P3\nMKV\n>P4\n"

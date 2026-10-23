@@ -129,7 +129,7 @@ def write_fasta(sequences: Mapping[str, str], path: str | Path, *,
     With ``max_records_per_file`` set (e.g. ``500`` for the DeepLoc 2.1 web server), records are
     split across ``<stem>_001<suffix>``, ``<stem>_002<suffix>``, … and every path is returned;
     otherwise a single file is written at ``path``. ``wrap`` sets the residues-per-line (≤ 0 = one
-    line per sequence).
+    line per sequence). An empty sequence gives the header line only.
     """
     items = list(sequences.items())
     bad = [k for k, _ in items if k != k.strip() or any(ch.isspace() for ch in k)]
@@ -154,6 +154,8 @@ def write_fasta(sequences: Mapping[str, str], path: str | Path, *,
 
 
 def _fasta_record(gid: str, seq: str, wrap: int) -> str:
+    if not seq:
+        return f">{gid}\n"
     body = seq if wrap <= 0 else "\n".join(seq[i:i + wrap] for i in range(0, len(seq), wrap))
     return f">{gid}\n{body}\n"
 
