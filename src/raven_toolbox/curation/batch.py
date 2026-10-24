@@ -145,7 +145,9 @@ def batch_curate(
     A charge must be a finite whole number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted,
     ``0.5``, ``2.5`` and ``Inf`` raise :class:`ValueError`; nothing is rounded). A ``rev`` cell
     must be 0, 1, ``true`` or ``false`` (any other number raises, although the value is not
-    otherwise used). A ``rxnIdx`` cell must be a finite whole number of at least 1; the two
+    otherwise used). A ``rxnIdx`` cell must be a finite whole number of at least 1; each index
+    may be used by one row of the reaction table (the coefficient table repeats it, one row per
+    metabolite), otherwise :class:`ValueError` names the index and the data rows. The two
     reaction tables are matched on the index and the name, and the index is compared by value
     (``1``, ``1.0`` and ``1e0`` are the same). A coefficient must be a finite number other than
     zero; two rows of one reaction for the same metabolite add their coefficients. A row of a
@@ -587,6 +589,14 @@ def _prepare_reaction_tables(rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame):
             row = int(df.index[df["rxnIdx"].isna()][0]) + 1
             raise ValueError(
                 f"Data row {row} of the {label} table has values but its rxnIdx is empty or NaN")
+    if "rxnIdx" in rxns_df.columns:
+        repeated = rxns_df["rxnIdx"].duplicated(keep=False)
+        if repeated.any():
+            index = rxns_df["rxnIdx"][repeated].iloc[0]
+            rows = ", ".join(str(int(i) + 1) for i in rxns_df.index[rxns_df["rxnIdx"] == index])
+            raise ValueError(
+                f"The rxnIdx {index:g} is used by data rows {rows} of the rxnsInfo table; "
+                "each reaction needs its own index")
     rxns_df = rxns_df.astype(object)
     coeffs_df = coeffs_df.astype(object)
     _check_gene_rules(rxns_df)

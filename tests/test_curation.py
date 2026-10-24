@@ -1462,3 +1462,33 @@ def test_a_reaction_name_that_is_nan_in_both_tables_is_the_empty_name():
                               "comps": ["c"], "coefficient": [-1.0]})
     batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
     assert [r.name for r in m.reactions][-1] == ""
+
+
+# --- a repeated rxnIdx in the reaction table, padded quoted headers -------------------------
+
+
+@pytest.mark.parametrize("second", ["1", "1.0", "1e0"])
+def test_a_repeated_rxn_idx_in_the_reaction_table_is_refused_before_any_change(second):
+    m = _base_model()
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tnewA\t\t", f"{second}\tnewB\t\t"],
+        ["1\tnewA\tATP\tc\t-1", "1\tnewA\tADP\tc\t1", "1\tnewB\tATP\tc\t-1", "1\tnewB\tADP\tc\t1"])
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c", "formula": "X"}])
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="rxnIdx 1 is used by data rows 1, 2"):
+        batch_curate(m, mets_df=mets_df, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _snapshot(m) == before
+
+
+# Pin: Python already ignored spaces inside the quotes of a header cell; RAVEN does since the same change.
+@pytest.mark.parametrize("header", [
+    '"  metNames"\t" comps "\t formula ',
+    '"metNames"\t"comps"\t"formula"',
+    ' "metNames" \t "comps" \t "formula" ',
+])
+def test_spaces_inside_the_quotes_of_a_header_cell_are_ignored(tmp_path, header):
+    path = _write(tmp_path / "mets.tsv", header + "\nNADH\tc\tH2O\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    new = m.metabolites.s_0004
+    assert new.name == "NADH" and new.compartment == "c" and new.formula == "H2O"
