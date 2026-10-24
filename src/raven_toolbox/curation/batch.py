@@ -138,8 +138,14 @@ def batch_curate(
     number or ``Inf``. A comma, a hexadecimal number or any expression raises
     :class:`ValueError`, and nothing is evaluated. Only the characters that MATLAB's
     ``strtrim`` removes (not the non-breaking space) are trimmed from a cell. A coefficient
-    that is empty or ``NaN`` raises :class:`ValueError`, and a non-finite charge raises
-    :class:`ValueError`; RAVEN stores such values.
+    that is empty or ``NaN`` raises :class:`ValueError` unless the whole row is empty, which is
+    ignored. A charge must be a finite whole
+    number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted, ``0.5``, ``2.5`` and ``Inf`` raise
+    :class:`ValueError`; nothing is rounded), an ``rxnIdx`` cell must be a finite whole number of
+    at least 1 (``1.5``, ``Inf``, ``0`` and ``-1`` raise :class:`ValueError`; an empty or ``NaN``
+    cell keeps its meaning), and a ``rev`` cell must be 0, 1, ``true`` or
+    ``false`` (any other number raises :class:`ValueError`, although the value is not otherwise
+    used).
 
     Returns
     -------
@@ -155,17 +161,23 @@ def batch_curate(
 
     if mets_df is not None:
         mets_df = _parse_numeric_columns(
-            _canonical_columns(mets_df, _MET_ALIASES), ("charge",), "metsInfo")
+            _canonical_columns(mets_df, _MET_ALIASES), ("charge",), "metsInfo",
+            checks={"charge": _check_whole_charge})
     if genes_df is not None:
         genes_df = _canonical_columns(genes_df, _GENE_ALIASES)
     if rxns_df is not None:
         rxns_df = _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True)
-        _check_numeric_cells(rxns_df, ("rxnIdx",), "rxnsInfo")
+        _check_numeric_cells(rxns_df, ("rxnIdx",), "rxnsInfo", checks={"rxnIdx": _check_rxn_index})
         rxns_df = _parse_numeric_columns(
-            rxns_df, ("lb", "ub", "rev", "rxnConfidenceScores"), "rxnsInfo")
+            rxns_df, ("lb", "ub", "rev", "rxnConfidenceScores"), "rxnsInfo",
+            checks={"rev": _check_boolean_rev})
     if rxns_coeffs_df is not None:
         rxns_coeffs_df = _canonical_columns(rxns_coeffs_df, _COEFF_ALIASES)
-        _check_numeric_cells(rxns_coeffs_df, ("rxnIdx",), "rxnsCoeffs")
+        # A row without any content is ignored; a row with content needs a coefficient.
+        rxns_coeffs_df = rxns_coeffs_df[
+            [any(_has_value(v) for v in row) for row in rxns_coeffs_df.itertuples(index=False)]]
+        _check_numeric_cells(
+            rxns_coeffs_df, ("rxnIdx",), "rxnsCoeffs", checks={"rxnIdx": _check_rxn_index})
         rxns_coeffs_df = _parse_numeric_columns(rxns_coeffs_df, ("coefficient",), "rxnsCoeffs")
         if rxns_coeffs_df["coefficient"].isna().any():
             raise ValueError("Every coefficient in the rxnsCoeffs table must be a number")
@@ -700,24 +712,63 @@ def _number_cell(value, field: str, label: str) -> float:
     raise ValueError(f'The {field} value "{text}" in the {label} table is not a number')
 
 
-def _parse_numeric_columns(df: pd.DataFrame, columns, label: str) -> pd.DataFrame:
-    """Copy of ``df`` whose numeric columns hold floats, NaN where the cell is empty."""
+def _check_whole_charge(number: float, text: str, field: str, label: str) -> None:
+    """A charge is a finite whole number: ``0.5``, ``2.5`` and ``Inf`` raise, nothing is rounded."""
+    if not math.isnan(number) and (not math.isfinite(number) or number != math.floor(number)):
+        raise ValueError(
+            f'The {field} value "{text}" in the {label} table is not a finite whole number')
+
+
+def _check_boolean_rev(number: float, text: str, field: str, label: str) -> None:
+    """A reversibility cell is 0, 1, ``true`` or ``false``; other numbers raise."""
+    if not math.isnan(number) and number not in (0.0, 1.0):
+        raise ValueError(
+            f'The {field} value "{text}" in the {label} table must be 0, 1, true or false')
+
+
+def _parse_numeric_columns(df: pd.DataFrame, columns, label: str, checks=None) -> pd.DataFrame:
+    """Copy of ``df`` whose numeric columns hold floats, NaN where the cell is empty.
+
+    ``checks`` maps a column to a function ``(number, text, column, label)`` that raises
+    :class:`ValueError` for a number the column does not accept.
+    """
     present = [c for c in columns if c in df.columns]
     if not present:
         return df
+    checks = checks or {}
     df = df.copy()
     for column in present:
-        df[column] = pd.Series(
-            [_number_cell(v, column, label) for v in df[column]], index=df.index, dtype=float)
+        numbers = []
+        for v in df[column]:
+            number = _number_cell(v, column, label)
+            if column in checks:
+                checks[column](number, _trim(v) if _has_value(v) else "", column, label)
+            numbers.append(number)
+        df[column] = pd.Series(numbers, index=df.index, dtype=float)
     return df
 
 
-def _check_numeric_cells(df: pd.DataFrame, columns, label: str) -> None:
-    """Raise :class:`ValueError` when a cell of the numeric columns is not a number or empty."""
+def _check_rxn_index(number: float, text: str, field: str, label: str) -> None:
+    """A reaction index is a finite whole number of at least 1; an empty or NaN cell is not given."""
+    if not math.isnan(number) and (not math.isfinite(number) or number != math.floor(number)
+                                   or number < 1):
+        raise ValueError(
+            f'The {field} value "{text}" in the {label} table is not a whole number of at least 1')
+
+
+def _check_numeric_cells(df: pd.DataFrame, columns, label: str, checks=None) -> None:
+    """Raise :class:`ValueError` when a cell of the numeric columns is not a number or empty.
+
+    ``checks`` maps a column to a function ``(number, text, column, label)`` that raises
+    :class:`ValueError` for a number the column does not accept.
+    """
+    checks = checks or {}
     for column in columns:
         if column in df.columns:
             for value in df[column]:
-                _number_cell(value, column, label)
+                number = _number_cell(value, column, label)
+                if column in checks:
+                    checks[column](number, _trim(value) if _has_value(value) else "", column, label)
 
 
 def _has_value(v) -> bool:
@@ -734,12 +785,13 @@ def _has_value(v) -> bool:
 def _coerce_int(v) -> int:
     """Pandas reads integer-like strings as floats. Recover the int.
 
-    A charge that is not finite raises :class:`ValueError`; RAVEN stores such a value.
+    The charge column has been checked to hold finite whole numbers; any other value raises
+    :class:`ValueError` here too, and nothing is rounded.
     """
     value = float(v)
-    if not math.isfinite(value):
-        raise ValueError(f"The charge {v!r} is not a finite number")
-    return int(round(value))
+    if not math.isfinite(value) or value != math.floor(value):
+        raise ValueError(f"The charge {v!r} is not a finite whole number")
+    return int(value)
 
 
 def _generate_ids(existing, prefix: str, count: int) -> list[str]:

@@ -3,6 +3,7 @@
 Oracles: RAVEN tinitTests T0001/T0002 on testModel with the default '1+1' schedule.
 """
 
+import cobra
 from tinit_oracles import (
     TEST_MODEL_FTINIT_NO_TASKS,
     TEST_MODEL_FTINIT_SPONT_R7_R10,
@@ -22,6 +23,7 @@ from raven_toolbox.init import (
     score_reactions_from_genes,
 )
 from raven_toolbox.init.score import gene_scores_from_expression
+from raven_toolbox.tasks import Task
 
 
 def _scores(model):
@@ -396,3 +398,32 @@ def test_prep_restores_a_reversible_reaction_that_can_only_run_backwards():
     template = _bounds_and_stoichiometry(m)
     prep = prep_init_model(m, None, ext_comp="s")
     assert _bounds_and_stoichiometry(prep.ref_model) == template
+
+
+def _dead_end_task_model():
+    """A to B to C, and a dead end B to U that a task names as its output."""
+    m = cobra.Model("t")
+    for name, comp in (("A", "e"), ("B", "c"), ("C", "c"), ("U", "c")):
+        m.add_metabolites([cobra.Metabolite(f"{name}_{comp}", name=name, compartment=comp)])
+    spec = [("EXA", (0, 1000), {"A_e": 1}), ("R1", (0, 1000), {"A_e": -1, "B_c": 1}),
+            ("R2", (-1000, 1000), {"B_c": -1, "C_c": 1}), ("EXC", (0, 1000), {"C_c": -1}),
+            ("R4", (0, 1000), {"B_c": -1, "U_c": 1})]
+    for rid, bounds, stoich in spec:
+        r = cobra.Reaction(rid)
+        m.add_reactions([r])
+        r.bounds = bounds
+        r.add_metabolites({m.metabolites.get_by_id(k): v for k, v in stoich.items()})
+    return m
+
+
+def test_ftinit_output_has_no_metabolite_without_a_reaction():
+    # The task keeps U in the reference model although its only reaction is removed by the
+    # first simplification; RAVEN's final removeReactions(..., true, true) drops it again.
+    task = Task(id="MAKE_U", inputs=[("A[e]", 0.0, 1000.0)], outputs=[("U[c]", 0.0, 1000.0)])
+    prep = prep_init_model(_dead_end_task_model(), [task], ext_comp="e", scale=False)
+    assert "U[c]" in [f"{m.name}[{m.compartment}]" for m in prep.ref_model.metabolites]
+    out = ftinit(prep, rxn_scores={"R1": 1.0, "R2": 1.0})
+    assert [t.id for t in prep.tasks] == ["MAKE_U"]
+    assert {r.id for r in out.reactions} == {"EXA", "R1", "R2", "EXC"}
+    assert [m.id for m in out.metabolites] == ["A_e", "B_c", "C_c"]
+    assert all(m.reactions for m in out.metabolites)

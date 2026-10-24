@@ -979,6 +979,10 @@ def ftinit(
         out = fill_tasks(out, prep.ref_model, prep.tasks, rxn_scores=rxn_scores if use_scores_for_tasks else None,
                          resolve_ties=resolve_ties, mutate_in_place=True,
                          verbose=verbose).model
+    # RAVEN removes the reactions with removeReactions(refModel, ..., true, true), which drops
+    # every metabolite that has no reaction left, also one that had none in the reference model
+    # (a metabolite a task names but the first simplification left without a reaction).
+    out.remove_metabolites([m for m in out.metabolites if not m.reactions])
     if remove_genes and gene_scores is not None:   # prune negative-scoring genes from the GPRs
         out, _ = remove_low_score_genes(out, gene_scores)
     return out

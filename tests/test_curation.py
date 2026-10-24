@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 import cobra
 import pandas as pd
@@ -796,6 +797,73 @@ def test_a_charge_that_is_not_a_number_is_refused(text):
         batch_curate(_base_model(), mets_df=df)
 
 
+@pytest.mark.parametrize("text", ["0.5", "2.5", "-1.5", "1e-3", "Inf", "-inf", "+Inf"])
+def test_a_charge_that_is_not_a_finite_whole_number_is_refused(text):
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": text},
+                       {"metNames": "ADP", "comps": "c", "charge": -2}])
+    with pytest.raises(ValueError, match=re.escape(f'charge value "{text}"') + ".*finite whole number"):
+        batch_curate(_base_model(), mets_df=df)
+
+
+@pytest.mark.parametrize("text, charge", [("2.0", 2), ("2e0", 2), ("-3", -3), ("+1", 1),
+                                         (" 4 ", 4), (2.0, 2), ("-0", 0)])
+def test_a_whole_number_charge_is_accepted_in_any_notation(text, charge):
+    df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": text},
+                       {"metNames": "ADP", "comps": "c", "charge": -2}])
+    m = _base_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df)
+    assert m.metabolites.get_by_id("s_0001").charge == charge
+
+
+@pytest.mark.parametrize("text", ["2", "0.5", "Inf", "-inf", "-1", "1.5", "2e0"])
+def test_a_reversibility_cell_other_than_zero_one_true_false_is_refused(text):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(rev=("1", text))
+    with pytest.raises(ValueError, match=re.escape(f'rev value "{text}"') + ".*0, 1, true or false"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+@pytest.mark.parametrize("table", ["info", "coeffs"])
+@pytest.mark.parametrize("text", ["1.5", "Inf", "0", "-1", "-inf", "0.5"])
+def test_an_rxn_index_that_is_not_a_whole_number_of_at_least_one_is_refused(table, text):
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh", "lb": "0"}])
+    coeffs_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c",
+                               "coefficient": "-1"}])
+    (rxns_df if table == "info" else coeffs_df).loc[0, "rxnIdx"] = text
+    label = "rxnsInfo" if table == "info" else "rxnsCoeffs"
+    with pytest.raises(ValueError, match=re.escape(f'rxnIdx value "{text}"') + f".*{label}"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+@pytest.mark.parametrize("text", ["1", "2", "3.0", "1e0", " 4 "])
+def test_an_rxn_index_that_is_a_whole_number_of_at_least_one_is_accepted(text):
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": text, "rxnNames": "fresh", "lb": "0"}])
+    coeffs_df = pd.DataFrame([{"rxnIdx": text, "rxnNames": "fresh", "metNames": "ATP", "comps": "c",
+                               "coefficient": "-1"}])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _by_name(m, "fresh") is not None
+
+
+def test_a_coefficient_row_without_any_content_is_ignored():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh", "lb": "0"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-1"},
+        {"rxnIdx": "", "rxnNames": "", "metNames": "", "comps": "", "coefficient": ""}])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert len(_by_name(m, "fresh").metabolites) == 1
+
+
+@pytest.mark.parametrize("text", ["0", "1", "1.0", "true", "FALSE", " True ", "NaN", ""])
+def test_a_reversibility_cell_of_zero_one_true_false_or_nothing_is_accepted(text):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(rev=(text, text))
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
 @pytest.mark.parametrize("text", ["abc", "NA", "None"])
 def test_a_confidence_score_that_is_not_a_number_is_refused(text):
     m = _base_model()
@@ -838,7 +906,7 @@ def test_a_non_breaking_space_is_not_trimmed_from_a_cell():
 @pytest.mark.parametrize("value", [math.inf, -math.inf, "Inf", "-inf"])
 def test_a_charge_that_is_not_finite_is_refused(value):
     df = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": value}])
-    with pytest.raises(ValueError, match="not a finite number"):
+    with pytest.raises(ValueError, match="not a finite whole number"):
         batch_curate(_base_model(), mets_df=df)
 
 
