@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-import logging
 import math
 import re
 import warnings
@@ -13,7 +12,6 @@ from pathlib import Path
 import cobra
 import numpy as np
 import pandas as pd
-from cobra.core.gene import GPR
 
 from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
@@ -158,8 +156,9 @@ def batch_curate(
     raises :class:`ValueError`. An empty MIRIAM column removes no annotation.
 
     A lower bound above the upper bound (also against the stored bound of an existing
-    reaction, since both bounds are set together) raises :class:`ValueError`; RAVEN writes such
-    bounds without a message, but a cobra reaction cannot hold them.
+    reaction, since both bounds are set together) raises :class:`ValueError`. RAVEN's
+    ``curateModelFromTables`` writes such bounds as given and ``solveLP`` rejects the model when
+    it is run ("Invalid set of bounds for reaction(s): ..."); a cobra reaction cannot hold them.
 
     Every check above, the required columns, the metabolites of the coefficient rows, the bounds
     (several rows that update one reaction are checked one after the other), a gene listed twice
@@ -167,12 +166,15 @@ def batch_curate(
     leaves the model unchanged. What is not checked beforehand is an error that cobra itself
     raises while the tables are applied.
 
-    A malformed ``grRules`` cell raises :class:`ValueError` (cobra would log it and store an
-    empty rule), and so does the rule of a new reaction that names a gene which neither the model
-    nor ``genes_df`` has; RAVEN's ``addRxns`` is called without permission to add genes, and it
-    stops with an error of its own for such a rule. RAVEN stores some malformed rules, for
-    example ``(G1 or G2``, as text when the genes exist; Python refuses them. The rule of an
-    existing reaction may name a gene the model does not have.
+    A ``grRules`` cell must be a well-formed gene rule, in the grammar of RAVEN's
+    ``parseGrRule``: genes joined by ``and``/``or`` in any case or by ``&``, ``&&``, ``|`` and
+    ``||``, with balanced parentheses. A rule with an operator that lacks an operand, empty
+    parentheses or two genes without an operator between them raises :class:`ValueError`, as it
+    raises ``RAVEN:badInput`` there. The rule of a new reaction that names a gene which neither
+    the model nor ``genes_df`` has also raises :class:`ValueError`; RAVEN's ``addRxns`` is
+    called without permission to add genes and stops with an error of its own. The rule of an
+    existing reaction may name a gene the model does not have. A gene id that ``genes_df``
+    lists more than once raises :class:`ValueError`, whether the model has the gene or not.
 
     A reaction table with a header and no row is empty: when both reaction tables are empty
     nothing happens, and a coefficient row without a reaction row (or the reverse) raises
@@ -409,17 +411,20 @@ def _prepare_genes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _check_genes(model: cobra.Model, genes_df: pd.DataFrame) -> None:
-    """Raise :class:`ValueError` for a gene id that the model does not have and the table lists
-    more than once (RAVEN adds such a gene twice, a cobra gene list cannot hold it)."""
-    existing = {g.id for g in model.genes}
+    """Raise :class:`ValueError` for a gene id that the table lists more than once.
+
+    This holds for a gene the model has as well as for a new one: two rows for one gene would
+    say two things about it (RAVEN would add a second gene with the same id).
+    """
     seen: set[str] = set()
+    repeated: list[str] = []
     for value in genes_df["genes"]:
         gid = _text(value)
-        if gid in existing:
-            continue
-        if gid in seen:
-            raise ValueError(f"The gene {gid!r} is listed more than once in genes_df")
+        if gid in seen and gid not in repeated:
+            repeated.append(gid)
         seen.add(gid)
+    if repeated:
+        raise ValueError(f"These genes are listed more than once in genes_df: {repeated}")
 
 
 def _row_has_content(row, columns=None) -> bool:
@@ -427,31 +432,125 @@ def _row_has_content(row, columns=None) -> bool:
     return any(_has_value(v) for v in values)
 
 
-def _check_gene_rules(rxns_df: pd.DataFrame) -> None:
-    """Raise :class:`ValueError` for a ``grRules`` cell that is not a valid gene rule.
+_RULE_TOKEN = re.compile(r"\(|\)|[^\s()]+")
+_AND_WORDS = frozenset({"and", "&", "&&"})
+_OR_WORDS = frozenset({"or", "|", "||"})
+#: Spellings of the operators that cobra reads as they are.
+_COBRA_OPERATORS = frozenset({"and", "AND", "&", "or", "OR", "|"})
 
-    cobra logs a malformed rule and stores an empty one, which would lose the rule silently.
-    RAVEN stops for some malformed rules of new reactions (``G1 and and (``) and stores others as
-    text (``(G1 or G2``); Python refuses every malformed rule.
+
+def _rule_tokens(rule: str) -> list[tuple[str, str]]:
+    """Split a gene rule into ``(kind, text)`` pairs; kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
+
+    The operators are ``and``/``or`` in any case and the symbols ``&``, ``&&``, ``|`` and ``||``,
+    as RAVEN's ``parseGrRule`` reads them; every other word is a gene id.
+    """
+    tokens = []
+    for match in _RULE_TOKEN.finditer(rule):
+        word = match.group()
+        low = word.lower()
+        if word in ("(", ")"):
+            tokens.append((word, word))
+        elif low in _AND_WORDS:
+            tokens.append(("and", word))
+        elif low in _OR_WORDS:
+            tokens.append(("or", word))
+        else:
+            tokens.append(("gene", word))
+    return tokens
+
+
+def _rule_genes(rule: str) -> list[str]:
+    """Gene ids of a gene rule; :class:`ValueError` when the rule is not well formed.
+
+    The grammar is that of RAVEN's ``parseGrRule``: ``expr := term (or term)*``,
+    ``term := factor (and factor)*``, ``factor := gene | ( expr )``.
+    """
+    tokens = _rule_tokens(rule)
+    genes: list[str] = []
+
+    def factor(pos: int) -> int:
+        if pos >= len(tokens):
+            raise ValueError("the rule ends after an operator")
+        kind, text = tokens[pos]
+        if kind == "(":
+            pos = expr(pos + 1)
+            if pos >= len(tokens) or tokens[pos][0] != ")":
+                raise ValueError("unbalanced parentheses")
+            return pos + 1
+        if kind == "gene":
+            genes.append(text)
+            return pos + 1
+        raise ValueError(f'expected a gene but found "{text}"')
+
+    def term(pos: int) -> int:
+        pos = factor(pos)
+        while pos < len(tokens) and tokens[pos][0] == "and":
+            pos = factor(pos + 1)
+        return pos
+
+    def expr(pos: int) -> int:
+        pos = term(pos)
+        while pos < len(tokens) and tokens[pos][0] == "or":
+            pos = term(pos + 1)
+        return pos
+
+    if not tokens:
+        return genes
+    end = expr(0)
+    if end < len(tokens):
+        raise ValueError(f'unexpected "{tokens[end][1]}"')
+    return genes
+
+
+def _row_rule_genes(row: pd.Series) -> list[str]:
+    """Gene ids of the ``grRules`` cell of a reaction row; :class:`ValueError` when it is malformed."""
+    rule = row.get("grRules")
+    if not _has_value(rule):
+        return []
+    try:
+        return _rule_genes(str(rule))
+    except ValueError as exc:
+        raise ValueError(
+            f'The grRules value "{rule}" of reaction {_text(row["rxnNames"])!r} is not a valid gene rule: {exc}'
+        ) from None
+
+
+def _stored_gene_rule(rule) -> str:
+    """The rule as cobra reads it: operator spellings cobra does not know (``And``, ``&&``,
+    ``||``) are written as ``and``/``or``; everything else is kept as it is."""
+    text = str(rule)
+    pieces: list[str] = []
+    last = 0
+    for match in _RULE_TOKEN.finditer(text):
+        word = match.group()
+        low = word.lower()
+        if word in _COBRA_OPERATORS or word in ("(", ")"):
+            continue
+        if low in _AND_WORDS:
+            replacement = "and"
+        elif low in _OR_WORDS:
+            replacement = "or"
+        else:
+            continue
+        pieces.append(text[last:match.start()])
+        pieces.append(replacement)
+        last = match.end()
+    pieces.append(text[last:])
+    return "".join(pieces)
+
+
+def _check_gene_rules(rxns_df: pd.DataFrame) -> None:
+    """Raise :class:`ValueError` for a ``grRules`` cell that is not a well-formed gene rule.
+
+    The grammar is RAVEN's (``parseGrRule``), so both tools refuse the same rules: an operator
+    without two operands, unbalanced or empty parentheses, and two genes without an operator
+    between them. cobra would log a malformed rule and store an empty one.
     """
     if "grRules" not in rxns_df.columns:
         return
-    gene_logger = logging.getLogger("cobra.core.gene")
     for _, row in rxns_df.iterrows():
-        rule = row["grRules"]
-        if not _has_value(rule):
-            continue
-        disabled = gene_logger.disabled
-        gene_logger.disabled = True
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                parsed = GPR.from_string(str(rule))
-        finally:
-            gene_logger.disabled = disabled
-        if parsed.body is None:
-            raise ValueError(
-                f'The grRules value "{rule}" of reaction {_text(row["rxnNames"])!r} is not a valid gene rule')
+        _row_rule_genes(row)
 
 
 def _prepare_reaction_tables(rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame):
@@ -665,19 +764,7 @@ def _plan_reactions(
 
 def _check_new_reaction_genes(row: pd.Series, known_genes: set[str]) -> None:
     """Raise :class:`ValueError` when the gene rule of a new reaction names an unknown gene."""
-    rule = row.get("grRules")
-    if not _has_value(rule):
-        return
-    gene_logger = logging.getLogger("cobra.core.gene")
-    disabled = gene_logger.disabled
-    gene_logger.disabled = True
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            genes = {g for g in GPR.from_string(str(rule)).genes}
-    finally:
-        gene_logger.disabled = disabled
-    unknown = sorted(genes - known_genes)
+    unknown = sorted(set(_row_rule_genes(row)) - known_genes)
     if unknown:
         raise ValueError(
             f"The gene rule of the new reaction {_text(row['rxnNames'])!r} names genes that are "
@@ -812,7 +899,7 @@ def _update_reaction(
     if _is_written(row, "rxnNames", overwrite_with_empty):
         rxn.name = _text(row["rxnNames"])
     if _has_value(row.get("grRules")):
-        rxn.gene_reaction_rule = str(row["grRules"])
+        rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
     if _has_value(row.get("lb")) or _has_value(row.get("ub")):
         # Both bounds are set together, so that a pair that is valid as a whole is accepted
         # whatever the stored bounds are.
@@ -868,7 +955,7 @@ def _build_new_reactions(
         )
         rxn.add_metabolites(stoich)
         if _has_value(row.get("grRules")):
-            rxn.gene_reaction_rule = str(row["grRules"])
+            rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
         if _has_value(row.get("subSystems")):
             rxn.subsystem = subsystem_to_str(row["subSystems"])
         if _has_value(row.get("eccodes")):
