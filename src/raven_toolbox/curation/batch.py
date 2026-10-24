@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 import re
 import warnings
@@ -12,6 +13,7 @@ from pathlib import Path
 import cobra
 import numpy as np
 import pandas as pd
+from cobra.core.gene import GPR
 
 from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
@@ -161,9 +163,10 @@ def batch_curate(
 
     Every check above, the required columns, the metabolites of the coefficient rows and the bounds
     run before the model is touched, so a table that fails leaves the model unchanged. What
-    can still fail while the tables are applied is an error raised by cobra itself (for
-    instance in a gene rule); a malformed gene rule is logged by cobra and stored as an empty
-    rule, whereas RAVEN stops.
+    can still fail while the tables are applied is an error raised by cobra itself. A malformed
+    ``grRules`` cell raises :class:`ValueError` before anything is applied (cobra would log it
+    and store an empty rule); RAVEN stops for some malformed rules of new reactions and stores
+    the others as text.
 
     Returns
     -------
@@ -371,6 +374,33 @@ def _row_has_content(row, columns=None) -> bool:
     return any(_has_value(v) for v in values)
 
 
+def _check_gene_rules(rxns_df: pd.DataFrame) -> None:
+    """Raise :class:`ValueError` for a ``grRules`` cell that is not a valid gene rule.
+
+    cobra logs a malformed rule and stores an empty one, which would lose the rule silently.
+    RAVEN stops for some malformed rules of new reactions (``G1 and and (``) and stores others as
+    text (``(G1 or G2``); Python refuses every malformed rule.
+    """
+    if "grRules" not in rxns_df.columns:
+        return
+    gene_logger = logging.getLogger("cobra.core.gene")
+    for _, row in rxns_df.iterrows():
+        rule = row["grRules"]
+        if not _has_value(rule):
+            continue
+        disabled = gene_logger.disabled
+        gene_logger.disabled = True
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                parsed = GPR.from_string(str(rule))
+        finally:
+            gene_logger.disabled = disabled
+        if parsed.body is None:
+            raise ValueError(
+                f'The grRules value "{rule}" of reaction {str(row["rxnNames"])!r} is not a valid gene rule')
+
+
 def _prepare_reaction_tables(rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame):
     """Reaction and coefficient tables with canonical column names and numeric columns.
 
@@ -400,8 +430,8 @@ def _prepare_reaction_tables(rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame):
         if "rxnIdx" in df.columns and df["rxnIdx"].isna().any():
             row = int(df.index[df["rxnIdx"].isna()][0]) + 1
             raise ValueError(
-                f"The rxnIdx in row {row} of the {label} table is empty; "
-                "every row with content needs a reaction index")
+                f"Data row {row} of the {label} table has values but its rxnIdx is empty or NaN")
+    _check_gene_rules(rxns_df)
     if coeffs_df["coefficient"].isna().any():
         row = int(coeffs_df.index[coeffs_df["coefficient"].isna()][0]) + 1
         raise ValueError(

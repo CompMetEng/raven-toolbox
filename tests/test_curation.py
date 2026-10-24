@@ -1080,6 +1080,7 @@ def test_an_unmatched_opening_quote_takes_the_rest_of_the_file_as_one_cell(tmp_p
         ("NADH", "X\nNAD\tc\tY\n")]
 
 
+# Pin: the numbered name is pandas' own convention for a repeated header.
 def test_a_repeated_header_is_stored_under_a_numbered_name(tmp_path):
     path = _write(tmp_path / "mets.tsv", "metNames\tcomps\tchebi\tchebi\nNADH\tc\t1\t2\n")
     m = _base_model()
@@ -1151,7 +1152,7 @@ def test_a_row_with_content_but_no_rxn_idx_is_refused(table):
         coeffs_df.loc[1, "rxnIdx"] = ""
     m = _base_model()
     before = _snapshot(m)
-    with pytest.raises(ValueError, match="rxnIdx in row .* is empty"):
+    with pytest.raises(ValueError, match="has values but its rxnIdx is empty or NaN"):
         batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
     assert _snapshot(m) == before
 
@@ -1221,6 +1222,7 @@ def test_a_coefficient_that_is_zero_or_infinite_is_refused(text):
         batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
 
 
+# Pin: an all-empty MIRIAM column was never written.
 def test_an_all_empty_miriam_column_removes_no_annotation():
     m = _annotated_model()
     df = pd.DataFrame([
@@ -1229,3 +1231,29 @@ def test_an_all_empty_miriam_column_removes_no_annotation():
     with pytest.warns(UserWarning, match="overwritten"):
         batch_curate(m, mets_df=df)
     assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"
+
+
+@pytest.mark.parametrize("rule", ["G1 and and (", "(G1 or G2", "G1 or"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_malformed_gene_rule_is_refused_before_any_change(rule, existing):
+    m = _base_model()
+    name, ctable = ("ATP hydrolysis", ("-1", "1")) if existing else ("fresh", ("-2", "2"))
+    rxns_df = pd.DataFrame([{"rxnNames": name, "grRules": rule}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": name, "metNames": "ATP", "comps": "c", "coefficient": ctable[0]},
+        {"rxnNames": name, "metNames": "ADP", "comps": "c", "coefficient": ctable[1]}])
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c"}])
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="is not a valid gene rule"):
+        batch_curate(m, mets_df=mets_df, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _snapshot(m) == before
+
+
+def test_a_valid_gene_rule_in_any_case_is_stored():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": "G1 AND (G2 or G3)"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
+        {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert sorted(g.id for g in _by_name(m, "fresh").genes) == ["G1", "G2", "G3"]
