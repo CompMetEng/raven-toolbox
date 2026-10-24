@@ -40,8 +40,8 @@ COBRA ecosystem.
 
 ## Status
 
-**raven-toolbox 3.0.0b1** is out — the first beta toward 3.0, tracking the upcoming MATLAB
-RAVEN 3.0 beta ([release notes](https://github.com/CompMetEng/raven-toolbox/releases/tag/v3.0.0b1),
+**raven-toolbox 3.0.0b2** is out — the second beta toward 3.0, tracking the upcoming MATLAB
+RAVEN 3.0 beta ([release notes](https://github.com/CompMetEng/raven-toolbox/releases/tag/v3.0.0b2),
 [changelog](CHANGELOG.md)). It has been validated against MATLAB RAVEN on **Human-GEM** (5 Hart2015
 cell-line models, Jaccard 0.975–0.980 — see
 [the Human-GEM validation study](https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/humangem-validation.md)
@@ -66,7 +66,7 @@ pip install raven-toolbox
 ```
 
 That installs the latest **stable** release. PyPI pre-releases are opt-in, so get the
-3.0.0b1 beta with:
+3.0.0b2 beta with:
 
 ```bash
 pip install --pre raven-toolbox
