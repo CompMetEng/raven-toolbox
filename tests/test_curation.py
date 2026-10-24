@@ -1243,7 +1243,9 @@ def test_an_all_empty_miriam_column_removes_no_annotation():
     assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"
 
 
-@pytest.mark.parametrize("rule", ["G1 and and (", "(G1 or G2", "G1 or"])
+@pytest.mark.parametrize("rule", [
+    "G1 and and (", "(G1 or G2", "G1 or", "G1 G2", "and G1", "()", "G1 and (G2 or )", "G1)", "G1 and or G2",
+    "or", "(", "(G1) (G2)", "G1 (G2)", "(G1 and G2) G3", "G1 and ()", "G1 xor G2", "G1 && || G2", "& G1", "(G1 and) G2"])
 @pytest.mark.parametrize("existing", [False, True])
 def test_a_malformed_gene_rule_is_refused_before_any_change(rule, existing):
     m = _base_model()
@@ -1259,16 +1261,28 @@ def test_a_malformed_gene_rule_is_refused_before_any_change(rule, existing):
     assert _snapshot(m) == before
 
 
-# Pin: a valid rule whose genes the genes table lists was already stored.
-def test_a_valid_gene_rule_in_any_case_is_stored():
+@pytest.mark.parametrize("rule, genes", [
+    ("G1 AND (G2 or G3)", ["G1", "G2", "G3"]),
+    ("G1 And G2", ["G1", "G2"]),
+    ("G1 && G2", ["G1", "G2"]),
+    ("G1 || G2", ["G1", "G2"]),
+    ("G1 & G2", ["G1", "G2"]),
+    ("G1 | G2", ["G1", "G2"]),
+    ("G1 and(G2 or G3)", ["G1", "G2", "G3"]),
+    ("(G1)and(G2)", ["G1", "G2"]),
+    ("G1 AND G2 OR G3", ["G1", "G2", "G3"]),
+    ("  G1  ", ["G1"]),
+    ("((G1))", ["G1"]),
+])
+def test_a_valid_gene_rule_in_any_spelling_is_stored(rule, genes):
     m = _base_model()
-    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": "G1 AND (G2 or G3)"}])
+    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": rule}])
     coeffs_df = pd.DataFrame([
         {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
         {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
     batch_curate(m, genes_df=_genes_df("G1", "G2", "G3"), rxns_df=rxns_df,
                  rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
-    assert sorted(g.id for g in _by_name(m, "fresh").genes) == ["G1", "G2", "G3"]
+    assert sorted(g.id for g in _by_name(m, "fresh").genes) == genes
 
 
 # --- header-only tables, atomicity of several rows, genes of new reactions, headers ---------
@@ -1335,18 +1349,18 @@ def test_a_new_gene_listed_twice_is_refused_before_any_change():
     before = _snapshot(m)
     mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c"}])
     genes_df = pd.DataFrame({"genes": ["G9", "G9"]})
-    with pytest.raises(ValueError, match="'G9' is listed more than once"):
+    with pytest.raises(ValueError, match="listed more than once.*G9"):
         batch_curate(m, mets_df=mets_df, genes_df=genes_df)
     assert _snapshot(m) == before
 
 
-# Pin: a gene of the model listed twice was already updated twice.
-def test_a_gene_of_the_model_listed_twice_is_updated_twice():
+def test_a_gene_of_the_model_listed_twice_is_refused_before_any_change():
     m = _base_model()
+    before = _snapshot(m)
     genes_df = pd.DataFrame({"genes": ["YAL001C", "YAL001C"], "geneShortNames": ["a", "b"]})
-    with pytest.warns(UserWarning, match="overwritten"):
+    with pytest.raises(ValueError, match="listed more than once.*YAL001C"):
         batch_curate(m, genes_df=genes_df)
-    assert m.genes.YAL001C.name == "b"
+    assert _snapshot(m) == before
 
 
 def test_a_new_reaction_with_a_gene_that_nothing_defines_is_refused_before_any_change():
