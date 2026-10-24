@@ -101,6 +101,18 @@ def test_infeasible_task_is_reported_failed():
     assert res.failed_tasks == ["bad"] and res.reactions == {}
 
 
+def test_failed_tasks_are_reported_by_id_and_by_position():
+    """Two tasks share an id; only the second cannot be performed.
+
+    ``failed_tasks`` lists the id, ``failed_indices`` the position, so a caller can drop the
+    failing task and keep the one with the same id.
+    """
+    good = Task(id="t", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("e[s]", 1.0, 1.0)])
+    bad = Task(id="t", outputs=[("z[s]", 1.0, 1.0)])
+    res = find_task_essential_reactions(make_test_model(), [good, bad])
+    assert res.failed_tasks == ["t"] and res.failed_indices == [1]
+
+
 def test_should_fail_task_defines_no_essentials():
     res = find_task_essential_reactions(
         make_test_model(), [Task(id="sf", should_fail=True, outputs=[("e[s]", 1.0, 1.0)])]

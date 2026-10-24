@@ -22,7 +22,7 @@ import concurrent.futures as cf
 import pickle
 import warnings
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -303,14 +303,16 @@ class EssentialReactionsResult:
     reverse): the reaction must carry flux of that sign in every feasible solution of
     at least one task. ``per_task`` is the same, split by task id. ``task_metabolites``
     are the model metabolites the tasks reference (RAVEN ``essentialMetsForTasks``,
-    protected from removal). ``failed_tasks`` are tasks that were infeasible or
-    malformed and thus skipped (RAVEN drops these from the task list).
+    protected from removal). ``failed_tasks`` are the ids of tasks that were infeasible or
+    malformed and thus skipped (RAVEN drops these from the task list); ``failed_indices`` are
+    their positions in the task list, which stay distinct when several tasks share an id.
     """
 
     reactions: dict[str, int]
     per_task: dict[str, dict[str, int]]
     task_metabolites: set[str]
     failed_tasks: list[str]
+    failed_indices: list[int] = field(default_factory=list)
 
 
 def _task_essential_reactions(
@@ -550,4 +552,5 @@ def find_task_essential_reactions(
     per_task = {tid: {r: (-1 if v < 0 else 1) for r, v in d.items()} for tid, d in per_task.items()}
 
     failed = sorted({tasks[i].id for i in failed_index})
-    return EssentialReactionsResult(reactions, per_task, task_metabolites, failed)
+    return EssentialReactionsResult(reactions, per_task, task_metabolites, failed,
+                                    sorted(failed_index))

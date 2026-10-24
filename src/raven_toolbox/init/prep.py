@@ -285,20 +285,16 @@ def prep_init_model(
 
     With the first simplification, every gene left without a reaction is removed from the
     reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
-    genes that had no reaction in the template. Raises :class:`ValueError` when two tasks
-    share an id or a task id is not text.
+    genes that had no reaction in the template. Task ids may repeat (for example as category
+    codes) and may be empty; a task that cannot be performed is removed by its position, so a
+    task with the same id that can be performed stays. Raises :class:`ValueError` when a task
+    id is not text.
     """
     if tasks is not None:
         tasks = list(tasks)
         bad = [t.id for t in tasks if not isinstance(t.id, str)]
         if bad:
             raise ValueError(f"Task ids must be text, got {bad[0]!r} of type {type(bad[0]).__name__}")
-        counts: dict[str, int] = {}
-        for t in tasks:
-            counts[t.id] = counts.get(t.id, 0) + 1
-        duplicated = sorted(i for i, n in counts.items() if n > 1)
-        if duplicated:
-            raise ValueError(f"Task ids must be unique; repeated: {', '.join(duplicated)}")
     ref_model = template.copy()
 
     if simplify:
@@ -357,7 +353,8 @@ def prep_init_model(
                                             processes=processes)
         essential_pre = ess.reactions
         task_mets = ess.task_metabolites
-        kept_tasks = [t for t in tasks if t.id not in ess.failed_tasks]
+        failed_positions = set(ess.failed_indices)
+        kept_tasks = [t for i, t in enumerate(tasks) if i not in failed_positions]
 
         if simplify:
             # prepINITModel: removeMets(cModel, setdiff(unusedMets, essentialMetsForTasks)), where
