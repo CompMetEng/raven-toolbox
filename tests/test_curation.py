@@ -38,6 +38,13 @@ def _base_model() -> cobra.Model:
 
 # --- metabolites ------------------------------------------------------
 
+
+def _genes_df(*ids):
+    """A genes table that lists ``ids``: the gene rule of a new reaction may only name genes the
+    model or the genes table has."""
+    return pd.DataFrame({"genes": list(ids)})
+
+
 def test_add_new_metabolite():
     m = _base_model()
     df = pd.DataFrame([
@@ -197,8 +204,8 @@ def test_add_new_reaction_with_existing_mets():
         {"rxnNames": "ADP phosphorylation", "metNames": "ATP", "comps": "c",
          "coefficient": 1.0},
     ])
-    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df,
-                          rxn_id_prefix="r_")
+    result = batch_curate(m, genes_df=_genes_df("YBR456W"), rxns_df=rxns_df,
+                          rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
     assert result.added_reactions == ["r_0002"]
     new = m.reactions.get_by_id("r_0002")
     assert new.name == "ADP phosphorylation"
@@ -259,8 +266,8 @@ def test_add_new_reaction_joins_list_subsystems():
         {"rxnNames": "ADP phosphorylation", "metNames": "ATP", "comps": "c",
          "coefficient": 1.0},
     ])
-    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df,
-                          rxn_id_prefix="r_")
+    result = batch_curate(m, genes_df=_genes_df("YBR456W"), rxns_df=rxns_df,
+                          rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
     assert result.added_reactions == ["r_0002"]
     assert m.reactions.get_by_id("r_0002").subsystem == "glycolysis;energy"
 
@@ -384,7 +391,8 @@ def _two_hexokinases() -> tuple[pd.DataFrame, pd.DataFrame]:
 def test_reactions_sharing_a_name_are_told_apart_by_rxn_idx():
     m = _base_model()
     rxns_df, coeffs_df = _two_hexokinases()
-    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    result = batch_curate(m, genes_df=_genes_df("G1", "G2"), rxns_df=rxns_df,
+                          rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
     assert result.added_reactions == ["r_0002", "r_0003"]
     first, second = (m.reactions.get_by_id(i) for i in result.added_reactions)
     assert {met.name: c for met, c in first.metabolites.items()} == {"ATP": -1.0, "ADP": 3.0}
@@ -398,6 +406,7 @@ def test_index_header_is_read_as_rxn_idx():
     rxns_df, coeffs_df = _two_hexokinases()
     result = batch_curate(
         m,
+        genes_df=_genes_df("G1", "G2"),
         rxns_df=rxns_df.rename(columns={"rxnIdx": "index"}),
         rxns_coeffs_df=coeffs_df.rename(columns={"rxnIdx": "Index"}),
         rxn_id_prefix="r_",
@@ -408,7 +417,8 @@ def test_index_header_is_read_as_rxn_idx():
 def test_new_reaction_without_bounds_is_unbounded():
     m = _base_model()
     rxns_df, coeffs_df = _two_hexokinases()
-    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    batch_curate(m, genes_df=_genes_df("G1", "G2"), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df,
+                 rxn_id_prefix="r_")
     rxn = m.reactions.get_by_id("r_0002")
     assert rxn.lower_bound == float("-inf")
     assert rxn.upper_bound == float("inf")
@@ -1249,11 +1259,192 @@ def test_a_malformed_gene_rule_is_refused_before_any_change(rule, existing):
     assert _snapshot(m) == before
 
 
+# Pin: a valid rule whose genes the genes table lists was already stored.
 def test_a_valid_gene_rule_in_any_case_is_stored():
     m = _base_model()
     rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": "G1 AND (G2 or G3)"}])
     coeffs_df = pd.DataFrame([
         {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
         {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
-    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    batch_curate(m, genes_df=_genes_df("G1", "G2", "G3"), rxns_df=rxns_df,
+                 rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
     assert sorted(g.id for g in _by_name(m, "fresh").genes) == ["G1", "G2", "G3"]
+
+
+# --- header-only tables, atomicity of several rows, genes of new reactions, headers ---------
+
+_RXN_HEADER = "rxnIdx\trxnNames\tlb\tub\n"
+_COEFF_HEADER = "rxnIdx\trxnNames\tmetNames\tcomps\tcoefficient\n"
+
+
+def test_header_only_reaction_tables_change_nothing(tmp_path):
+    m = _base_model()
+    before = _snapshot(m)
+    result = batch_curate_from_tsv(
+        m, rxns_tsv=_write(tmp_path / "r.tsv", _RXN_HEADER),
+        rxns_coeffs_tsv=_write(tmp_path / "c.tsv", _COEFF_HEADER))
+    assert not result
+    assert _snapshot(m) == before
+
+
+def test_header_only_reaction_data_frames_change_nothing():
+    m = _base_model()
+    before = _snapshot(m)
+    rxns_df = pd.DataFrame(columns=["rxnIdx", "rxnNames", "lb"])
+    coeffs_df = pd.DataFrame(columns=["rxnIdx", "rxnNames", "metNames", "comps", "coefficient"])
+    assert not batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert _snapshot(m) == before
+
+
+# Pin: the error for a header-only reaction table next to coefficient rows was already raised.
+def test_a_header_only_reaction_table_beside_coefficient_rows_is_refused(tmp_path):
+    m = _base_model()
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="no matching row"):
+        batch_curate_from_tsv(
+            m, rxns_tsv=_write(tmp_path / "r.tsv", _RXN_HEADER),
+            rxns_coeffs_tsv=_write(tmp_path / "c.tsv", _COEFF_HEADER + "1\tfresh\tATP\tc\t-1\n"))
+    assert _snapshot(m) == before
+
+
+def test_two_rows_that_update_one_reaction_are_checked_one_after_the_other():
+    m = _base_model()
+    before = _snapshot(m)
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tfirst\t500\t", "2\tsecond\t\t300"],
+        ["1\tfirst\tATP\tc\t-1", "1\tfirst\tADP\tc\t1", "2\tsecond\tATP\tc\t-1", "2\tsecond\tADP\tc\t1"])
+    with pytest.raises(ValueError, match="lower bound 500 .* upper bound 300"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert _snapshot(m) == before
+
+
+# Pin: two valid rows for one reaction were already applied one after the other.
+def test_two_rows_that_update_one_reaction_are_applied_in_turn():
+    m = _base_model()
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tfirst\t200\t", "2\tsecond\t\t900"],
+        ["1\tfirst\tATP\tc\t-1", "1\tfirst\tADP\tc\t1", "2\tsecond\tATP\tc\t-1", "2\tsecond\tADP\tc\t1"])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    rxn = m.reactions.get_by_id("r_0001")
+    assert (rxn.name, rxn.bounds) == ("second", (200.0, 900.0))
+
+
+def test_a_new_gene_listed_twice_is_refused_before_any_change():
+    m = _base_model()
+    before = _snapshot(m)
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c"}])
+    genes_df = pd.DataFrame({"genes": ["G9", "G9"]})
+    with pytest.raises(ValueError, match="'G9' is listed more than once"):
+        batch_curate(m, mets_df=mets_df, genes_df=genes_df)
+    assert _snapshot(m) == before
+
+
+# Pin: a gene of the model listed twice was already updated twice.
+def test_a_gene_of_the_model_listed_twice_is_updated_twice():
+    m = _base_model()
+    genes_df = pd.DataFrame({"genes": ["YAL001C", "YAL001C"], "geneShortNames": ["a", "b"]})
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, genes_df=genes_df)
+    assert m.genes.YAL001C.name == "b"
+
+
+def test_a_new_reaction_with_a_gene_that_nothing_defines_is_refused_before_any_change():
+    m = _base_model()
+    before = _snapshot(m)
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c"}])
+    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": "G1 and YAL001C"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
+        {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
+    with pytest.raises(ValueError, match=r"not in the model or in genes_df: \['G1'\]"):
+        batch_curate(m, mets_df=mets_df, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert _snapshot(m) == before
+
+
+# Pin: the rule of an existing reaction may still name a gene the model does not have.
+def test_the_gene_rule_of_an_existing_reaction_may_name_a_new_gene():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnNames": "ATP hydrolysis", "grRules": "G7"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "ATP hydrolysis", "metNames": "ATP", "comps": "c", "coefficient": "-1"},
+        {"rxnNames": "ATP hydrolysis", "metNames": "ADP", "comps": "c", "coefficient": "1"}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert m.reactions.r_0001.gene_reaction_rule == "G7"
+
+
+@pytest.mark.parametrize("header, row, expected", [
+    ("metNames\tcomps\tmetNames", "NADH\tc\tother", "NADH"),
+    ("metNames\tcomps\tformula\tmetFormulas", "NADH\tc\tH\tHH", "H"),
+    ("Comps\tmetNames\tcomps", "c\tNADH\tother", "NADH"),
+])
+def test_a_core_header_that_is_repeated_or_spelled_twice_uses_the_first_column(
+        tmp_path, header, row, expected):
+    path = _write(tmp_path / "mets.tsv", header + "\n" + row + "\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    new = m.metabolites.s_0004
+    assert new.name == "NADH" and new.compartment == "c"
+    assert new.annotation == {}
+    assert new.formula in ("", None, "H")
+    if expected == "H":
+        assert new.formula == "H"
+
+
+def test_a_lower_case_and_an_upper_case_lb_header_use_the_first_column(tmp_path):
+    rxns = _write(tmp_path / "r.tsv", "rxnIdx\trxnNames\tLB\tlb\n1\tATP hydrolysis\t10\t20\n")
+    coeffs = _write(tmp_path / "c.tsv", _COEFF_HEADER + "1\tATP hydrolysis\tATP\tc\t-1\n"
+                    "1\tATP hydrolysis\tADP\tc\t1\n")
+    m = _base_model()
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate_from_tsv(m, rxns_tsv=rxns, rxns_coeffs_tsv=coeffs)
+    assert m.reactions.r_0001.lower_bound == 10.0
+
+
+def test_header_names_are_trimmed_and_one_pair_of_quotes_is_removed(tmp_path):
+    path = _write(tmp_path / "mets.tsv",
+                  'metNames\t comps \t" a "\t"b""c"\t"d"x\n' "NADH\tc\t0\t1\t2\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert m.metabolites.s_0004.annotation == {" a ": "0", 'b""c': "1", '"d"x': "2"}
+
+
+def test_a_column_with_an_empty_header_is_ignored(tmp_path):
+    path = _write(tmp_path / "mets.tsv", "metNames\tcomps\t\nNADH\tc\tvalue\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert m.metabolites.s_0004.annotation == {}
+
+
+# Pin: repeated header names already got distinct names.
+def test_repeated_header_names_never_collide(tmp_path):
+    path = _write(tmp_path / "mets.tsv", "metNames\tcomps\ta\ta.1\ta\ta\nNADH\tc\t1\t2\t3\t4\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    annotation = m.metabolites.s_0004.annotation
+    assert sorted(annotation.values()) == ["1", "2", "3", "4"]
+
+
+def test_a_blank_first_line_is_the_header_and_the_file_is_refused(tmp_path):
+    path = _write(tmp_path / "mets.tsv", "\nmetNames\tcomps\nNADH\tc\n")
+    with pytest.raises(ValueError, match="1 columns"):
+        batch_curate_from_tsv(_base_model(), mets_tsv=path)
+
+
+def test_text_cells_of_a_data_frame_with_numbers_are_not_upcast():
+    m = _base_model()
+    rxns_df = pd.DataFrame({"rxnIdx": [1], "rxnNames": [7], "lb": [0.0]})
+    coeffs_df = pd.DataFrame({"rxnIdx": [1], "rxnNames": ["7"], "metNames": ["ATP"],
+                              "comps": ["c"], "coefficient": [-1.0]})
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert [r.name for r in m.reactions][-1] == "7"
+
+
+def test_a_reaction_name_that_is_nan_in_both_tables_is_the_empty_name():
+    m = _base_model()
+    rxns_df = pd.DataFrame({"rxnIdx": [1], "rxnNames": [float("nan")], "lb": [0.0]})
+    coeffs_df = pd.DataFrame({"rxnIdx": [1], "rxnNames": [float("nan")], "metNames": ["ATP"],
+                              "comps": ["c"], "coefficient": [-1.0]})
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    assert [r.name for r in m.reactions][-1] == ""
