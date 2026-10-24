@@ -38,6 +38,8 @@ _FINAL_STEP_RUNS = (
     {"mip_gap": 0.0004, "time_limit": 120, "abs_gap": 10.0},
     {"mip_gap": 0.0030, "time_limit": 5000, "abs_gap": 20.0},
 )
+# RAVEN 'full' series: one run (INITStepDesc with MIPGap 0.0004, TimeLimit 10000).
+_FULL_RUNS = ({"mip_gap": 0.0004, "time_limit": 10000, "abs_gap": 10.0},)
 
 
 @dataclass
@@ -50,7 +52,7 @@ class InitStep:
     allow_met_secr: bool = False                 # relax S·v = 0 to ≥ 0
     mets_to_ignore: Sequence[str] = field(default_factory=tuple)  # met names zeroed from S (e.g. H2O)
     # RAVEN's per-step MILPParams + AbsMIPGaps escalation schedule (see _STEP_RUNS). Empty
-    # → a single solve at the caller's mip_gap / mip_gap_abs (used by 'full' and ad-hoc steps).
+    # → a single solve at the caller's mip_gap / mip_gap_abs (ad-hoc steps).
     milp_runs: tuple[dict, ...] = ()
 
 
@@ -59,7 +61,8 @@ def get_init_steps(series: str = "1+1", *, mets_to_ignore: Sequence[str] = ()) -
 
     ``'1+1'`` (default, step 1+2 merged), ``'2+1'`` (3-step), ``'1+0'``/``'2+0'``
     (skip the final GPR-less step), ``'full'`` (single MILP). ``mets_to_ignore`` are
-    metabolite names removed from the stoichiometry in each step (e.g. H2O, H+).
+    metabolite names removed from the stoichiometry in each step (e.g. H2O, H+); the
+    ``'full'`` series ignores none, as RAVEN's ``getINITSteps`` does.
     """
     m = tuple(mets_to_ignore)
     s1 = InitStep("ignore", _ALL_NO_GPR_KEPT, mets_to_ignore=m, milp_runs=_STEP_RUNS)
@@ -77,5 +80,5 @@ def get_init_steps(series: str = "1+1", *, mets_to_ignore: Sequence[str] = ()) -
     if series == "2+0":
         return [s1_posrev, s2_all]
     if series == "full":
-        return [InitStep("ignore", _NONE, mets_to_ignore=m)]
+        return [InitStep("ignore", _NONE, mets_to_ignore=(), milp_runs=_FULL_RUNS)]
     raise ValueError(f"Unknown ftINIT series {series!r}; expected 1+1, 2+1, 1+0, 2+0, full.")

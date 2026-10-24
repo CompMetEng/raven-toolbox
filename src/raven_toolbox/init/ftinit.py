@@ -62,7 +62,9 @@ from optlang.interface import Variable  # untyped (resolves to Any); used for co
 from optlang.symbolics import Real, add, mul
 
 from raven_toolbox.init.genes import remove_low_score_genes
+from raven_toolbox.init.hpa import HPAData, HPARnaData
 from raven_toolbox.init.merge import group_rxn_scores
+from raven_toolbox.init.model_scores import TranscrData, score_for_init
 from raven_toolbox.init.steps import get_init_steps
 from raven_toolbox.init.taskfill import fill_tasks
 
@@ -700,7 +702,7 @@ def _solve_step(
     gap made relative, which is safe when the step's objective is near zero — breaking as
     soon as the previous run's achieved gap already meets the next (looser) target. A
     caller ``time_limit`` caps each run's own limit. With no schedule (``step.milp_runs``
-    empty, e.g. the ``'full'`` series) this is a single solve at the caller's gap.
+    empty, as in an ad-hoc step) this is a single solve at the caller's gap.
     """
     def _run(mg, mga, tl, prove=None):
         return run_ftinit(
@@ -745,9 +747,21 @@ def _solve_step(
 
 def ftinit(
     prep,
-    rxn_scores: Mapping[str, float],
+    tissue: str | None = None,
+    celltype: str | None = None,
+    hpa: HPAData | None = None,
     *,
+    transcr: TranscrData | HPARnaData | None = None,
+    rxn_scores: Mapping[str, float] | None = None,
     gene_scores: Mapping[str, float] | None = None,
+    remove_genes: bool = True,
+    use_scores_for_tasks: bool = True,
+    no_gene_score: float = -2.0,
+    isozyme_scoring: str = "max",
+    complex_scoring: str = "min",
+    multiple_cell_scoring: str = "max",
+    hpa_level_scores: Mapping[str, float] | None = None,
+    data_precedence: str = "gene",
     series: str = "1+1",
     steps=None,
     fill_gaps: bool = True,
@@ -770,8 +784,15 @@ def ftinit(
 ) -> cobra.Model:
     """Run the full ftINIT pipeline on prepData and return the context-specific model.
 
-    ``prep`` is a :class:`raven_toolbox.init.PrepData`. ``rxn_scores`` maps **original**
-    reaction id → score (e.g. from :func:`score_reactions_from_genes` on the template).
+    ``prep`` is a :class:`raven_toolbox.init.PrepData`. Like RAVEN's ``ftINIT(prepData, tissue,
+    celltype, hpaData, 'transcrData', ...)``, the scores come from ``hpa`` and/or ``transcr``
+    for ``tissue`` (and ``celltype``) on the reference model, by :func:`score_for_init`, which
+    also takes the scoring options (``no_gene_score``, ``isozyme_scoring``, ``complex_scoring``,
+    ``multiple_cell_scoring``, ``hpa_level_scores``, ``data_precedence``). Alternatively pass
+    ``rxn_scores`` (**original** reaction id → score) and no data; ``gene_scores`` then gives
+    the gene scores for the final pruning. ``remove_genes`` (default true) prunes low-score
+    genes from the GPRs when gene scores exist; ``use_scores_for_tasks`` (default true) uses
+    the reaction scores as weights when fitting the tasks.
     ``series`` selects which staged schedule to run — see :func:`get_init_steps` for
     what each option changes (default ``'1+1'``); pass ``steps`` directly to use a
     custom schedule instead. Each step regroups scores under its ``ignore_mask``, fixes
@@ -805,7 +826,10 @@ def ftinit(
     calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_.
 
-    ``mip_gap``/``time_limit`` are forwarded to each :func:`run_ftinit` solve. On
+    ``mip_gap`` and ``mip_gap_abs`` apply to a step without a run schedule; a step with a
+    schedule (every named series, including ``full``) uses the gaps of its own runs
+    (``full``: one run at 0.0004 and 10000 s). ``time_limit`` caps the time limit of each
+    run of every step, scheduled or not. On
     genome-scale models they are essential for tractability — see the `INIT parameter
     calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
@@ -859,6 +883,17 @@ def ftinit(
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-reference-reactions.md>`_
     on raven-docs for the full account.
     """
+    if rxn_scores is not None:
+        if hpa is not None or transcr is not None:
+            raise ValueError("pass either rxn_scores or hpa/transcr, not both")
+    else:
+        if tissue is None:
+            raise ValueError("tissue is required when scoring from hpa/transcr")
+        rxn_scores, gene_scores = score_for_init(
+            prep.ref_model, hpa, transcr, tissue, celltype, no_gene_score=no_gene_score,
+            isozyme_scoring=isozyme_scoring, complex_scoring=complex_scoring,
+            multiple_cell_scoring=multiple_cell_scoring, hpa_level_scores=hpa_level_scores,
+            data_precedence=data_precedence)
     steps = steps if steps is not None else get_init_steps(series)
     min_model, group_of = prep.min_model, prep.group_of
     met_producers = (_metabolomics_producers(prep, metabolomics)
@@ -928,6 +963,7 @@ def ftinit(
     # Keep the surviving originals plus all exchange reactions (always re-added).
     final_kept = (set(prep.orig_rxn_ids) - to_remove) | prep.masks.exchange
 
+    # ref_model carries the template's bounds and directions, so the output does too.
     out = prep.ref_model.copy()
     out.remove_reactions([r.id for r in out.reactions if r.id not in final_kept],
                          remove_orphans=True)
@@ -940,9 +976,17 @@ def ftinit(
         # mutate_in_place=True: `out` is this function's own disposable copy of
         # prep.ref_model, not exposed anywhere else, so fill_tasks gap-filling it directly
         # skips a second full copy of the same (genome-scale) model.
-        out = fill_tasks(out, prep.ref_model, prep.tasks, rxn_scores=rxn_scores,
+        out = fill_tasks(out, prep.ref_model, prep.tasks, rxn_scores=rxn_scores if use_scores_for_tasks else None,
                          resolve_ties=resolve_ties, mutate_in_place=True,
                          verbose=verbose).model
-    if gene_scores is not None:   # prune negative-scoring genes from the GPRs
+    # RAVEN removes the reactions with removeReactions(refModel, ..., true, true), which drops
+    # every metabolite that has no reaction left, also one that had none in the reference model
+    # (a metabolite a task names but the first simplification left without a reaction).
+    out.remove_metabolites([m for m in out.metabolites if not m.reactions])
+    # removeReactions(..., true, true) also drops every gene that has no reaction left, also
+    # one that had none in the reference model (prep_init_model with simplify=False keeps those).
+    for gene in [g for g in out.genes if not g.reactions]:
+        out.genes.remove(gene)
+    if remove_genes and gene_scores is not None:   # prune negative-scoring genes from the GPRs
         out, _ = remove_low_score_genes(out, gene_scores)
     return out

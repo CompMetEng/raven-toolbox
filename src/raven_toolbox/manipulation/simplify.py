@@ -13,7 +13,7 @@ Individual reduction modes (each removes a specific class of reaction, in place)
   zero); RAVEN ``deleteMinMax``. Catches blocked reactions that are not topological
   dead-ends.
 * ``remove_duplicate_reactions`` — all-but-one of each set of reactions with identical
-  stoichiometry/bounds; RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
+  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
 * ``constrain_reversible_reactions`` — does not remove reactions; tightens bounds, making
   reversible reactions that can only carry flux one way irreversible (via FVA); RAVEN
   ``constrainReversible``.
@@ -30,12 +30,14 @@ from __future__ import annotations
 import ast
 import math
 import re
+import warnings
 from collections.abc import Iterable
 
 import cobra
 from cobra.flux_analysis import find_blocked_reactions, flux_variability_analysis
 
 from raven_toolbox.manipulation.irreversible import convert_to_irreversible
+from raven_toolbox.utils.sort import reversible_orientation
 
 _EXP_SUFFIX = re.compile(r"_EXP_\d+$")
 
@@ -112,21 +114,33 @@ def remove_dead_end_reactions(
     return removed_rxns, removed_mets
 
 
-def remove_zero_interval_reactions(model: cobra.Model) -> list[str]:
+def remove_zero_interval_reactions(
+    model: cobra.Model, *, reserved: Iterable[str] | None = None
+) -> list[str]:
     """Remove reactions locked at zero flux (``lb == ub == 0``), pruning orphans.
 
-    RAVEN ``simplifyModel``'s ``deleteZeroInterval`` mode — such reactions can never
-    carry flux, so they only enlarge downstream problems. Modifies in place; returns
-    the removed reaction ids.
+    RAVEN ``simplifyModel``'s ``deleteZeroInterval`` mode: such reactions can never
+    carry flux, so they only enlarge downstream problems. Every metabolite left without a
+    reaction is removed, including ones that were orphans before. Genes are kept, as in
+    RAVEN ``removeReactions`` with its defaults. ``reserved`` reaction ids are never
+    removed. Modifies in place; returns the removed reaction ids.
     """
-    zero = [r for r in model.reactions if r.lower_bound == 0 and r.upper_bound == 0]
+    reserved = set(reserved or [])
+    zero = [
+        r for r in model.reactions
+        if r.lower_bound == 0 and r.upper_bound == 0 and r.id not in reserved
+    ]
     if zero:
-        model.remove_reactions(zero, remove_orphans=True)
+        model.remove_reactions(zero, remove_orphans=False)
+    _prune_orphan_metabolites(model)
     return [r.id for r in zero]
 
 
 def remove_no_flux_reactions(
-    model: cobra.Model, *, open_exchanges: bool = True
+    model: cobra.Model,
+    *,
+    open_exchanges: bool = True,
+    reserved: Iterable[str] | None = None,
 ) -> list[str]:
     """Remove reactions that cannot carry flux under the tested bounds (RAVEN ``deleteMinMax``).
 
@@ -138,17 +152,27 @@ def remove_no_flux_reactions(
     ``deleteMinMax`` does, which can remove more. A reaction that is blocked under these
     bounds stays blocked under any tighter ones, so removing it before task discovery /
     the merge is safe as long as no later step relaxes a sink, demand or internal
-    bound. Modifies in place; returns the removed reaction ids.
+    bound. ``reserved`` reaction ids are never removed. Every metabolite left without a
+    reaction is removed; genes are kept, as in RAVEN ``removeReactions`` with its
+    defaults. Modifies in place; returns the removed reaction ids.
     """
-    blocked = find_blocked_reactions(model, open_exchanges=open_exchanges)
+    reserved = set(reserved or [])
+    blocked = [
+        rid for rid in find_blocked_reactions(model, open_exchanges=open_exchanges)
+        if rid not in reserved
+    ]
     if blocked:
-        model.remove_reactions(blocked, remove_orphans=True)
-    return list(blocked)
+        model.remove_reactions(blocked, remove_orphans=False)
+    _prune_orphan_metabolites(model)
+    return blocked
 
 
-def _signature(rxn):
-    mets = frozenset((m.id, c) for m, c in rxn.metabolites.items())
-    return (mets, rxn.lower_bound, rxn.upper_bound, rxn.objective_coefficient)
+def _signature(rxn, met_index: dict[str, int]):
+    """Stoichiometry (reversible reactions written in the ``sort_model`` direction) and
+    reversibility, as RAVEN ``contractModel`` compares reactions."""
+    sign = reversible_orientation(rxn, met_index)
+    mets = frozenset((m.id, sign * c) for m, c in rxn.metabolites.items())
+    return (mets, rxn.reversibility)
 
 
 def _stoich_signature(rxn, *, ignore_direction: bool) -> frozenset:
@@ -202,14 +226,18 @@ def find_duplicate_reactions(
 def remove_duplicate_reactions(
     model: cobra.Model,
     *,
-    reserved: Iterable[str] | None = None,
     restrict_to_metabolites: Iterable[cobra.Metabolite] | None = None,
 ) -> list[str]:
     """Remove all-but-one of each set of duplicate reactions.
 
-    Reactions are duplicates when they have identical stoichiometry, bounds, and
-    objective coefficient. One of each set is kept (reserved reactions are never
-    removed). Returns the removed reaction IDs.
+    Reactions are duplicates when they have identical stoichiometry and the same
+    reversibility, as in RAVEN ``contractModel``: reversible reactions are compared in the
+    direction ``sort_model(sort_reversible=True)`` gives them, so ``A <=> B`` and ``B <=> A``
+    are duplicates. Bounds and objective coefficients may differ; the survivor takes the
+    lowest lower bound, the highest upper bound and the highest objective coefficient of its
+    group, with a warning where they differ (the values are taken as stored, not mirrored for
+    a reaction written in the opposite direction). One of each set is kept; there is no
+    reserved-reaction option, as in ``contractModel``. Returns the removed reaction IDs.
 
     The survivor is the first-encountered reaction in ``model.reactions`` order
     (matching RAVEN's ``contractModel``). Its ``gene_reaction_rule`` becomes the
@@ -230,14 +258,14 @@ def remove_duplicate_reactions(
         if it is already a duplicate of another (matching ``contractModel``'s
         ``mets`` argument, used internally by ``replace_metabolite``).
     """
-    reserved = set(reserved or [])
     touching = (
         {r for m in restrict_to_metabolites for r in m.reactions}
         if restrict_to_metabolites is not None else None
     )
+    met_index = {m.id: i for i, m in enumerate(model.metabolites)}
     groups: dict = {}
     for i, rxn in enumerate(model.reactions):
-        key = _signature(rxn) if touching is None or rxn in touching else (object(), i)
+        key = _signature(rxn, met_index) if touching is None or rxn in touching else (object(), i)
         groups.setdefault(key, []).append(rxn)
 
     removed: list[str] = []
@@ -245,10 +273,9 @@ def remove_duplicate_reactions(
         if len(rxns) <= 1:
             continue
         keep = rxns[0]
-        to_remove = [r for r in rxns if r is not keep and r.id not in reserved]
-        if not to_remove:
-            continue
+        to_remove = [r for r in rxns if r is not keep]
 
+        _merge_bounds_and_objective(keep, rxns)
         _merge_gene_reaction_rules(keep, rxns)
         if all(_EXP_SUFFIX.search(r.id) for r in rxns):
             keep.id = _EXP_SUFFIX.sub("", keep.id)
@@ -256,6 +283,24 @@ def remove_duplicate_reactions(
         removed += [r.id for r in to_remove]
         model.remove_reactions(to_remove)
     return removed
+
+
+def _merge_bounds_and_objective(keep: cobra.Reaction, group: list[cobra.Reaction]) -> None:
+    """Give ``keep`` the widest bounds and the largest objective coefficient of ``group``."""
+    lower = min(r.lower_bound for r in group)
+    upper = max(r.upper_bound for r in group)
+    objective = max(r.objective_coefficient for r in group)
+    if len({r.lower_bound for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different lower bounds. "
+                      "Uses the lowest.", stacklevel=3)
+    if len({r.upper_bound for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different upper bounds. "
+                      "Uses the highest.", stacklevel=3)
+    if len({r.objective_coefficient for r in group}) > 1:
+        warnings.warn(f"Duplicates of reaction {keep.id} have different objective coefficients. "
+                      "Uses the largest.", stacklevel=3)
+    keep.bounds = (lower, upper)
+    keep.objective_coefficient = objective
 
 
 def _top_level_or_clauses(gpr: cobra.core.gene.GPR) -> list[str]:
@@ -372,8 +417,10 @@ def group_linear_reactions(
     **Lossy**: gene-reaction associations are discarded (RAVEN does the same), since merged
     reactions have no meaningful combined GPR. The model is first made irreversible, then any
     metabolite that is produced by exactly one reaction and consumed by exactly one reaction is
-    eliminated by merging the two reactions. ``reserved`` reaction ids are never merged away.
-    Mutates in place.
+    eliminated by merging the two reactions. Metabolites are visited in model order and the
+    reaction with the lower index survives a merge, as in RAVEN's ``groupLinear``, so the
+    survivor of a chain is its first reaction. ``reserved`` reaction ids are never merged
+    away. Mutates in place.
     """
     reserved = set(reserved or [])
 
@@ -389,7 +436,9 @@ def group_linear_reactions(
     # participating in a merge can expose new linear chains in its neighbours,
     # so touched mets are re-enqueued rather than restarting a full scan of
     # all metabolites after every merge.
-    pending: list = list(model.metabolites)
+    met_pos = {m: i for i, m in enumerate(model.metabolites)}
+    rxn_pos = {r: i for i, r in enumerate(model.reactions)}
+    pending: list = list(reversed(model.metabolites))  # popped in model order
     seen_in_pass: set = set()
     while pending:
         met = pending.pop()
@@ -398,7 +447,7 @@ def group_linear_reactions(
         rxns = list(met.reactions)
         if len(rxns) != 2 or any(r.id in reserved for r in rxns):
             continue
-        r1, r2 = rxns
+        r1, r2 = sorted(rxns, key=rxn_pos.__getitem__)
         c1, c2 = r1.get_coefficient(met), r2.get_coefficient(met)
         if (c1 > 0) == (c2 > 0):  # need one producer and one consumer
             continue
@@ -410,12 +459,14 @@ def group_linear_reactions(
         # turn neighbours into single-producer/consumer chains in turn.
         touched = {m for m in r1.metabolites} | {m for m in r2.metabolites}
         # Merge r2*ratio into r1; the shared metabolite cancels and is dropped.
-        r1.add_metabolites({m: c * ratio for m, c in r2.metabolites.items()})
+        merged = {m: c * ratio for m, c in r2.metabolites.items()}
+        merged[met] = -c1  # cancels exactly, without floating-point residue
+        r1.add_metabolites(merged)
         model.remove_reactions([r2])
         r1.bounds = (new_lb, new_ub)
         r1.objective_coefficient = new_obj
         seen_in_pass.clear()
-        for m in touched:
+        for m in sorted(touched, key=met_pos.__getitem__, reverse=True):
             if m in model.metabolites and id(m) not in seen_in_pass:
                 seen_in_pass.add(id(m))
                 pending.append(m)
@@ -443,24 +494,27 @@ def simplify_model(
     A single entry point mirroring RAVEN's ``simplifyModel`` boolean-flag interface, so a
     caller composes a simplification the same way RAVEN does (e.g. ftINIT's first
     simplification = ``delete_zero_interval + delete_dead_end + delete_no_flux``; its
-    second = ``constrain_reversible``). Modes run in RAVEN's order — zero-interval,
-    topological dead-end, no-flux (FVA ``deleteMinMax``), duplicates, linear grouping,
-    then constrain-reversible — each delegating to the dedicated function in this module.
-    All operate in place. ``reserved`` reaction ids are never removed by the dead-end /
-    duplicate / group-linear modes; ``open_exchanges`` is forwarded to the no-flux pass.
+    second = ``constrain_reversible``). Modes run in RAVEN's order: duplicates, zero-interval,
+    topological dead-end, no-flux (FVA ``deleteMinMax``), constrain-reversible, then linear
+    grouping, so reversible reactions that carry flux in one direction only are made
+    irreversible before they are grouped. Each mode delegates to the dedicated function in
+    this module. All operate in place. ``reserved`` reaction ids are never removed by the
+    zero-interval, dead-end, no-flux and group-linear modes (the duplicates mode ignores them, as
+    in RAVEN); ``open_exchanges``
+    is forwarded to the no-flux pass.
 
     RAVEN's ``deleteUnconstrained`` (boundary-metabolite removal) has no analogue here:
     cobra models use explicit boundary reactions rather than an ``unconstrained`` field.
     """
+    if delete_duplicates:
+        remove_duplicate_reactions(model)
     if delete_zero_interval:
-        remove_zero_interval_reactions(model)
+        remove_zero_interval_reactions(model, reserved=reserved)
     if delete_dead_end:
         remove_dead_end_reactions(model, reserved=reserved)
     if delete_no_flux:
-        remove_no_flux_reactions(model, open_exchanges=open_exchanges)
-    if delete_duplicates:
-        remove_duplicate_reactions(model, reserved=reserved)
-    if group_linear:
-        group_linear_reactions(model, reserved=reserved)
+        remove_no_flux_reactions(model, open_exchanges=open_exchanges, reserved=reserved)
     if constrain_reversible:
         constrain_reversible_reactions(model)
+    if group_linear:
+        group_linear_reactions(model, reserved=reserved)

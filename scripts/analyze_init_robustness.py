@@ -188,7 +188,7 @@ def main() -> None:
     def model_for(e, **kw):
         g = gene_scores_from_expression(e, 1.0)
         r = score_reactions_from_genes(ref, g, no_gene_score=kw.get("no_gene_score", -2.0))
-        return ftinit(prep, r, gene_scores=g, series="1+1",
+        return ftinit(prep, rxn_scores=r, gene_scores=g, series="1+1",
                       force_on=kw.get("force_on", 0.1), mip_gap=MIP_GAP, time_limit=TIME_LIMIT)
 
     phases = set(args.phase.split(","))

@@ -250,7 +250,7 @@ def sweep_ftinit_full(prep, rxn_scores, gene_scores, store, save) -> list:
             print(f"[ftinit_full] {label} ...", flush=True)
             t = time.time()
             try:
-                out = ftinit(prep, rxn_scores, gene_scores=gene_scores, series="1+1", **kw)
+                out = ftinit(prep, rxn_scores=rxn_scores, gene_scores=gene_scores, series="1+1", **kw)
                 r = Result(label=label, seconds=time.time() - t, status="ok",
                            objective=0.0, n_kept=len(out.reactions),
                            reactions=sorted(x.id for x in out.reactions))

@@ -109,7 +109,7 @@ def test_ftinit_pipeline_with_tasks(solver):
     m.solver = solver
     task = Task(id="make_c", inputs=[("A[c]", 0.0, 1000.0)], outputs=[("C[c]", 1.0, 1.0)])
     prep = prep_init_model(m, [task])
-    out = ftinit(prep, {"r1": 1.0, "r2": 1.0, "rbad": -1.0}, series="1+1")
+    out = ftinit(prep, rxn_scores={"r1": 1.0, "r2": 1.0, "rbad": -1.0}, series="1+1")
     # Functional: the target task remains satisfiable in the extracted model.
     assert check_tasks(out, [task])[0].passed
 

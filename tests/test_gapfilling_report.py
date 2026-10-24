@@ -163,3 +163,22 @@ def test_forced_flux_infeasible_once_closed_raises(gap_report_model):
     gap_report_model.reactions.get_by_id("R1").lower_bound = 1.0
     with pytest.raises(ValueError, match="once its boundary reactions are closed.*R1"):
         gap_report(gap_report_model)
+
+
+def test_blocked_reactions_are_found_in_process(gap_report_model, monkeypatch):
+    """cobra's default worker pool can hang (seen with Python 3.14 on a cluster).
+
+    The report runs FVA in-process.
+    """
+    import raven_toolbox.gapfilling.report as report
+
+    seen = []
+    original = report.find_blocked_reactions
+
+    def recording(model, **kwargs):
+        seen.append(kwargs.get("processes"))
+        return original(model, **kwargs)
+
+    monkeypatch.setattr(report, "find_blocked_reactions", recording)
+    gap_report(gap_report_model)
+    assert seen and set(seen) == {1}

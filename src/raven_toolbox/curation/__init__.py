@@ -25,14 +25,20 @@ Schema (mirrors yeast-GEM's ``data/modelCuration/template/`` layout):
 - **genes_df**: ``genes, geneShortNames`` + MIRIAM columns. Match key
   is ``genes``.
 - **rxns_df**: ``rxnNames, grRules, lb, ub, rev, subSystems, eccodes,
-  rxnNotes, rxnReferences, rxnConfidenceScores`` + MIRIAM columns.
-  Match key is the reaction's *stoichiometry* — same metabolites and
-  coefficients ⇒ same reaction.
+  rxnNotes, rxnReferences, rxnConfidenceScores`` + MIRIAM columns, and an
+  optional ``rxnIdx``. Match key is the reaction's *stoichiometry*; the same
+  metabolites and coefficients ⇒ same reaction. A new reaction without ``lb``
+  or ``ub`` is unbounded in that direction, as in RAVEN.
 - **rxns_coeffs_df**: ``rxnNames, metNames, comps, coefficient``. One
-  row per ``(reaction, metabolite)`` pair. The ``rxnNames`` column
-  links each coefficient back to a row in ``rxns_df``. An optional
-  ``index`` first column from the legacy yeast-GEM schema is silently
-  ignored.
+  row per ``(reaction, metabolite)`` pair. When both reaction tables have a
+  ``rxnIdx`` column, a coefficient row belongs to the reaction with the same
+  index and name, so reactions that share a name stay apart; otherwise the
+  ``rxnNames`` column links each coefficient to a row in ``rxns_df``.
+
+Headers are matched case-insensitively and read under the spellings RAVEN's
+``curateModelFromTables`` accepts, for example ``metFormulas`` for ``formula``,
+``metCharges`` for ``charge``, ``geneShortName`` for ``geneShortNames`` and
+``index`` for ``rxnIdx``.
 
 Everything after the core columns in any of the four tables is
 interpreted as a MIRIAM annotation: the column header becomes the

@@ -118,6 +118,56 @@ def test_amplify_label_uses_abs_slope_not_endpoint_difference():
     scan = pd.DataFrame([flux], index=["r_test"], columns=enforced)
     m = cobra.Model("synth")
     m.add_reactions([cobra.Reaction("r_test")])
-    table = _classify(m, scan, enforced, corr_threshold=0.0, flux_eps=1e-6)
+    table = _classify(m, scan, enforced, corr_threshold=0.0)
     assert not table.empty
     assert table.iloc[0]["target_type"] == "amplify"
+
+
+def test_slope_is_taken_on_absolute_flux():
+    """A reversible reaction whose negative flux grows in magnitude has a positive slope."""
+    import numpy as np
+    import pandas as pd
+
+    from raven_toolbox.analysis.fseof import _classify
+
+    enforced = np.linspace(1.0, 5.0, 5)
+    scan = pd.DataFrame([-enforced, enforced], index=["r_neg", "r_pos"], columns=enforced)
+    m = cobra.Model("synth")
+    m.add_reactions([cobra.Reaction("r_neg"), cobra.Reaction("r_pos")])
+    table = _classify(m, scan, enforced, corr_threshold=0.9).set_index("reaction")
+    assert table.loc["r_neg", "slope"] == pytest.approx(1.0)
+    assert table.loc["r_neg", "target_type"] == "amplify"
+    assert table.loc["r_pos", "slope"] == pytest.approx(1.0)
+
+
+def test_low_flux_track_is_reported_as_in_fseof():
+    """A track with fluxes around 1e-7 is an amplify target, as in FSEOF."""
+    import numpy as np
+    import pandas as pd
+
+    from raven_toolbox.analysis.fseof import _classify
+
+    enforced = np.linspace(1.0, 5.0, 5)
+    scan = pd.DataFrame([1e-7 * enforced], index=["r_low"], columns=enforced)
+    m = cobra.Model("synth")
+    m.add_reactions([cobra.Reaction("r_low")])
+    table = _classify(m, scan, enforced, corr_threshold=0.9)
+    assert table.loc[0, "target_type"] == "amplify"
+
+
+def test_knockout_threshold_is_1e_minus_8():
+    """A last absolute flux of 5e-7 is a knockdown; one of 5e-9 is a knockout."""
+    import numpy as np
+    import pandas as pd
+
+    from raven_toolbox.analysis.fseof import _classify
+
+    enforced = np.linspace(1.0, 5.0, 5)
+    scan = pd.DataFrame(
+        [[4, 3, 2, 1, 5e-7], [4, 3, 2, 1, 5e-9]], index=["r_down", "r_out"], columns=enforced
+    )
+    m = cobra.Model("synth")
+    m.add_reactions([cobra.Reaction("r_down"), cobra.Reaction("r_out")])
+    table = _classify(m, scan, enforced, corr_threshold=0.5).set_index("reaction")
+    assert table.loc["r_down", "target_type"] == "knockdown"
+    assert table.loc["r_out", "target_type"] == "knockout"

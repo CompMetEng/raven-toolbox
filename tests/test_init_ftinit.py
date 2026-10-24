@@ -274,7 +274,7 @@ def test_time_limit_fallback_warns(monkeypatch):
 
     monkeypatch.setattr(ftinit_mod, "_solve_step", timed_out)
     with pytest.warns(UserWarning, match="unproven MIP gap"):
-        ftinit_mod.ftinit(prep, scores, fill_gaps=False)
+        ftinit_mod.ftinit(prep, rxn_scores=scores, fill_gaps=False)
 
 
 def test_unproven_tie_break_warns():

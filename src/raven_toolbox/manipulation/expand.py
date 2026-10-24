@@ -60,7 +60,9 @@ def expand_model(model: cobra.Model) -> list[str]:
     """Split reactions with isozymes (OR in GPR) into one reaction per isozyme.
     For each reaction whose GPR contains at least one OR, the reaction
     is removed and replaced by one copy per disjunctive clause. The new
-    reactions get ID suffix ``_EXP_1``, ``_EXP_2``, etc. All other
+    reactions get ID suffix ``_EXP_1``, ``_EXP_2``, etc. The ``_EXP_1`` copy
+    takes the position of the original reaction; the other copies are appended
+    in the order of the originals, as RAVEN's ``expandModel`` does. All other
     fields (stoichiometry, bounds, name, subsystem) are copied verbatim;
     only the GPR is simplified to the single AND-clause for that
     isozyme.
@@ -90,6 +92,9 @@ def expand_model(model: cobra.Model) -> list[str]:
             continue
         expansions.append((rxn, clauses))
 
+    position = {r.id: i for i, r in enumerate(model.reactions)}
+    sort_key: dict[str, int] = {}
+    next_tail = len(position)
     added_ids: list[str] = []
     for original_rxn, clauses in expansions:
         new_rxns: list[cobra.Reaction] = []
@@ -116,6 +121,15 @@ def expand_model(model: cobra.Model) -> list[str]:
         if obj_coeff:  # keep the original in the objective — sum over its isozyme copies
             for new_rxn in new_rxns:
                 new_rxn.objective_coefficient = obj_coeff
+        sort_key[new_rxns[0].id] = position[original_rxn.id]
+        for new_rxn in new_rxns[1:]:
+            sort_key[new_rxn.id] = next_tail
+            next_tail += 1
         added_ids.extend(r.id for r in new_rxns)
+
+    if expansions:
+        # Unsplit reactions keep their original position; the expansion keys sort
+        # the first copy into the slot of its original and the rest after them.
+        model.reactions.sort(key=lambda r: sort_key.get(r.id, position.get(r.id, next_tail)))
 
     return sorted(added_ids)
