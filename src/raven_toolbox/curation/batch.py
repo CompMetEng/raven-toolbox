@@ -223,7 +223,8 @@ def batch_curate_from_tsv(
     def _read(path):
         if path is None:
             return None
-        return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+        # The Python engine keeps a NUL character in a cell; the C engine ends the cell there.
+        return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, engine="python")
 
     return batch_curate(
         model,

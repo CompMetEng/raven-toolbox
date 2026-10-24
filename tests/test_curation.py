@@ -975,3 +975,10 @@ def test_a_reaction_index_that_is_not_a_number_is_refused():
     coeffs_df["rxnIdx"] = ["1", "1", "x2", "x2"]
     with pytest.raises(ValueError, match="rxnIdx value"):
         batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+def test_a_nul_character_in_a_table_file_stays_in_the_cell(tmp_path):
+    path = tmp_path / "mets.tsv"
+    path.write_bytes(b"metNames\tcomps\tformula\tcharge\nATP\tc\tCH4\t5\x00\n")
+    with pytest.raises(ValueError, match="charge value"):
+        batch_curate_from_tsv(_base_model(), mets_tsv=path)
