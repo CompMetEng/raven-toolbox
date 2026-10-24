@@ -427,3 +427,16 @@ def test_ftinit_output_has_no_metabolite_without_a_reaction():
     assert {r.id for r in out.reactions} == {"EXA", "R1", "R2", "EXC"}
     assert [m.id for m in out.metabolites] == ["A_e", "B_c", "C_c"]
     assert all(m.reactions for m in out.metabolites)
+
+
+def test_ftinit_output_has_no_gene_without_a_reaction_also_without_simplification():
+    # prep_init_model(simplify=False) keeps a template gene that no reaction uses; RAVEN's final
+    # removeReactions(..., true, true) drops every gene without a reaction.
+    from cobra.core.gene import Gene
+
+    m = _dead_end_task_model()
+    m.genes.append(Gene("GX"))
+    prep = prep_init_model(m, None, ext_comp="e", scale=False, simplify=False)
+    assert "GX" in prep.ref_model.genes
+    out = ftinit(prep, rxn_scores={"R1": 1.0, "R2": 1.0})
+    assert "GX" not in out.genes

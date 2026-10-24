@@ -710,7 +710,7 @@ def test_nullable_pandas_dtypes_are_read_as_empty():
 
 @pytest.mark.parametrize("value", ["false", 0, 1, None, "True"])
 def test_overwrite_with_empty_must_be_a_bool(value):
-    with pytest.raises(TypeError, match="overwrite_with_empty"):
+    with pytest.raises(TypeError, match="overwrite_with_empty must be a bool"):
         batch_curate(_base_model(), overwrite_with_empty=value)
 
 
@@ -982,3 +982,250 @@ def test_a_nul_character_in_a_table_file_stays_in_the_cell(tmp_path):
     path.write_bytes(b"metNames\tcomps\tformula\tcharge\nATP\tc\tCH4\t5\x00\n")
     with pytest.raises(ValueError, match="charge value"):
         batch_curate_from_tsv(_base_model(), mets_tsv=path)
+
+
+# --- table layout, bounds and reaction tables -----------------------------
+
+def _write(path, text):
+    path.write_bytes(text.encode("utf-8"))
+    return path
+
+
+def _two_tables(rxns_rows, coeff_rows, rxns_header="rxnIdx\trxnNames\tlb\tub",
+                coeff_header="rxnIdx\trxnNames\tmetNames\tcomps\tcoefficient"):
+    rxns = pd.DataFrame([r.split("\t") for r in rxns_rows], columns=rxns_header.split("\t"))
+    coeffs = pd.DataFrame([r.split("\t") for r in coeff_rows], columns=coeff_header.split("\t"))
+    return rxns, coeffs
+
+
+def test_both_bounds_of_an_existing_reaction_are_set_together():
+    m = _base_model()
+    m.reactions.r_0001.bounds = (0, 10)
+    rxns_df, coeffs_df = _bound_tables(lb=("20", "0"), ub=("30", "1"))
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _by_name(m, "ATP hydrolysis").bounds == (20.0, 30.0)
+
+
+@pytest.mark.parametrize("lb, ub", [("5", "1"), ("2000", "")])
+def test_a_lower_bound_above_the_upper_bound_of_an_existing_reaction_is_refused_before_any_change(lb, ub):
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(lb=(lb, "0"), ub=(ub, "1"))
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c", "formula": "X"}])
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="lower bound .* larger than its upper bound"):
+        batch_curate(m, mets_df=mets_df, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _snapshot(m) == before
+
+
+def test_a_lower_bound_above_the_upper_bound_of_a_new_reaction_is_refused_before_any_change():
+    m = _base_model()
+    rxns_df, coeffs_df = _bound_tables(lb=("", "5"), ub=("", "1"))
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="'fresh'"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _snapshot(m) == before
+
+
+def test_a_trailing_tab_on_every_row_does_not_shift_the_columns(tmp_path):
+    m = _base_model()
+    path = _write(tmp_path / "mets.tsv", "metNames\tcomps\tformula\nNADH\tc\tX\t\nNAD\tc\tY\t\n")
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert {(x.name, x.compartment, x.formula) for x in m.metabolites if x.name.startswith("NAD")} == {
+        ("NADH", "c", "X"), ("NAD", "c", "Y")}
+
+
+def test_a_row_with_more_cells_than_the_header_is_refused(tmp_path):
+    path = _write(tmp_path / "mets.tsv", "metNames\tcomps\tformula\nNADH\tc\tX\tZ\nNAD\tc\tY\n")
+    before = _snapshot(_base_model())
+    m = _base_model()
+    with pytest.raises(ValueError, match="Line 2 .* 4 cells but the header has 3"):
+        batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert _snapshot(m) == before
+
+
+def test_spaces_before_a_text_cell_are_dropped_and_spaces_after_it_are_kept(tmp_path):
+    m = _base_model()
+    path = _write(tmp_path / "mets.tsv",
+                  'metNames\tcomps\tformula\n C\t c\t H2O \n  \"D\"\tc\t \" X \"\n')
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert {(x.name, x.compartment, x.formula) for x in m.metabolites if x.id > "s_0003"} == {
+        ("C", "c", "H2O "), ("D", "c", " X ")}
+
+
+def test_a_coefficient_row_names_its_metabolite_without_leading_spaces(tmp_path):
+    m = _base_model()
+    rxns = _write(tmp_path / "rxns.tsv", "rxnIdx\trxnNames\tlb\n1\tfresh\t0\n")
+    coeffs = _write(tmp_path / "coeffs.tsv",
+                    "rxnIdx\trxnNames\tmetNames\tcomps\tcoefficient\n1\tfresh\t ATP\t c\t-2\n"
+                    "1\tfresh\tADP\tc\t2\n")
+    result = batch_curate_from_tsv(m, rxns_tsv=rxns, rxns_coeffs_tsv=coeffs, rxn_id_prefix="r_")
+    assert len(result.added_reactions) == 1
+
+
+def test_a_very_long_cell_and_a_quote_followed_by_text_are_read(tmp_path):
+    m = _base_model()
+    path = _write(tmp_path / "mets.tsv",
+                  "metNames\tcomps\tformula\nNADH\tc\t" + "C" * 200000 + '\n"NA"D\tc\tY\n')
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    formulas = {x.name: x.formula for x in m.metabolites if x.id > "s_0003"}
+    assert len(formulas["NADH"]) == 200000
+    assert formulas["NAD"] == "Y"
+
+
+def test_an_unmatched_opening_quote_takes_the_rest_of_the_file_as_one_cell(tmp_path):
+    path = _write(tmp_path / "mets.tsv", 'metNames\tcomps\tformula\nNADH\tc\t"X\nNAD\tc\tY\n')
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert [(x.name, x.formula) for x in m.metabolites if x.id > "s_0003"] == [
+        ("NADH", "X\nNAD\tc\tY\n")]
+
+
+def test_a_repeated_header_is_stored_under_a_numbered_name(tmp_path):
+    path = _write(tmp_path / "mets.tsv", "metNames\tcomps\tchebi\tchebi\nNADH\tc\t1\t2\n")
+    m = _base_model()
+    batch_curate_from_tsv(m, mets_tsv=path, met_id_prefix="s_")
+    assert m.metabolites.s_0004.annotation == {"chebi": "1", "chebi.1": "2"}
+
+
+def test_an_empty_table_file_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="is empty"):
+        batch_curate_from_tsv(_base_model(), mets_tsv=_write(tmp_path / "mets.tsv", ""))
+
+
+def test_a_metabolite_row_of_tabs_only_is_refused():
+    m = _base_model()
+    mets_df = pd.DataFrame([{"metNames": "NADH", "comps": "c"}, {"metNames": "", "comps": ""}])
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="Row 2 .* no compartment"):
+        batch_curate(m, mets_df=mets_df)
+    assert _snapshot(m) == before
+
+
+@pytest.mark.parametrize("table, columns", [
+    ("mets_df", {"metNames": ["NADH"], "formula": ["X"]}),
+    ("genes_df", {"geneShortNames": ["a"]}),
+])
+def test_a_table_without_its_key_column_is_refused_before_any_change(table, columns):
+    m = _base_model()
+    first = pd.DataFrame([{"metNames": "NADH", "comps": "c"}])
+    kwargs = {"mets_df": first} if table == "genes_df" else {}
+    kwargs[table] = pd.DataFrame(columns)
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="missing required columns"):
+        batch_curate(m, **kwargs)
+    assert _snapshot(m) == before
+
+
+def test_a_coefficient_row_with_only_a_coefficient_or_only_an_extra_column_is_ignored():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2", "note": ""},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2", "note": ""},
+        {"rxnIdx": "", "rxnNames": "", "metNames": "", "comps": "", "coefficient": "7", "note": ""},
+        {"rxnIdx": "", "rxnNames": "", "metNames": "", "comps": "", "coefficient": "", "note": "remark"},
+    ])
+    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert len(result.added_reactions) == 1
+
+
+def test_a_reaction_row_of_tabs_only_is_ignored():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh"}, {"rxnIdx": "", "rxnNames": ""}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"},
+    ])
+    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert len(result.added_reactions) == 1
+
+
+@pytest.mark.parametrize("table", ["rxns", "coeffs"])
+def test_a_row_with_content_but_no_rxn_idx_is_refused(table):
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tfresh\t0\t5"],
+        ["1\tfresh\tATP\tc\t-2", "1\tfresh\tADP\tc\t2"])
+    if table == "rxns":
+        rxns_df.loc[0, "rxnIdx"] = ""
+    else:
+        coeffs_df.loc[1, "rxnIdx"] = ""
+    m = _base_model()
+    before = _snapshot(m)
+    with pytest.raises(ValueError, match="rxnIdx in row .* is empty"):
+        batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert _snapshot(m) == before
+
+
+def test_two_coefficient_rows_for_one_metabolite_add_up():
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-1"},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"},
+    ])
+    batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert {x.name: c for x, c in _by_name(m, "fresh").metabolites.items()} == {"ATP": -3.0, "ADP": 2.0}
+
+
+@pytest.mark.parametrize("rxn_idx, coeff_idx", [(1.0, 1), ("1", "1.0"), ("1e0", "1"), (1, "1.0")])
+def test_rxn_idx_is_matched_by_value_in_both_tables(rxn_idx, coeff_idx):
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": rxn_idx, "rxnNames": "fresh"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": coeff_idx, "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": -2.0},
+        {"rxnIdx": coeff_idx, "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": 2.0},
+    ])
+    result = batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    assert len(result.added_reactions) == 1
+
+
+def test_a_reaction_without_a_row_in_the_other_table_is_refused_with_its_identifiers():
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tfresh\t0\t5"],
+        ["1\tfresh\tATP\tc\t-2", "2\tstray\tADP\tc\t2"])
+    with pytest.raises(ValueError, match=r"'stray' \(rxnIdx 2\) in rxns_coeffs_df has no matching row"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    rxns_df, coeffs_df = _two_tables(
+        ["1\tfresh\t0\t5", "3\tlost\t0\t5"], ["1\tfresh\tATP\tc\t-2"])
+    with pytest.raises(ValueError, match=r"'lost' \(rxnIdx 3\) in rxns_df has no matching"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+@pytest.mark.parametrize("column, table", [
+    ("charge", "mets"), ("rxnIdx", "rxns"), ("coefficient", "coeffs"), ("rxnConfidenceScores", "rxns")])
+@pytest.mark.parametrize("text", ["true", "FALSE"])
+def test_true_and_false_are_not_numbers_outside_the_bound_and_rev_columns(column, table, text):
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-2"},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
+    kwargs = {}
+    if table == "mets":
+        kwargs["mets_df"] = pd.DataFrame([{"metNames": "ATP", "comps": "c", "charge": text}])
+    else:
+        {"rxns": rxns_df, "coeffs": coeffs_df}[table][column] = text
+        kwargs.update(rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+    with pytest.raises(ValueError, match="is not a number"):
+        batch_curate(m, rxn_id_prefix="r_", **kwargs)
+
+
+@pytest.mark.parametrize("text", ["0", "Inf", "-inf", "0.0"])
+def test_a_coefficient_that_is_zero_or_infinite_is_refused(text):
+    rxns_df = pd.DataFrame([{"rxnIdx": "1", "rxnNames": "fresh"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": text},
+        {"rxnIdx": "1", "rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "2"}])
+    with pytest.raises(ValueError, match="finite number other than 0"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+
+
+def test_an_all_empty_miriam_column_removes_no_annotation():
+    m = _annotated_model()
+    df = pd.DataFrame([
+        {"metNames": "ATP", "comps": "c", "kegg.compound": ""},
+        {"metNames": "ADP", "comps": "c", "kegg.compound": ""}])
+    with pytest.warns(UserWarning, match="overwritten"):
+        batch_curate(m, mets_df=df)
+    assert m.metabolites.get_by_id("s_0001").annotation["kegg.compound"] == "C1"

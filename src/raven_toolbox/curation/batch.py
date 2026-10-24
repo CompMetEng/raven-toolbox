@@ -1,6 +1,7 @@
 """Generic batch-curation engine driven by tabular data."""
 from __future__ import annotations
 
+import csv
 import math
 import re
 import warnings
@@ -133,20 +134,36 @@ def batch_curate(
         Must be a ``bool`` or ``numpy.bool_``, otherwise :class:`TypeError` is raised.
 
     Numeric cells (charge, confidence score, lower and upper bound, reversibility, ``rxnIdx``
-    and coefficient) are read as RAVEN reads them: an empty cell or ``NaN`` (any case, with an optional sign) is not given,
-    ``true`` and ``false`` in any case are 1 and 0, and other text must be a plain decimal
-    number or ``Inf``. A comma, a hexadecimal number or any expression raises
-    :class:`ValueError`, and nothing is evaluated. A cell is
-    trimmed as MATLAB's ``strtrim`` trims it, after dropping the backspaces at its start as
-    ``textscan`` does; the non-breaking space, NUL and the next line character stay in the text. A coefficient
-    that is empty or ``NaN`` raises :class:`ValueError` unless the whole row is empty, which is
-    ignored. A charge must be a finite whole
-    number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted, ``0.5``, ``2.5`` and ``Inf`` raise
-    :class:`ValueError`; nothing is rounded), an ``rxnIdx`` cell must be a finite whole number of
-    at least 1 (``1.5``, ``Inf``, ``0`` and ``-1`` raise :class:`ValueError`; an empty or ``NaN``
-    cell keeps its meaning), and a ``rev`` cell must be 0, 1, ``true`` or
-    ``false`` (any other number raises :class:`ValueError`, although the value is not otherwise
-    used).
+    and coefficient) are read as RAVEN reads them: an empty cell or ``NaN`` (any case, with an
+    optional sign) is not given, and other text must be a plain decimal number or ``Inf``. A
+    comma, a hexadecimal number or any expression raises :class:`ValueError`, and nothing is
+    evaluated. ``true`` and ``false`` in any case are 1 and 0 in the lower bound, upper bound and
+    ``rev`` cells and are not numbers in the other columns. A cell is trimmed as MATLAB's
+    ``strtrim`` trims it, after dropping the backspaces at its start as ``textscan`` does; the
+    non-breaking space, NUL and the next line character stay in the text.
+
+    A charge must be a finite whole number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted,
+    ``0.5``, ``2.5`` and ``Inf`` raise :class:`ValueError`; nothing is rounded). A ``rev`` cell
+    must be 0, 1, ``true`` or ``false`` (any other number raises, although the value is not
+    otherwise used). A ``rxnIdx`` cell must be a finite whole number of at least 1; the two
+    reaction tables are matched on the index and the name, and the index is compared by value
+    (``1``, ``1.0`` and ``1e0`` are the same). A coefficient must be a finite number other than
+    zero; two rows of one reaction for the same metabolite add their coefficients. A row of a
+    reaction table without any content is ignored (in the coefficient table the content is the
+    index, reaction name, metabolite name and compartment); a row with content needs a
+    ``rxnIdx`` when the table has that column, and a coefficient row needs a coefficient. A
+    metabolite row needs a compartment. A reaction of one table without a row in the other
+    raises :class:`ValueError`. An empty MIRIAM column removes no annotation.
+
+    A lower bound above the upper bound (also against the stored bound of an existing
+    reaction, since both bounds are set together) raises :class:`ValueError`; RAVEN writes such
+    bounds without a message, but a cobra reaction cannot hold them.
+
+    Every check above, the required columns, the metabolites of the coefficient rows and the bounds
+    run before the model is touched, so a table that fails leaves the model unchanged. What
+    can still fail while the tables are applied is an error raised by cobra itself (for
+    instance in a gene rule); a malformed gene rule is logged by cobra and stored as an empty
+    rule, whereas RAVEN stops.
 
     Returns
     -------
@@ -167,39 +184,25 @@ def batch_curate(
             f"rxns_coeffs_df="
             f"{'set' if rxns_coeffs_df is not None else 'None'}."
         )
-    if mets_df is not None:
-        mets_df = _parse_numeric_columns(
-            _canonical_columns(mets_df, _MET_ALIASES), ("charge",), "metsInfo",
-            checks={"charge": _check_whole_charge})
-    if genes_df is not None:
-        genes_df = _canonical_columns(genes_df, _GENE_ALIASES)
-    if rxns_df is not None:
-        rxns_df = _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True)
-        _check_numeric_cells(rxns_df, ("rxnIdx",), "rxnsInfo", checks={"rxnIdx": _check_rxn_index})
-        rxns_df = _parse_numeric_columns(
-            rxns_df, ("lb", "ub", "rev", "rxnConfidenceScores"), "rxnsInfo",
-            checks={"rev": _check_boolean_rev})
-    if rxns_coeffs_df is not None:
-        rxns_coeffs_df = _canonical_columns(rxns_coeffs_df, _COEFF_ALIASES)
-        _validate_rxns_coeffs(rxns_coeffs_df)
-        # A row without any content is ignored; a row with content needs a coefficient.
-        rxns_coeffs_df = rxns_coeffs_df[
-            [any(_has_value(v) for v in row) for row in rxns_coeffs_df.itertuples(index=False)]]
-        _check_numeric_cells(
-            rxns_coeffs_df, ("rxnIdx",), "rxnsCoeffs", checks={"rxnIdx": _check_rxn_index})
-        rxns_coeffs_df = _parse_numeric_columns(rxns_coeffs_df, ("coefficient",), "rxnsCoeffs")
-        if rxns_coeffs_df["coefficient"].isna().any():
-            raise ValueError("Every coefficient in the rxnsCoeffs table must be a number")
-        _check_reaction_tables(model, mets_df, rxns_df, rxns_coeffs_df)
 
-    # Everything above only reads the tables: a table that fails leaves the model unchanged.
+    # Validation phase: reads the tables and the model and changes nothing.
+    if mets_df is not None:
+        mets_df = _prepare_mets(mets_df)
+    if genes_df is not None:
+        genes_df = _prepare_genes(genes_df)
+    plan = None
+    if rxns_df is not None:
+        rxns_df, rxns_coeffs_df = _prepare_reaction_tables(rxns_df, rxns_coeffs_df)
+        _check_reaction_tables(model, mets_df, rxns_df, rxns_coeffs_df)
+        plan = _plan_reactions(model, rxns_df, rxns_coeffs_df)
+
+    # Apply phase.
     if mets_df is not None:
         _apply_mets(model, mets_df, met_id_prefix, result, overwrite_with_empty)
     if genes_df is not None:
         _apply_genes(model, genes_df, result, overwrite_with_empty)
-
-    if rxns_df is not None:
-        _apply_reactions(model, rxns_df, rxns_coeffs_df, rxn_id_prefix, result, overwrite_with_empty)
+    if plan is not None:
+        _apply_reactions(model, plan, rxns_df, rxn_id_prefix, result, overwrite_with_empty)
     return result
 
 
@@ -216,15 +219,16 @@ def batch_curate_from_tsv(
 ) -> CurationResult:
     """File-path convenience wrapper for :func:`batch_curate`.
 
-    Each path is optional. TSVs are read as text (``dtype=str``) without pandas' conversion of
-    strings such as ``NA`` or ``null`` to missing values, so a cell is empty only when it has
-    no text or only blanks; ``22`` stays ``22``.
+    Each path is optional. A table file is read as RAVEN's ``curateModelFromTables`` reads it:
+    tab-delimited text with a header row, every cell kept as text (``NA``, ``null`` or ``None``
+    stay text and ``22`` stays ``22``), a double quote around a cell, spaces before a cell
+    dropped, a trailing tab on a row ignored, and a row with more non-empty cells than the
+    header has columns refused with :class:`ValueError`. A line without any text is skipped.
+    A repeated header is stored under the name with ``.1`` appended (RAVEN replaces the
+    annotation in the order of the columns).
     """
     def _read(path):
-        if path is None:
-            return None
-        # The Python engine keeps a NUL character in a cell; the C engine ends the cell there.
-        return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, engine="python")
+        return None if path is None else _read_table(path)
 
     return batch_curate(
         model,
@@ -236,6 +240,42 @@ def batch_curate_from_tsv(
         rxn_id_prefix=rxn_id_prefix,
         overwrite_with_empty=overwrite_with_empty,
     )
+
+
+# --- reading table files ------------------------------------------------
+
+def _read_table(path) -> pd.DataFrame:
+    """A tab-delimited table file as a data frame of text, read like ``readCurationTable``.
+
+    MATLAB's ``textscan`` drops the spaces before a cell (also before its quote) and reads a
+    quoted cell up to the closing quote; the ``csv`` module does the same, accepts a cell
+    longer than 131072 characters (the limit is lifted while the file is read) and keeps a
+    NUL character.
+    """
+    path = Path(path)
+    limit = csv.field_size_limit(2**31 - 1)
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as handle:
+            reader = csv.reader(handle, delimiter="\t", quotechar='"', skipinitialspace=True)
+            lines = [(reader.line_num, row) for row in reader]
+    finally:
+        csv.field_size_limit(limit)
+    lines = [(n, row) for n, row in lines if not (len(row) == 0 or (len(row) == 1 and not _trim(row[0])))]
+    if not lines:
+        raise ValueError(f"The file {str(path)!r} is empty")
+    names: list[str] = []
+    for cell in lines[0][1]:
+        name = _trim(cell)
+        seen = sum(1 for earlier in names if earlier == name or earlier.startswith(f"{name}."))
+        names.append(name if name not in names else f"{name}.{seen}")
+    width = len(names)
+    data = []
+    for n, row in lines[1:]:
+        if len(row) > width and any(_trim(cell) for cell in row[width:]):
+            raise ValueError(
+                f"Line {n} of {path.name!r} has {len(row)} cells but the header has {width} columns")
+        data.append(list(row[:width]) + [""] * (width - len(row)))
+    return pd.DataFrame(data, columns=names, dtype=object)
 
 
 # --- metabolites ------------------------------------------------------
@@ -300,6 +340,74 @@ def _canonical_columns(df: pd.DataFrame, aliases: Mapping[str, tuple[str, ...]],
             rename[col] = canonical
             taken.add(canonical)
     return df.rename(columns=rename)
+
+
+def _require_columns(df: pd.DataFrame, columns, label: str) -> None:
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise ValueError(f"{label} is missing required columns: {missing}")
+
+
+def _prepare_mets(df: pd.DataFrame) -> pd.DataFrame:
+    """Metabolite table with canonical column names and a numeric charge column; every cell is
+    checked before anything is applied."""
+    df = _canonical_columns(df, _MET_ALIASES)
+    _require_columns(df, ("metNames", "comps"), "mets_df")
+    for position, comp in enumerate(df["comps"], start=1):
+        if not _has_value(comp):
+            raise ValueError(f"Row {position} of the metsInfo table has no compartment")
+    return _parse_numeric_columns(
+        df, ("charge",), "metsInfo", checks={"charge": _check_whole_charge})
+
+
+def _prepare_genes(df: pd.DataFrame) -> pd.DataFrame:
+    df = _canonical_columns(df, _GENE_ALIASES)
+    _require_columns(df, ("genes",), "genes_df")
+    return df
+
+
+def _row_has_content(row, columns=None) -> bool:
+    values = row if columns is None else [row[c] for c in columns]
+    return any(_has_value(v) for v in values)
+
+
+def _prepare_reaction_tables(rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame):
+    """Reaction and coefficient tables with canonical column names and numeric columns.
+
+    A row without any content is ignored (for the coefficient table only the reaction index,
+    reaction name, metabolite name and compartment count as content). A row with content needs
+    a reaction index when the table has that column, and a coefficient row needs a coefficient.
+    """
+    rxns_df = _canonical_columns(rxns_df, _RXN_ALIASES, lower_rest=True)
+    _require_columns(rxns_df, ("rxnNames",), "rxns_df")
+    coeffs_df = _canonical_columns(coeffs_df, _COEFF_ALIASES)
+    _validate_rxns_coeffs(coeffs_df)
+
+    rxns_df = rxns_df.reset_index(drop=True)
+    rxns_df = rxns_df[[_row_has_content(r) for r in rxns_df.itertuples(index=False)]]
+    coeff_content = [c for c in ("rxnIdx", "rxnNames", "metNames", "comps") if c in coeffs_df.columns]
+    coeffs_df = coeffs_df.reset_index(drop=True)
+    coeffs_df = coeffs_df[[_row_has_content(r, coeff_content) for _, r in coeffs_df.iterrows()]]
+
+    rxns_df = _parse_numeric_columns(
+        rxns_df, ("rxnIdx", "lb", "ub", "rev", "rxnConfidenceScores"), "rxnsInfo",
+        checks={"rxnIdx": _check_rxn_index, "rev": _check_boolean_rev},
+        boolean_columns=("lb", "ub", "rev"))
+    coeffs_df = _parse_numeric_columns(
+        coeffs_df, ("rxnIdx", "coefficient"), "rxnsCoeffs",
+        checks={"rxnIdx": _check_rxn_index, "coefficient": _check_coefficient})
+    for df, label in ((rxns_df, "rxnsInfo"), (coeffs_df, "rxnsCoeffs")):
+        if "rxnIdx" in df.columns and df["rxnIdx"].isna().any():
+            row = int(df.index[df["rxnIdx"].isna()][0]) + 1
+            raise ValueError(
+                f"The rxnIdx in row {row} of the {label} table is empty; "
+                "every row with content needs a reaction index")
+    if coeffs_df["coefficient"].isna().any():
+        row = int(coeffs_df.index[coeffs_df["coefficient"].isna()][0]) + 1
+        raise ValueError(
+            f"The coefficient in row {row} of the rxnsCoeffs table is empty or NaN; "
+            "every row with a reaction, metabolite or compartment needs a coefficient")
+    return rxns_df, coeffs_df
 
 
 def _name_compartment_index(model: cobra.Model) -> dict[tuple[str, str], cobra.Metabolite]:
@@ -405,10 +513,58 @@ def _update_gene(
 
 # --- reactions --------------------------------------------------------
 
+@dataclass
+class _ReactionPlan:
+    """What the reaction tables do to the model: existing reactions to update and new ones to add.
+
+    ``new`` pairs a table row with its stoichiometry as ``{(metabolite name, compartment): coefficient}``;
+    the metabolites are looked up when the reaction is built, after the metabolite table is applied.
+    """
+
+    updates: list[tuple[cobra.Reaction, pd.Series]]
+    new: list[tuple[pd.Series, dict[tuple[str, str], float]]]
+
+
+def _plan_reactions(model: cobra.Model, rxns_df: pd.DataFrame, coeffs_df: pd.DataFrame) -> _ReactionPlan:
+    """Decide which reactions of ``rxns_df`` exist in the model, and check their bounds.
+
+    A reaction whose stoichiometry matches a model reaction (compared by metabolite id and
+    coefficient) is an update; every other one is new, also when it uses a metabolite that
+    ``mets_df`` adds. Raises :class:`ValueError` for a lower bound above the upper bound.
+    """
+    by_index = "rxnIdx" in rxns_df.columns and "rxnIdx" in coeffs_df.columns
+    coeffs_by_key = _group_coeffs(coeffs_df, by_index)
+    name_index = _name_compartment_index(model)
+    by_signature = {_stoich_signature(r): r for r in model.reactions}
+    default_ub = _stored_default_ub(model)
+
+    updates: list[tuple[cobra.Reaction, pd.Series]] = []
+    new: list[tuple[pd.Series, dict[tuple[str, str], float]]] = []
+    for _, row in rxns_df.iterrows():
+        stoich = coeffs_by_key[_reaction_key(row, by_index)]
+        existing = None
+        if all(key in name_index for key in stoich):
+            existing = by_signature.get(
+                frozenset((name_index[key].id, coef) for key, coef in stoich.items()))
+        if existing is not None:
+            lb = float(row["lb"]) if _has_value(row.get("lb")) else existing.lower_bound
+            ub = float(row["ub"]) if _has_value(row.get("ub")) else existing.upper_bound
+            updates.append((existing, row))
+        else:
+            lb = float(row["lb"]) if _has_value(row.get("lb")) else -math.inf
+            ub = float(row["ub"]) if _has_value(row.get("ub")) else default_ub
+            new.append((row, stoich))
+        if lb > ub:
+            raise ValueError(
+                f"The lower bound {lb:g} of reaction {str(row['rxnNames'])!r} is larger than its "
+                f"upper bound {ub:g}")
+    return _ReactionPlan(updates, new)
+
+
 def _apply_reactions(
     model: cobra.Model,
+    plan: _ReactionPlan,
     rxns_df: pd.DataFrame,
-    coeffs_df: pd.DataFrame,
     id_prefix: str,
     result: CurationResult,
     overwrite_with_empty: bool,
@@ -418,41 +574,17 @@ def _apply_reactions(
         "rxnConfidenceScores" in rxns_df.columns
         and bool(rxns_df["rxnConfidenceScores"].map(_has_value).any())
     )
-    _validate_rxns_coeffs(coeffs_df)
-    by_index = "rxnIdx" in rxns_df.columns and "rxnIdx" in coeffs_df.columns
-    coeffs_by_key = _group_coeffs(model, coeffs_df, by_index)
 
-    # Build {stoichiometry_signature: existing_reaction} for the lookup
-    # of "is this reaction already in the model?".
-    by_signature = {
-        _stoich_signature(r): r for r in model.reactions
-    }
-
-    new_rows: list[tuple[pd.Series, dict[cobra.Metabolite, float]]] = []
-    updates: list[tuple[cobra.Reaction, pd.Series]] = []
-    for _, row in rxns_df.iterrows():
-        rxn_name = row["rxnNames"]
-        key = _reaction_key(row, by_index)
-        if key not in coeffs_by_key:
-            raise ValueError(
-                f"Reaction {rxn_name!r} in rxns_df has no matching "
-                "row(s) in rxns_coeffs_df."
-            )
-        stoich = coeffs_by_key[key]
-        sig = _stoich_signature_from_dict(stoich)
-        existing = by_signature.get(sig)
-        if existing is not None:
-            updates.append((existing, row))
-        else:
-            new_rows.append((row, stoich))
-
-    active = _miriam_with_values(miriam_cols, [r for _, r in updates])
-    for existing, row in updates:
+    active = _miriam_with_values(miriam_cols, [r for _, r in plan.updates])
+    for existing, row in plan.updates:
         _update_reaction(existing, row, miriam_cols, active, overwrite_with_empty, any_score)
         result.updated_reactions.append(existing.id)
 
-    if new_rows:
-        new_rxns = _build_new_reactions(model, new_rows, miriam_cols, id_prefix, any_score)
+    if plan.new:
+        name_index = _name_compartment_index(model)
+        rows = [(row, {name_index[key]: coef for key, coef in stoich.items()})
+                for row, stoich in plan.new]
+        new_rxns = _build_new_reactions(model, rows, miriam_cols, id_prefix, any_score)
         model.add_reactions(new_rxns)
         result.added_reactions.extend(r.id for r in new_rxns)
 
@@ -467,14 +599,15 @@ def _apply_reactions(
 
 
 def _check_reaction_tables(model, mets_df, rxns_df, coeffs_df) -> None:
-    """Raise :class:`ValueError` before anything is applied when a reaction has no coefficient
-    rows or a coefficient row names a metabolite that neither the model nor ``mets_df`` has."""
+    """Raise :class:`ValueError` before anything is applied when a coefficient row names a
+    metabolite that neither the model nor ``mets_df`` has, or when a reaction of one table has
+    no row in the other."""
     by_index = "rxnIdx" in rxns_df.columns and "rxnIdx" in coeffs_df.columns
     known = set(_name_compartment_index(model))
-    if mets_df is not None and {"metNames", "comps"} <= set(mets_df.columns):
+    if mets_df is not None:
         known |= {(str(n), str(c)) for n, c in zip(mets_df["metNames"], mets_df["comps"],
                                                   strict=False)}
-    keys = set()
+    coeff_keys = set()
     for _, row in coeffs_df.iterrows():
         if (str(row["metNames"]), str(row["comps"])) not in known:
             raise ValueError(
@@ -483,13 +616,28 @@ def _check_reaction_tables(model, mets_df, rxns_df, coeffs_df) -> None:
                 "Add it via mets_df first, or include it in the same "
                 "batch_curate call."
             )
-        keys.add(_reaction_key(row, by_index))
+        coeff_keys.add(_reaction_key(row, by_index))
+    rxn_keys = {_reaction_key(row, by_index) for _, row in rxns_df.iterrows()}
     for _, row in rxns_df.iterrows():
-        if _reaction_key(row, by_index) not in keys:
+        if _reaction_key(row, by_index) not in coeff_keys:
             raise ValueError(
-                f"Reaction {row['rxnNames']!r} in rxns_df has no matching "
+                f"Reaction {_reaction_label(row, by_index)} in rxns_df has no matching "
                 "row(s) in rxns_coeffs_df."
             )
+    for _, row in coeffs_df.iterrows():
+        if _reaction_key(row, by_index) not in rxn_keys:
+            raise ValueError(
+                f"Reaction {_reaction_label(row, by_index)} in rxns_coeffs_df has no matching "
+                "row in rxns_df."
+            )
+
+
+def _reaction_label(row: pd.Series, by_index: bool) -> str:
+    """The identifiers of a reaction row for an error message: its name and, when the tables are
+    numbered, its index."""
+    if by_index:
+        return f"{str(row['rxnNames'])!r} (rxnIdx {_reaction_key(row, by_index)[0]})"
+    return repr(str(row["rxnNames"]))
 
 
 def _validate_rxns_coeffs(df: pd.DataFrame) -> None:
@@ -501,53 +649,33 @@ def _validate_rxns_coeffs(df: pd.DataFrame) -> None:
 
 
 def _reaction_key(row: pd.Series, by_index: bool):
-    """Key linking a reaction row to its coefficient rows: ``(rxnIdx, name)`` or the name."""
+    """Key linking a reaction row to its coefficient rows: ``(rxnIdx, name)`` or the name.
+
+    The index is compared by value, so ``1``, ``1.0`` and ``1e0`` are the same index.
+    """
     if by_index:
-        return (_trim(row["rxnIdx"]), str(row["rxnNames"]))
+        return (int(row["rxnIdx"]), str(row["rxnNames"]))
     return str(row["rxnNames"])
 
 
-def _group_coeffs(
-    model: cobra.Model,
-    coeffs_df: pd.DataFrame,
-    by_index: bool,
-) -> dict:
-    """Group coefficient rows by reaction and resolve the metabolites.
+def _group_coeffs(coeffs_df: pd.DataFrame, by_index: bool) -> dict:
+    """Group coefficient rows by reaction.
 
-    The key is ``(rxnIdx, name)`` when ``by_index`` and the reaction name otherwise,
-    so reactions that share a name stay apart when the tables number them.
-
-    Each value is a ``{metabolite_object: coefficient}`` dict ready for
-    ``cobra.Reaction.add_metabolites``. Metabolites are looked up by
-    ``(name, comp)``; if a coefficient references an unknown
-    metabolite, that's an error (the caller should add the metabolite
-    via ``mets_df`` first).
+    The key is ``(rxnIdx, name)`` when ``by_index`` and the reaction name otherwise, so
+    reactions that share a name stay apart when the tables number them. Each value maps
+    ``(metabolite name, compartment)`` to the coefficient; two rows of one reaction for the
+    same metabolite add their coefficients, as RAVEN's ``addRxns`` does.
     """
-    name_index = _name_compartment_index(model)
     grouped: dict = {}
     for _, row in coeffs_df.iterrows():
-        rxn_name = str(row["rxnNames"])
-        met_name = str(row["metNames"])
-        comp = str(row["comps"])
-        coef = float(row["coefficient"])
-        met = name_index.get((met_name, comp))
-        if met is None:
-            raise ValueError(
-                f"Reaction {rxn_name!r} references metabolite "
-                f"{met_name!r}[{comp}] which is not in the model. "
-                "Add it via mets_df first, or include it in the same "
-                "batch_curate call."
-            )
-        grouped.setdefault(_reaction_key(row, by_index), {})[met] = coef
+        stoich = grouped.setdefault(_reaction_key(row, by_index), {})
+        key = (str(row["metNames"]), str(row["comps"]))
+        stoich[key] = stoich.get(key, 0.0) + float(row["coefficient"])
     return grouped
 
 
 def _stoich_signature(rxn: cobra.Reaction) -> frozenset:
     return frozenset((m.id, c) for m, c in rxn.metabolites.items())
-
-
-def _stoich_signature_from_dict(stoich: dict[cobra.Metabolite, float]) -> frozenset:
-    return frozenset((m.id, c) for m, c in stoich.items())
 
 
 def _update_reaction(
@@ -562,10 +690,13 @@ def _update_reaction(
         rxn.name = _text(row["rxnNames"])
     if _has_value(row.get("grRules")):
         rxn.gene_reaction_rule = str(row["grRules"])
-    if _has_value(row.get("lb")):
-        rxn.lower_bound = float(row["lb"])
-    if _has_value(row.get("ub")):
-        rxn.upper_bound = float(row["ub"])
+    if _has_value(row.get("lb")) or _has_value(row.get("ub")):
+        # Both bounds are set together, so that a pair that is valid as a whole is accepted
+        # whatever the stored bounds are.
+        rxn.bounds = (
+            float(row["lb"]) if _has_value(row.get("lb")) else rxn.lower_bound,
+            float(row["ub"]) if _has_value(row.get("ub")) else rxn.upper_bound,
+        )
     if _is_written(row, "subSystems", overwrite_with_empty):
         rxn.subsystem = subsystem_to_str(row["subSystems"]) if _has_value(row["subSystems"]) else ""
     if _is_written(row, "eccodes", overwrite_with_empty):
@@ -726,24 +857,27 @@ def _trim(text) -> str:
     return text
 
 
-def _number_cell(value, field: str, label: str) -> float:
+def _number_cell(value, field: str, label: str, allow_boolean: bool = False) -> float:
     """Number in a table cell, as RAVEN reads it: NaN for an empty cell or a cell saying NaN.
 
-    ``true`` and ``false`` in any case are 1 and 0. Other text must be a plain decimal number
-    (digits with an optional sign, decimal point and exponent), ``Inf`` or ``NaN`` with an
-    optional sign; a comma, a hexadecimal number and any expression raise :class:`ValueError`
-    and nothing is evaluated.
+    ``true`` and ``false`` in any case are 1 and 0 where ``allow_boolean`` is set (the bound and
+    reversibility columns) and are not numbers elsewhere. Other text must be a plain decimal
+    number (digits with an optional sign, decimal point and exponent), ``Inf`` or ``NaN`` with
+    an optional sign; a comma, a hexadecimal number and any expression raise
+    :class:`ValueError` and nothing is evaluated.
     """
     if not _has_value(value):
         return math.nan
-    if isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)):
+    if isinstance(value, (bool, np.bool_)):
+        if allow_boolean:
+            return float(value)
+        raise ValueError(f'The {field} value "{value}" in the {label} table is not a number')
+    if isinstance(value, (int, float, np.integer, np.floating)):
         return float(value)
     text = _trim(value)
     low = text.lower()
-    if low == "true":
-        return 1.0
-    if low == "false":
-        return 0.0
+    if low in ("true", "false") and allow_boolean:
+        return 1.0 if low == "true" else 0.0
     if _NAN.fullmatch(low):
         return math.nan
     if _INF.fullmatch(low):
@@ -767,11 +901,29 @@ def _check_boolean_rev(number: float, text: str, field: str, label: str) -> None
             f'The {field} value "{text}" in the {label} table must be 0, 1, true or false')
 
 
-def _parse_numeric_columns(df: pd.DataFrame, columns, label: str, checks=None) -> pd.DataFrame:
+def _check_rxn_index(number: float, text: str, field: str, label: str) -> None:
+    """A reaction index is a finite whole number of at least 1; an empty or NaN cell is not given."""
+    if not math.isnan(number) and (not math.isfinite(number) or number != math.floor(number)
+                                   or number < 1):
+        raise ValueError(
+            f'The {field} value "{text}" in the {label} table is not a whole number of at least 1')
+
+
+def _check_coefficient(number: float, text: str, field: str, label: str) -> None:
+    """A coefficient is a finite number other than zero; an empty or NaN cell is refused later."""
+    if not math.isnan(number) and (not math.isfinite(number) or number == 0):
+        raise ValueError(
+            f'The {field} value "{text}" in the {label} table must be a finite number other than 0')
+
+
+def _parse_numeric_columns(
+    df: pd.DataFrame, columns, label: str, checks=None, boolean_columns=()
+) -> pd.DataFrame:
     """Copy of ``df`` whose numeric columns hold floats, NaN where the cell is empty.
 
     ``checks`` maps a column to a function ``(number, text, column, label)`` that raises
-    :class:`ValueError` for a number the column does not accept.
+    :class:`ValueError` for a number the column does not accept. Only the columns in
+    ``boolean_columns`` read ``true`` and ``false``.
     """
     present = [c for c in columns if c in df.columns]
     if not present:
@@ -781,35 +933,12 @@ def _parse_numeric_columns(df: pd.DataFrame, columns, label: str, checks=None) -
     for column in present:
         numbers = []
         for v in df[column]:
-            number = _number_cell(v, column, label)
+            number = _number_cell(v, column, label, column in boolean_columns)
             if column in checks:
                 checks[column](number, _trim(v) if _has_value(v) else "", column, label)
             numbers.append(number)
         df[column] = pd.Series(numbers, index=df.index, dtype=float)
     return df
-
-
-def _check_rxn_index(number: float, text: str, field: str, label: str) -> None:
-    """A reaction index is a finite whole number of at least 1; an empty or NaN cell is not given."""
-    if not math.isnan(number) and (not math.isfinite(number) or number != math.floor(number)
-                                   or number < 1):
-        raise ValueError(
-            f'The {field} value "{text}" in the {label} table is not a whole number of at least 1')
-
-
-def _check_numeric_cells(df: pd.DataFrame, columns, label: str, checks=None) -> None:
-    """Raise :class:`ValueError` when a cell of the numeric columns is not a number or empty.
-
-    ``checks`` maps a column to a function ``(number, text, column, label)`` that raises
-    :class:`ValueError` for a number the column does not accept.
-    """
-    checks = checks or {}
-    for column in columns:
-        if column in df.columns:
-            for value in df[column]:
-                number = _number_cell(value, column, label)
-                if column in checks:
-                    checks[column](number, _trim(value) if _has_value(value) else "", column, label)
 
 
 def _has_value(v) -> bool:

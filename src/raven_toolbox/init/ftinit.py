@@ -983,6 +983,10 @@ def ftinit(
     # every metabolite that has no reaction left, also one that had none in the reference model
     # (a metabolite a task names but the first simplification left without a reaction).
     out.remove_metabolites([m for m in out.metabolites if not m.reactions])
+    # removeReactions(..., true, true) also drops every gene that has no reaction left, also
+    # one that had none in the reference model (prep_init_model with simplify=False keeps those).
+    for gene in [g for g in out.genes if not g.reactions]:
+        out.genes.remove(gene)
     if remove_genes and gene_scores is not None:   # prune negative-scoring genes from the GPRs
         out, _ = remove_low_score_genes(out, gene_scores)
     return out
