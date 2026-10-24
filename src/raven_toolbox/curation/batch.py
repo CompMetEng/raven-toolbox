@@ -133,11 +133,12 @@ def batch_curate(
         Must be a ``bool`` or ``numpy.bool_``, otherwise :class:`TypeError` is raised.
 
     Numeric cells (charge, confidence score, lower and upper bound, reversibility, ``rxnIdx``
-    and coefficient) are read as RAVEN reads them: an empty cell or ``NaN`` is not given,
+    and coefficient) are read as RAVEN reads them: an empty cell or ``NaN`` (any case, with an optional sign) is not given,
     ``true`` and ``false`` in any case are 1 and 0, and other text must be a plain decimal
     number or ``Inf``. A comma, a hexadecimal number or any expression raises
-    :class:`ValueError`, and nothing is evaluated. Only the characters that MATLAB's
-    ``strtrim`` removes (not the non-breaking space) are trimmed from a cell. A coefficient
+    :class:`ValueError`, and nothing is evaluated. A cell is
+    trimmed as MATLAB's ``strtrim`` trims it, after dropping the backspaces at its start as
+    ``textscan`` does; the non-breaking space, NUL and the next line character stay in the text. A coefficient
     that is empty or ``NaN`` raises :class:`ValueError` unless the whole row is empty, which is
     ignored. A charge must be a finite whole
     number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted, ``0.5``, ``2.5`` and ``Inf`` raise
@@ -159,6 +160,13 @@ def batch_curate(
     overwrite_with_empty = bool(overwrite_with_empty)
     result = CurationResult()
 
+    if (rxns_df is None) != (rxns_coeffs_df is None):
+        raise ValueError(
+            "rxns_df and rxns_coeffs_df must be provided together; got "
+            f"rxns_df={'set' if rxns_df is not None else 'None'}, "
+            f"rxns_coeffs_df="
+            f"{'set' if rxns_coeffs_df is not None else 'None'}."
+        )
     if mets_df is not None:
         mets_df = _parse_numeric_columns(
             _canonical_columns(mets_df, _MET_ALIASES), ("charge",), "metsInfo",
@@ -173,6 +181,7 @@ def batch_curate(
             checks={"rev": _check_boolean_rev})
     if rxns_coeffs_df is not None:
         rxns_coeffs_df = _canonical_columns(rxns_coeffs_df, _COEFF_ALIASES)
+        _validate_rxns_coeffs(rxns_coeffs_df)
         # A row without any content is ignored; a row with content needs a coefficient.
         rxns_coeffs_df = rxns_coeffs_df[
             [any(_has_value(v) for v in row) for row in rxns_coeffs_df.itertuples(index=False)]]
@@ -181,19 +190,14 @@ def batch_curate(
         rxns_coeffs_df = _parse_numeric_columns(rxns_coeffs_df, ("coefficient",), "rxnsCoeffs")
         if rxns_coeffs_df["coefficient"].isna().any():
             raise ValueError("Every coefficient in the rxnsCoeffs table must be a number")
+        _check_reaction_tables(model, mets_df, rxns_df, rxns_coeffs_df)
 
+    # Everything above only reads the tables: a table that fails leaves the model unchanged.
     if mets_df is not None:
         _apply_mets(model, mets_df, met_id_prefix, result, overwrite_with_empty)
     if genes_df is not None:
         _apply_genes(model, genes_df, result, overwrite_with_empty)
 
-    if (rxns_df is None) != (rxns_coeffs_df is None):
-        raise ValueError(
-            "rxns_df and rxns_coeffs_df must be provided together; got "
-            f"rxns_df={'set' if rxns_df is not None else 'None'}, "
-            f"rxns_coeffs_df="
-            f"{'set' if rxns_coeffs_df is not None else 'None'}."
-        )
     if rxns_df is not None:
         _apply_reactions(model, rxns_df, rxns_coeffs_df, rxn_id_prefix, result, overwrite_with_empty)
     return result
@@ -461,6 +465,32 @@ def _apply_reactions(
         )
 
 
+def _check_reaction_tables(model, mets_df, rxns_df, coeffs_df) -> None:
+    """Raise :class:`ValueError` before anything is applied when a reaction has no coefficient
+    rows or a coefficient row names a metabolite that neither the model nor ``mets_df`` has."""
+    by_index = "rxnIdx" in rxns_df.columns and "rxnIdx" in coeffs_df.columns
+    known = set(_name_compartment_index(model))
+    if mets_df is not None and {"metNames", "comps"} <= set(mets_df.columns):
+        known |= {(str(n), str(c)) for n, c in zip(mets_df["metNames"], mets_df["comps"],
+                                                  strict=False)}
+    keys = set()
+    for _, row in coeffs_df.iterrows():
+        if (str(row["metNames"]), str(row["comps"])) not in known:
+            raise ValueError(
+                f"Reaction {str(row['rxnNames'])!r} references metabolite "
+                f"{str(row['metNames'])!r}[{str(row['comps'])}] which is not in the model. "
+                "Add it via mets_df first, or include it in the same "
+                "batch_curate call."
+            )
+        keys.add(_reaction_key(row, by_index))
+    for _, row in rxns_df.iterrows():
+        if _reaction_key(row, by_index) not in keys:
+            raise ValueError(
+                f"Reaction {row['rxnNames']!r} in rxns_df has no matching "
+                "row(s) in rxns_coeffs_df."
+            )
+
+
 def _validate_rxns_coeffs(df: pd.DataFrame) -> None:
     missing = set(DEFAULT_CORE_RXN_COEFFS_COLUMNS) - set(df.columns)
     if missing:
@@ -676,13 +706,23 @@ _DECIMAL = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
 _NAN = re.compile(r"[+-]?nan")
 _INF = re.compile(r"[+-]?inf")
 
-#: The characters MATLAB's ``strtrim`` removes from both ends of a cell: space, tab, newline,
-#: carriage return, vertical tab, form feed and NUL (not the non-breaking space).
-_BLANKS = " \t\n\r\v\f\x00"
+#: The characters MATLAB's ``strtrim`` removes from both ends of a cell: the code points 9 to 13
+#: and 28 to 32 (tab, line feed, vertical tab, form feed, carriage return, the four separators
+#: and the space), 5760, 8192 to 8198, 8200 to 8202, 8232, 8233, 8287 and 12288. NUL (0), the
+#: non-breaking space (160), the next line character (133), the figure space (8199) and the
+#: narrow no-break space (8239) are not removed.
+_BLANKS = "".join(chr(c) for c in (
+    *range(9, 14), *range(28, 33), 5760, *range(8192, 8199), *range(8200, 8203), 8232, 8233,
+    8287, 12288))
 
 
 def _trim(text) -> str:
-    return str(text).strip(_BLANKS)
+    """A cell as RAVEN reads it: ``strtrim`` of the text, after MATLAB's ``textscan`` has dropped
+    the backspace characters at its start."""
+    text = str(text).strip(_BLANKS)
+    if text.startswith("\b"):
+        text = text.lstrip("\b").strip(_BLANKS)
+    return text
 
 
 def _number_cell(value, field: str, label: str) -> float:

@@ -805,6 +805,7 @@ def test_a_charge_that_is_not_a_finite_whole_number_is_refused(text):
         batch_curate(_base_model(), mets_df=df)
 
 
+# Pin: whole-number charges in these notations were read before the check; this keeps them read.
 @pytest.mark.parametrize("text, charge", [("2.0", 2), ("2e0", 2), ("-3", -3), ("+1", 1),
                                          (" 4 ", 4), (2.0, 2), ("-0", 0)])
 def test_a_whole_number_charge_is_accepted_in_any_notation(text, charge):
@@ -837,6 +838,7 @@ def test_an_rxn_index_that_is_not_a_whole_number_of_at_least_one_is_refused(tabl
         batch_curate(m, rxns_df=rxns_df, rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
 
 
+# Pin: whole-number indices were accepted before the check; this keeps them accepted.
 @pytest.mark.parametrize("text", ["1", "2", "3.0", "1e0", " 4 "])
 def test_an_rxn_index_that_is_a_whole_number_of_at_least_one_is_accepted(text):
     m = _base_model()
@@ -857,6 +859,54 @@ def test_a_coefficient_row_without_any_content_is_ignored():
     assert len(_by_name(m, "fresh").metabolites) == 1
 
 
+def test_a_coefficients_table_without_a_coefficient_column_names_the_missing_columns():
+    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "lb": "0"}])
+    coeffs_df = pd.DataFrame([{"rxnNames": "fresh", "metNames": "ATP", "comps": "c"}])
+    with pytest.raises(ValueError, match="rxns_coeffs_df is missing required columns"):
+        batch_curate(_base_model(), rxns_df=rxns_df, rxns_coeffs_df=coeffs_df)
+
+
+def _snapshot(model):
+    return (
+        [(m.id, m.name, m.formula, m.charge, dict(m.annotation)) for m in model.metabolites],
+        [(r.id, r.name, r.bounds, dict(r.notes)) for r in model.reactions],
+        [(g.id, g.name) for g in model.genes],
+    )
+
+
+def _failing_tables():
+    ok_mets = pd.DataFrame([{"metNames": "ATP", "comps": "c", "formula": "X", "charge": "7"}])
+    return {
+        "charge": dict(mets_df=pd.DataFrame([
+            {"metNames": "ATP", "comps": "c", "charge": "7"},
+            {"metNames": "ADP", "comps": "c", "charge": "Inf"}])),
+        "rev": dict(mets_df=ok_mets, rxns_df=pd.DataFrame([
+            {"rxnNames": "fresh", "lb": "0", "rev": "2"}]),
+            rxns_coeffs_df=pd.DataFrame([
+                {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-1"}])),
+        "unknown metabolite": dict(mets_df=ok_mets, rxns_df=pd.DataFrame([
+            {"rxnNames": "fresh", "lb": "0"}]),
+            rxns_coeffs_df=pd.DataFrame([
+                {"rxnNames": "fresh", "metNames": "nothing", "comps": "c", "coefficient": "-1"}])),
+        "no coefficient rows": dict(mets_df=ok_mets, rxns_df=pd.DataFrame([
+            {"rxnNames": "fresh", "lb": "0"}]),
+            rxns_coeffs_df=pd.DataFrame([
+                {"rxnNames": "other", "metNames": "ATP", "comps": "c", "coefficient": "-1"}])),
+        "tables not given together": dict(mets_df=ok_mets, rxns_df=pd.DataFrame([
+            {"rxnNames": "fresh", "lb": "0"}])),
+    }
+
+
+@pytest.mark.parametrize("case", list(_failing_tables()))
+def test_a_table_that_fails_leaves_the_model_unchanged(case):
+    m = _base_model()
+    before = _snapshot(m)
+    with pytest.raises(ValueError):
+        batch_curate(m, **_failing_tables()[case])
+    assert _snapshot(m) == before
+
+
+# Pin: these rev cells were accepted before the check; this keeps them accepted.
 @pytest.mark.parametrize("text", ["0", "1", "1.0", "true", "FALSE", " True ", "NaN", ""])
 def test_a_reversibility_cell_of_zero_one_true_false_or_nothing_is_accepted(text):
     m = _base_model()
