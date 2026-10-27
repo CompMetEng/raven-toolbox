@@ -1,7 +1,7 @@
 """Cross-solver smoke tests for the ftINIT MILP path.
 
 The clean-data calibration and robustness studies were run on Gurobi; the tractability
-choices (big-M=100, MIP gap, time limits) and the Gurobi-specific param plumbing
+choices (per-reaction big-M capped at 1000, MIP gap, time limits) and the Gurobi-specific param plumbing
 (``opt.problem.Params.MIPGap``) only matter if those choices also work on the *other*
 MILP backends real users have. These tests assert that each available MILP-capable
 optlang interface produces the same reaction-set verdict as Gurobi on the toy models the
