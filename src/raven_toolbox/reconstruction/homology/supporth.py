@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from raven_toolbox.reconstruction.homology.blast import _available_cpus
 from raven_toolbox.reconstruction.homology.hits import HIT_COLUMNS
 
 SOURCE = "SuppOrth"
@@ -331,7 +332,7 @@ def run_supporth(
     support_lv: int | None = None,
     identity_filter: float = 80.0,
     alignment: str = "diamond",
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     extra_args: Sequence[str] = (),
     supporth: str | os.PathLike | None = None,
     **reader_kwargs,
@@ -348,7 +349,8 @@ def run_supporth(
     it, or if its identity is above ``identity_filter``. ``support_lv`` defaults to
     3, or to the number of ``tools`` when fewer are selected. ``extra_args`` are
     appended to the command, for example ``["--resume"]`` or
-    ``["--oma", "path/to/Output"]``. Output is written to ``outdir``.
+    ``["--oma", "path/to/Output"]``. Output is written to ``outdir``. ``threads`` defaults to
+    every CPU the process may use, as in RAVEN's ``runSuppOrth``.
 
     SuppOrth requires protein ids to be unique over all proteomes. When two FASTA
     files share an id (for example two templates of the same species), every id is
@@ -369,6 +371,7 @@ def run_supporth(
             "SuppOrth's predictors run on Linux and macOS only. Run SuppOrth under WSL or on "
             "a Linux host, and read suppOrth.tsv with hits_from_supporth()."
         )
+    threads = _available_cpus() if threads is None else threads
     organism_id = str(organism_id)
     model_ids = [model_ids] if isinstance(model_ids, str) else [str(m) for m in model_ids]
     ref_fastas = [ref_fastas] if isinstance(ref_fastas, (str, Path)) else list(ref_fastas)

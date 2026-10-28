@@ -6,9 +6,10 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
-* `reconstruction.homology.run_blast` and `run_diamond`, and `reconstruction.kegg.run_hmmsearch`
-  and `get_kegg_model_from_sequences`, use every CPU the process may run on when `threads` is
-  not given, as RAVEN's `getBlast`, `getDiamond` and `getKEGGModelForOrganism` do (was: the
+* `reconstruction.homology.run_blast`, `run_diamond` and `run_supporth`, and
+  `reconstruction.kegg.run_hmmsearch`, `get_kegg_model_from_sequences`, `build_ko_hmm` and
+  `build_hmm_library`, use every CPU the process may run on when `threads` is not given, as
+  RAVEN's `getBlast`, `getDiamond`, `runSuppOrth` and `getKEGGModelForOrganism` do (was: the
   machine's CPU count minus one).
 * `gapfilling.analyse_topology` takes RAVEN's `gapFillTopological` defaults. Seeds: the
   metabolites of every reaction with only substrates and `lower_bound < 0` or only products

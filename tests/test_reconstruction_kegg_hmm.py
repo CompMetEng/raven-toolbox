@@ -207,6 +207,36 @@ def test_build_ko_hmm_multi_sequence_runs_full_pipeline(tmp_path, monkeypatch):
     assert out.read_text() == "HMM\n"
 
 
+def test_build_ko_hmm_threads_default_to_every_available_cpu(tmp_path, monkeypatch):
+    import os
+
+    fasta = tmp_path / "K90001.fa"
+    fasta.write_text(">a\nMKV\n>b\nMRV\n")
+    cmds = []
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(7)), raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(
+        "raven_toolbox.reconstruction.kegg.hmm.resolve_binary",
+        lambda exe, binary=None: binary or exe,
+    )
+
+    def fake_run(cmd, *, stdout_path=None):
+        cmds.append(cmd)
+        if stdout_path is not None:
+            Path(stdout_path).write_text(">a\nMKV\n>b\nMRV\n")
+        if Path(cmd[0]).name == "cd-hit":
+            Path(cmd[cmd.index("-o") + 1]).write_text(">a\nMKV\n>b\nMRV\n")
+        if Path(cmd[0]).name == "hmmbuild":
+            Path(cmd[-2]).write_text("HMM\n")
+        return ""
+
+    monkeypatch.setattr("raven_toolbox.reconstruction.kegg.hmm._run", fake_run)
+    build_ko_hmm(fasta, tmp_path / "K90001.hmm")
+    flags = {"cd-hit": "-T", "mafft": "--thread", "hmmbuild": "--cpu"}
+    assert {Path(c[0]).name: c[c.index(flags[Path(c[0]).name]) + 1] for c in cmds} == {
+        "cd-hit": "7", "mafft": "7", "hmmbuild": "7"}
+
+
 def test_build_ko_hmm_single_sequence_skips_align(tmp_path, monkeypatch):
     fasta = tmp_path / "K9.fa"
     fasta.write_text(">only\nMKV\n")
