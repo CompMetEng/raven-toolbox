@@ -42,6 +42,7 @@ from raven_toolbox.localization.assign import (
     AssignmentProposal,
     GrowthCondition,
     _base_met,
+    _check_unique_keys,
     _rxn_compartment,
     apply_assignment,
 )
@@ -649,6 +650,7 @@ def assign_compartments(
     if default_compartment not in compartments:
         raise ValueError(f"default_compartment={default_compartment!r} not in {compartments}")
 
+    _check_unique_keys(model.metabolites, base_metabolite or _base_met)
     sc = _prepare_scope(model, scores, reactions_to_relocate, transportable=transportable,
                         base_metabolite=base_metabolite, biomass_reaction=biomass_reaction,
                         min_growth=min_growth)

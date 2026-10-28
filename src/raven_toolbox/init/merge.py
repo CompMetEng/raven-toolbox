@@ -12,7 +12,8 @@ scores and results back to the original reactions:
 
 * ``group_ids`` — one integer per original reaction; ``0`` = not merged, equal
   non-zero integers = merged into the same combined reaction (which keeps one
-  member's id).
+  member's id). The groups are numbered 1, 2, ... in the order of their first
+  reaction in the original model, as RAVEN's ``mergeLinear`` numbers them.
 * ``reversed_rxns`` — which originals were flipped (their stored direction negated)
   when oriented for merging; needed to map fluxes/directions back.
 
@@ -158,8 +159,14 @@ def merge_linear(
             break
         rxns = [rx for rx in rxns if rx.coeffs]
 
-    return _build_model(model, rxns), orig_ids, [group_of[o] for o in orig_ids], \
-        [reversed_of[o] for o in orig_ids]
+    # Number the groups in the order of their first original reaction, so the numbers do not
+    # depend on the order in which the reactions were merged.
+    number: dict[int, int] = {}
+    for o in orig_ids:
+        if group_of[o] and group_of[o] not in number:
+            number[group_of[o]] = len(number) + 1
+    group_ids = [number.get(group_of[o], 0) for o in orig_ids]
+    return _build_model(model, rxns), orig_ids, group_ids, [reversed_of[o] for o in orig_ids]
 
 
 def _build_model(template: cobra.Model, rxns: list[_Rxn]) -> cobra.Model:

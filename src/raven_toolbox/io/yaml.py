@@ -44,6 +44,7 @@ import gzip
 import re
 import warnings
 from collections import OrderedDict
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
@@ -141,6 +142,9 @@ def _capture_entry_fields(entries, fields):
 
     Returns a list of ``{notes_key: value}`` dicts aligned with ``entries`` (so
     cobra never sees these keys), to be attached to the built objects afterwards.
+    A ``notes`` mapping, which :func:`write_yaml_model` writes for notes that have no
+    RAVEN field, is spread back into the notes dict, with its ``note`` entry as the
+    free-text note.
     """
     captured = []
     for entry in entries:
@@ -148,6 +152,8 @@ def _capture_entry_fields(entries, fields):
         for yaml_key, notes_key in fields:
             if yaml_key in entry:
                 notes[notes_key] = entry.pop(yaml_key)
+        if isinstance(notes.get("note"), Mapping):
+            notes.update(notes.pop("note"))
         captured.append(notes)
     return captured
 
