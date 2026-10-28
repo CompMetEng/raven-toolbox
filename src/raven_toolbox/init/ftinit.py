@@ -644,8 +644,9 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
     on keeps at least its value, one that is off at most its value) and minimises
     ``Σ|v|`` over all reactions, so the flux read-out comes from a minimal-flux solution
     rather than from whichever vertex the solver happened to reach. Directions of
-    reversible scored reactions stay free, so the phase is still a MILP; its objective is
-    proven to an absolute gap of 1e-6.
+    reversible scored reactions stay free, so the phase is still a MILP; it stops at a
+    relative or absolute gap of 1e-6, with the full ``time_limit`` as its budget (as RAVEN's
+    phase 2c).
 
     Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
     ``False`` otherwise (the caller keeps the phase-2b fluxes). It never fails the
@@ -675,10 +676,10 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
     opt.add(extra)
     opt.objective = prob.Objective(add(abs_terms), direction="min")
     if _is_gurobi(prob):
-        opt.problem.Params.MIPGap = 0.0
+        opt.problem.Params.MIPGap = 1e-6
         opt.problem.Params.MIPGapAbs = 1e-6
     if time_limit is not None:
-        opt.configuration.timeout = max(1, int(time_limit * _TIE_BREAK_TIME_FRACTION))
+        opt.configuration.timeout = max(1, int(time_limit))
     opt.optimize()
     _dbg(f"[ftinit] tie-break phase2c-minflux: status={opt.status} obj={opt.objective.value}")
     if opt.status == "time_limit":
