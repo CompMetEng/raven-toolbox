@@ -1,8 +1,10 @@
 """Tests for raven_toolbox.utils.gpr (GPR linting)."""
+import re
+
 import cobra
 import pytest
 
-from raven_toolbox.utils import GPRIssue, find_non_dnf_grrules, is_dnf
+from raven_toolbox.utils import GPRIssue, find_non_dnf_grrules, is_dnf, parse_gr_rule
 
 
 @pytest.mark.parametrize(
@@ -90,10 +92,49 @@ def test_find_non_dnf_grrules_empty_when_all_clean():
 )
 def test_is_dnf_raises_on_malformed_rule(rule):
     """RAVEN's isDnfGrRule errors on these (RAVEN:badGrRule); cobra alone returns an empty GPR."""
-    with pytest.raises(ValueError, match="Malformed grRule"):
+    with pytest.raises(ValueError, match="grRule"):
         is_dnf(rule)
 
 
 @pytest.mark.parametrize("rule", ["", "   ", None])
 def test_is_dnf_blank_rule_is_still_true(rule):
     assert is_dnf(rule) is True
+
+
+@pytest.mark.parametrize(
+    "rule, expected",
+    [
+        ("G1 && G2", "G1 and G2"),
+        ("G1 || G2", "G1 or G2"),
+        ("G1 Or G2 aNd G3", "G1 or (G2 and G3)"),
+        ("G1 AND (G2 | G3)", "G1 and (G2 or G3)"),
+        ("10 and 100", "10 and 100"),
+    ],
+)
+def test_parse_gr_rule_takes_the_parsegrrule_operators(rule, expected):
+    assert parse_gr_rule(rule).to_string() == expected
+
+
+def test_parse_gr_rule_reads_an_operator_only_as_a_whole_word():
+    """``G1&G2`` is one gene id in RAVEN's parseGrRule; cobra alone would read it as an AND."""
+    assert sorted(parse_gr_rule("G1&G2 or RAND1").genes) == ["G1&G2", "RAND1"]
+
+
+@pytest.mark.parametrize("rule", ["", "   ", None])
+def test_parse_gr_rule_blank_is_none(rule):
+    assert parse_gr_rule(rule) is None
+
+
+@pytest.mark.parametrize(
+    "rule, message",
+    [
+        ("G1 and", "grRule ends after an operator"),
+        ("(G1 or G2", "Unbalanced parentheses in grRule"),
+        ("G1 G2", 'Unexpected "G2" in grRule'),
+        ("()", 'Expected a gene but found ")" in grRule'),
+        ("G1 xor G2", 'Unexpected "xor" in grRule'),
+    ],
+)
+def test_parse_gr_rule_raises_ravens_message(rule, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        parse_gr_rule(rule)

@@ -13,6 +13,7 @@ import cobra
 import numpy as np
 import pandas as pd
 
+from raven_toolbox.utils.gpr import _RULE_TOKEN, parse_gr_rule, rule_tokens
 from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
 
@@ -434,75 +435,18 @@ def _row_has_content(row, columns=None) -> bool:
     return any(_has_value(v) for v in values)
 
 
-_RULE_TOKEN = re.compile(r"\(|\)|[^\s()]+")
-_AND_WORDS = frozenset({"and", "&", "&&"})
-_OR_WORDS = frozenset({"or", "|", "||"})
 #: Spellings of the operators that cobra reads as they are.
 _COBRA_OPERATORS = frozenset({"and", "AND", "&", "or", "OR", "|"})
 
 
-def _rule_tokens(rule: str) -> list[tuple[str, str]]:
-    """Split a gene rule into ``(kind, text)`` pairs; kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
-
-    The operators are ``and``/``or`` in any case and the symbols ``&``, ``&&``, ``|`` and ``||``,
-    as RAVEN's ``parseGrRule`` reads them; every other word is a gene id.
-    """
-    tokens = []
-    for match in _RULE_TOKEN.finditer(rule):
-        word = match.group()
-        low = word.lower()
-        if word in ("(", ")"):
-            tokens.append((word, word))
-        elif low in _AND_WORDS:
-            tokens.append(("and", word))
-        elif low in _OR_WORDS:
-            tokens.append(("or", word))
-        else:
-            tokens.append(("gene", word))
-    return tokens
-
-
 def _rule_genes(rule: str) -> list[str]:
-    """Gene ids of a gene rule; :class:`ValueError` when the rule is not well formed.
+    """Gene ids of a gene rule, in order; :class:`ValueError` when the rule is not well formed.
 
-    The grammar is that of RAVEN's ``parseGrRule``: ``expr := term (or term)*``,
-    ``term := factor (and factor)*``, ``factor := gene | ( expr )``.
+    The rule is read with :func:`~raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN's
+    ``parseGrRule``.
     """
-    tokens = _rule_tokens(rule)
-    genes: list[str] = []
-
-    def factor(pos: int) -> int:
-        if pos >= len(tokens):
-            raise ValueError("the rule ends after an operator")
-        kind, text = tokens[pos]
-        if kind == "(":
-            pos = expr(pos + 1)
-            if pos >= len(tokens) or tokens[pos][0] != ")":
-                raise ValueError("unbalanced parentheses")
-            return pos + 1
-        if kind == "gene":
-            genes.append(text)
-            return pos + 1
-        raise ValueError(f'expected a gene but found "{text}"')
-
-    def term(pos: int) -> int:
-        pos = factor(pos)
-        while pos < len(tokens) and tokens[pos][0] == "and":
-            pos = factor(pos + 1)
-        return pos
-
-    def expr(pos: int) -> int:
-        pos = term(pos)
-        while pos < len(tokens) and tokens[pos][0] == "or":
-            pos = term(pos + 1)
-        return pos
-
-    if not tokens:
-        return genes
-    end = expr(0)
-    if end < len(tokens):
-        raise ValueError(f'unexpected "{tokens[end][1]}"')
-    return genes
+    parse_gr_rule(rule)
+    return [text for kind, text in rule_tokens(rule) if kind == "gene"]
 
 
 def _row_rule_genes(row: pd.Series) -> list[str]:
@@ -526,15 +470,10 @@ def _stored_gene_rule(rule) -> str:
     last = 0
     for match in _RULE_TOKEN.finditer(text):
         word = match.group()
-        low = word.lower()
-        if word in _COBRA_OPERATORS or word in ("(", ")"):
+        kind = rule_tokens(word)[0][0]
+        if word in _COBRA_OPERATORS or kind not in ("and", "or"):
             continue
-        if low in _AND_WORDS:
-            replacement = "and"
-        elif low in _OR_WORDS:
-            replacement = "or"
-        else:
-            continue
+        replacement = kind
         pieces.append(text[last:match.start()])
         pieces.append(replacement)
         last = match.end()

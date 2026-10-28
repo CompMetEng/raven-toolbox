@@ -6,6 +6,12 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* New: `utils.parse_gr_rule` reads a grRule in the grammar of RAVEN's `parseGrRule`
+  (`and`/`or` in any case, `&`, `&&`, `|`, `||`, operators as whole words). `manipulation.gpr_to_dnf`
+  now also takes a rule string and reads it with this parser, as RAVEN's `grRuleToDNF` does;
+  `utils.is_dnf` reads a string with it too, and both raise `ValueError` with the message of
+  RAVEN's `RAVEN:badGrRule` for a malformed rule. `G1 && G2`, `G1 || G2` and `G1 Or G2` are
+  read as rules, `G1&G2` is one gene id.
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its
