@@ -108,7 +108,11 @@ def is_dnf(gpr: GPR | str | None) -> bool:
     return _is_dnf_node(parsed.body)
 
 
-_RULE_TOKEN = re.compile(r"\(|\)|[^\s()]+")
+# The characters for which MATLAB's isspace is true, the whitespace of RAVEN's parseGrRule. Python's
+# str.isspace also counts U+0085, U+00A0, U+2007 and U+202F; here they are part of a word.
+_RULE_SPACE = r"\t\n\x0b\x0c\r\x1c-\x20\u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000"
+_RULE_TOKEN = re.compile(rf"\(|\)|[^{_RULE_SPACE}()]+")
+_RULE_BLANK = re.compile(rf"[{_RULE_SPACE}]*")
 _AND_WORDS = frozenset({"and", "&", "&&"})
 _OR_WORDS = frozenset({"or", "|", "||"})
 
@@ -116,9 +120,11 @@ _OR_WORDS = frozenset({"or", "|", "||"})
 def rule_tokens(rule: str) -> list[tuple[str, str]]:
     """Split a gene rule into ``(kind, text)`` pairs; kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
 
-    A word is everything up to whitespace or a bracket. The operators are ``and``/``or`` in any
-    case and the symbols ``&``, ``&&``, ``|`` and ``||``, each as a whole word, as RAVEN's
-    ``parseGrRule`` reads them; every other word is a gene id, so ``G1&G2`` is one gene.
+    A word is everything up to whitespace or a bracket, whitespace being the characters for which
+    MATLAB's ``isspace`` is true (not U+00A0, U+0085, U+2007 or U+202F). The operators are
+    ``and``/``or`` in any case and the symbols ``&``, ``&&``, ``|`` and ``||``, each as a whole
+    word, as RAVEN's ``parseGrRule`` reads them; every other word is a gene id, so ``G1&G2`` is
+    one gene.
     """
     tokens = []
     for match in _RULE_TOKEN.finditer(rule):
@@ -167,7 +173,7 @@ def parse_gr_rule(rule: str | None) -> GPR | None:
         parentheses, or two genes without an operator between them. The messages are those
         of RAVEN's ``RAVEN:badGrRule`` error.
     """
-    if rule is None or not rule.strip():
+    if rule is None or _RULE_BLANK.fullmatch(rule):
         return None
     tokens = rule_tokens(rule)
 

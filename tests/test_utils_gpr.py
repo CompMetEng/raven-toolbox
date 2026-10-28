@@ -138,3 +138,32 @@ def test_parse_gr_rule_blank_is_none(rule):
 def test_parse_gr_rule_raises_ravens_message(rule, message):
     with pytest.raises(ValueError, match=re.escape(message)):
         parse_gr_rule(rule)
+
+
+# The code points for which MATLAB's isspace is true, enumerated over char(0:65535).
+_MATLAB_ISSPACE = [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 5760, *range(8192, 8199), 8200, 8201,
+                   8202, 8232, 8233, 8287, 12288]
+
+
+def test_parse_gr_rule_whitespace_is_matlab_isspace():
+    for code in range(65536):
+        rule = f"G1{chr(code)}and G2"
+        if code in _MATLAB_ISSPACE:
+            assert sorted(parse_gr_rule(rule).genes) == ["G1", "G2"], code
+        elif chr(code) not in "()":
+            with pytest.raises(ValueError):
+                parse_gr_rule(rule)
+
+
+@pytest.mark.parametrize("char", [" ", "\u0085", " ", " "])
+def test_parse_gr_rule_a_space_that_isspace_refuses_is_part_of_a_word(char):
+    with pytest.raises(ValueError, match=re.escape(f'Unexpected "G2" in grRule: G1{char}and G2')):
+        parse_gr_rule(f"G1{char}and G2")
+    assert sorted(parse_gr_rule(f"G1{char}G2").genes) == [f"G1{char}G2"]
+    assert parse_gr_rule(char) is not None
+
+
+@pytest.mark.parametrize("char", ["\x1c", " ", "　"])
+def test_parse_gr_rule_isspace_characters_separate_words(char):
+    assert parse_gr_rule(f"G1{char}or{char}G2").to_string() == "G1 or G2"
+    assert parse_gr_rule(char * 2) is None
