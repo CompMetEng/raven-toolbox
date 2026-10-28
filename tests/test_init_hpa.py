@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
+import pandas as pd
 import pytest
 
 from raven_toolbox.init import (
@@ -27,7 +28,7 @@ def hpa_tsv(tmp_path):
         ENSG1\tGeneA\tkidney\ttubular cells\tNot detected\tApproved
         ENSG2\tGeneB\tliver\thepatocytes\tMedium\tSupported
         ENSG2\tGeneB\tkidney\ttubular cells\tHigh\tEnhanced
-        ENSG3\tGeneC\tliver\thepatocytes\tMixed\tUncertain
+        ENSG3\tGeneC\tliver\thepatocytes\tNot detected\tUncertain
     """))
     return p
 
@@ -73,17 +74,34 @@ def test_parse_hpa_rna_tidy(rna_tsv):
     assert rna.expression("liver") == {"ENSG1": 100.0, "ENSG2": 5.0}
 
 
-def test_parse_hpa_rna_wide_layout(tmp_path):
-    """The older wide layout (one TPM column per tissue) is melted to the tidy form."""
-    p = tmp_path / "rna_wide.tsv"
-    p.write_text(dedent("""\
-        Gene\tGene name\tliver\tkidney
-        ENSG1\tGeneA\t100\t10
-        ENSG2\tGeneB\t5\t50
-    """))
+def test_parse_hpa_rna_v18_layout(tmp_path):
+    p = tmp_path / "rna_v18.tsv"
+    p.write_text("Gene\tGene name\tSample\tValue\nENSG1\tGeneA\tliver\t100\nENSG1\tGeneA\tkidney\t10\n")
     rna = parse_hpa_rna(p)
-    assert rna.expression("liver") == {"ENSG1": 100.0, "ENSG2": 5.0}
-    assert rna.expression("kidney") == {"ENSG1": 10.0, "ENSG2": 50.0}
+    assert rna.tissues() == ["kidney", "liver"]
+    assert rna.expression("liver") == {"ENSG1": 100.0}
+
+
+def test_parse_hpa_rna_wide_layout_raises(tmp_path):
+    p = tmp_path / "rna_wide.tsv"
+    p.write_text("Gene\tGene name\tliver\tkidney\nENSG1\tGeneA\t100\t10\n")
+    with pytest.raises(ValueError, match="tissue column"):
+        parse_hpa_rna(p)
+
+
+def test_parse_hpa_rna_without_value_column_raises(tmp_path):
+    p = tmp_path / "rna_novalue.tsv"
+    p.write_text("Gene\tGene name\tTissue\nENSG1\tGeneA\tliver\n")
+    with pytest.raises(ValueError, match="value column"):
+        parse_hpa_rna(p)
+
+
+def test_parse_hpa_rna_repeated_gene_tissue_keeps_last(tmp_path):
+    p = tmp_path / "rna_dup.tsv"
+    p.write_text("Gene\tGene name\tTissue\tTPM\nENSG1\tGeneA\tliver\t1\nENSG1\tGeneA\tliver\t7\n")
+    with pytest.warns(UserWarning, match="repeat a gene and tissue"):
+        rna = parse_hpa_rna(p)
+    assert rna.expression("liver") == {"ENSG1": 7.0}
 
 
 # ---------------------------------------------------------------------- scoring
@@ -107,10 +125,29 @@ def test_hpa_gene_scores_celltype_filter(hpa_tsv):
     assert g == {"ENSG1": HPA_LEVEL_SCORES["Low"]}     # 10; GeneB has no bile-duct row
 
 
-def test_hpa_gene_scores_unknown_level_omitted(hpa_tsv):
-    """A 'Mixed' / 'N/A' level is not in HPA_LEVEL_SCORES and is dropped (not -inf)."""
-    g = hpa_gene_scores(parse_hpa(hpa_tsv), "liver")
-    assert "ENSG3" not in g    # the only ENSG3 row in liver has level='Mixed'
+def test_hpa_level_none_scores_minus_eight(tmp_path):
+    p = tmp_path / "hpa_none.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "ENSG9\tGeneZ\tliver\thepatocytes\tNone\tApproved\n")
+    assert hpa_gene_scores(parse_hpa(p), "liver") == {"ENSG9": -8.0}
+
+
+def test_hpa_gene_scores_refuses_a_level_missing_from_the_table(tmp_path):
+    """Any level in the data that the table lacks raises, also when the scored tissue does not use it."""
+    p = tmp_path / "hpa_mixed.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "G1\tA\tliver\thepatocytes\tHigh\tApproved\n"
+                 "G3\tC\tkidney\ttubules\tMixed\tUncertain\n")
+    with pytest.raises(ValueError, match="Mixed"):
+        hpa_gene_scores(parse_hpa(p), "liver")
+
+
+def test_a_blank_level_is_named_in_the_error_message():
+    from raven_toolbox.init.hpa import check_levels
+
+    df = pd.DataFrame({"level": ["High", "", "Mixed"]})
+    with pytest.raises(ValueError, match="<blank>, Mixed"):
+        check_levels(df, {"HIGH": 20.0})
 
 
 def test_hpa_gene_scores_unknown_celltype_returns_empty(hpa_tsv):
@@ -122,7 +159,34 @@ def test_hpa_gene_scores_custom_level_table(hpa_tsv):
     """``level_scores`` overrides the default mapping."""
     g = hpa_gene_scores(parse_hpa(hpa_tsv), "liver",
                         level_scores={"High": 1.0, "Medium": 0.5, "Low": 0.1, "Not detected": -1.0})
-    assert g == {"ENSG1": 1.0, "ENSG2": 0.5}
+    assert g == {"ENSG1": 1.0, "ENSG2": 0.5, "ENSG3": -1.0}
+
+
+def test_hpa_gene_scores_compare_level_names_case_insensitively(tmp_path):
+    """RAVEN's scoreModel compares upper-cased level names, for the default and a custom table."""
+    p = tmp_path / "hpa_case.tsv"
+    p.write_text("Gene\tGene name\tTissue\tCell type\tLevel\tReliability\n"
+                 "G1\tA\tliver\thepatocytes\tstrong\tApproved\n"
+                 "G2\tB\tliver\thepatocytes\tNOT DETECTED\tApproved\n")
+    hpa = parse_hpa(p)
+    assert hpa_gene_scores(hpa, "liver") == {"G1": 20.0, "G2": -8.0}
+    assert hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0, "not detected": 2.0}) == {"G1": 1.0, "G2": 2.0}
+    with pytest.raises(ValueError, match="NOT DETECTED"):
+        hpa_gene_scores(hpa, "liver", level_scores={"STRONG": 1.0})
+
+
+def test_hpa_gene_scores_use_the_first_of_level_names_that_differ_in_case(hpa_tsv):
+    table = {"High": 1.0, "HIGH": 2.0, "Medium": 3.0, "Low": 4.0, "Not detected": 5.0}
+    assert hpa_gene_scores(parse_hpa(hpa_tsv), "liver", level_scores=table)["ENSG1"] == 4.0
+    table = {"HIGH": 2.0, "High": 1.0, "Medium": 3.0, "Low": 0.5, "Not detected": 5.0}
+    assert hpa_gene_scores(parse_hpa(hpa_tsv), "liver", level_scores=table)["ENSG1"] == 2.0
+
+
+def test_hpa_gene_scores_match_tissue_and_celltype_case_insensitively(hpa_tsv):
+    hpa = parse_hpa(hpa_tsv)
+    assert hpa_gene_scores(hpa, "LIVER", celltype="Bile Duct Cells") == {"ENSG1": 10.0}
+    assert hpa_gene_scores(hpa, "Liver") == hpa_gene_scores(hpa, "liver")
+    assert hpa_gene_scores(hpa, "liver", celltype="") == hpa_gene_scores(hpa, "liver")
 
 
 def test_rna_gene_scores_against_per_gene_mean(rna_tsv):

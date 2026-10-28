@@ -127,7 +127,9 @@ class PrepData:
 
     Built once per template, reused across samples. ``min_model`` is the merged model
     the MILP runs on; ``orig_rxn_ids``/``group_ids`` map its reactions back to the
-    ``ref_model`` (the simplified, pre-merge reference). ``essential_rxns`` are in
+    ``ref_model`` (the reference after the first simplification; the orientation of the
+    essential reactions and the tightening of reversibility are undone on it after the merge,
+    so its bounds and stoichiometry are the template's). ``essential_rxns`` are in
     **merged** ids and pre-oriented irreversibly (so the MILP forces flux *forward*).
     ``masks`` is on ``ref_model`` (= original) ids.
     """
@@ -154,7 +156,7 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
     coefficients from 1e-3 to 1e2) force correspondingly extreme flux magnitudes, so no
     single MILP big-M fits all reactions. RAVEN, per reaction: caps every ``|coeff|`` at
     ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole reaction so its
-    mean ``|coeff|`` is 1. Bounds are reset to ``±1000`` afterwards. Modifies ``model`` in
+    mean ``|coeff|`` is 1. Bounds are not changed. Modifies ``model`` in
     place; only the merged MILP model is scaled (the final output maps back to the
     unscaled ``ref_model`` by reaction id, so reaction *selection* is unaffected).
     """
@@ -167,11 +169,56 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
         total = sum(abs(c) for c in capped.values())
         scale = (len(capped) / total) if total else 1.0
         rxn.add_metabolites({m: c * scale for m, c in capped.items()}, combine=False)
-    for rxn in model.reactions:  # RAVEN resets bounds to the standard ±1000 after scaling
-        if rxn.upper_bound > 0:
-            rxn.upper_bound = 1000.0
-        if rxn.lower_bound < 0:
-            rxn.lower_bound = -1000.0
+
+
+def _restore_reactions(model: cobra.Model, saved: dict) -> None:
+    """Put back the bounds, stoichiometry and objective coefficient saved per reaction id."""
+    for rid, (lb, ub, stoich, objective) in saved.items():
+        rxn = model.reactions.get_by_id(rid)
+        if dict(rxn.metabolites) != stoich:
+            rxn.add_metabolites(stoich, combine=False)
+        if (rxn.lower_bound, rxn.upper_bound) != (lb, ub):
+            rxn.bounds = (lb, ub)
+        if rxn.objective_coefficient != objective:
+            rxn.objective_coefficient = objective
+
+
+def _equation_metabolites(equation: str) -> list[str]:
+    """Metabolite names of a task equation, as RAVEN ``parseRxnEqu`` reads them.
+
+    The equation is split at `` <=> ``, `` => `` and `` + ``; empty pieces are dropped, and a
+    leading number followed by a space is taken as the coefficient and removed.
+    """
+    text = equation.replace(" <=> ", "\u20ac").replace(" => ", "\u20ac").replace(" + ", "\u20ac").strip()
+    names: list[str] = []
+    for candidate in text.split("\u20ac"):
+        if not candidate:
+            continue
+        space = candidate.find(" ")
+        name = candidate
+        if space >= 0 and _is_number(candidate[:space]):
+            name = candidate[space + 1:]
+        names.append(name.strip())
+    return names
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _task_metabolite_names(tasks: Iterable[Task]) -> set[str]:
+    """``name[compartment]`` strings named by the inputs, outputs and equations of ``tasks``."""
+    names: set[str] = set()
+    for task in tasks:
+        names.update(token for token, _, _ in task.inputs)
+        names.update(token for token, _, _ in task.outputs)
+        for equation, _, _ in task.equations:
+            names.update(_equation_metabolites(equation))
+    return names
 
 
 def _orient_forward(rxn: cobra.Reaction, direction: int) -> None:
@@ -228,7 +275,26 @@ def prep_init_model(
     :func:`find_task_essential_reactions`. It does not affect the two ``simplify_model``
     passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
     (set that separately if you want them faster too).
+
+    The first simplification removes reactions only; every metabolite stays in the reference model
+    while the tasks are checked, so a task names a metabolite whatever its letter case. Afterwards
+    the metabolites without a reaction are removed, except the ones that tasks name (inputs,
+    outputs and equations, matched by exact ``name[compartment]``, failed tasks included; when
+    several metabolites share a ``name[compartment]``, only the first in model order is kept).
+    RAVEN ``prepINITModel`` does the same.
+
+    With the first simplification, every gene left without a reaction is removed from the
+    reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
+    genes that had no reaction in the template. Task ids may repeat (for example as category
+    codes) and may be empty; a task that cannot be performed is removed by its position, so a
+    task with the same id that can be performed stays. Raises :class:`ValueError` when a task
+    id is not text.
     """
+    if tasks is not None:
+        tasks = list(tasks)
+        bad = [t.id for t in tasks if not isinstance(t.id, str)]
+        if bad:
+            raise ValueError(f"Task ids must be text, got {bad[0]!r} of type {type(bad[0]).__name__}")
     ref_model = template.copy()
 
     if simplify:
@@ -241,8 +307,25 @@ def prep_init_model(
         # flux — zero-interval, topological dead-ends, then FVA-blocked (deleteMinMax).
         # Without the FVA-blocked and zero-interval passes the MILP runs on a ~10% larger
         # model and reaches a different (bypass-heavy) optimum.
+        # prepINITModel removes the reactions but keeps every metabolite through the task check;
+        # it removes the unused metabolites afterwards, except those that tasks name (below).
+        template_order = {m.id: i for i, m in enumerate(ref_model.metabolites)}
+        before = list(ref_model.metabolites)
         simplify_model(ref_model, delete_zero_interval=True, delete_dead_end=True,
                        delete_no_flux=True)
+        lost = [m for m in before if m.id not in ref_model.metabolites]
+        if lost and tasks is not None:
+            restored = [cobra.Metabolite(m.id, formula=m.formula, name=m.name, charge=m.charge,
+                                         compartment=m.compartment) for m in lost]
+            for new, old in zip(restored, lost, strict=True):
+                new.annotation = dict(old.annotation)
+                new.notes = dict(old.notes)
+            ref_model.add_metabolites(restored)
+            ref_model.metabolites.sort(key=lambda m: template_order[m.id])
+        # prepINITModel removes the reactions with removeReactions(model, rxns, false, true),
+        # whose last argument removes every gene that no reaction uses.
+        for gene in [g for g in ref_model.genes if not g.reactions]:
+            ref_model.genes.remove(gene)
 
     essential_pre: dict[str, int] = {}
     task_mets: set[str] = set()
@@ -270,7 +353,32 @@ def prep_init_model(
                                             processes=processes)
         essential_pre = ess.reactions
         task_mets = ess.task_metabolites
-        kept_tasks = [t for t in tasks if t.id not in ess.failed_tasks]
+        failed_positions = set(ess.failed_indices)
+        kept_tasks = [t for i, t in enumerate(tasks) if i not in failed_positions]
+
+        if simplify:
+            # prepINITModel: removeMets(cModel, setdiff(unusedMets, essentialMetsForTasks)), where
+            # essentialMetsForTasks holds, for each name[compartment] that a task names (failed
+            # tasks included), the first metabolite of the model with exactly that name.
+            task_met_names = _task_metabolite_names(tasks)
+            named_first: dict[str, cobra.Metabolite] = {}
+            for met in ref_model.metabolites:
+                key = f"{met.name}[{met.compartment}]"
+                if key in task_met_names:
+                    named_first.setdefault(key, met)
+            keep_ids = {met.id for met in named_first.values()}
+            ref_model.remove_metabolites(
+                [m for m in ref_model.metabolites if not m.reactions and m.id not in keep_ids]
+            )
+
+    # Orienting essentials and tightening reversibility change the bounds, the stoichiometry
+    # direction and the objective coefficient of these reactions only. They are restored on
+    # ref_model after the merge, so that the extracted model keeps the bounds of the template.
+    changeable = [r for r in ref_model.reactions if r.id in essential_pre or r.lower_bound < 0]
+    saved = {
+        r.id: (r.lower_bound, r.upper_bound, dict(r.metabolites), r.objective_coefficient)
+        for r in changeable
+    }
 
     # Orient essentials irreversibly (forced direction → forward) before merging, so
     # the merge keeps them forward and the MILP forces them with a simple lower bound.
@@ -293,10 +401,16 @@ def prep_init_model(
                                spontaneous=spontaneous, custom=custom)
 
     min_model, orig_ids, group_ids, reversed_rxns = merge_linear(ref_model)
+    _restore_reactions(ref_model, saved)
     if scale:  # compress stoichiometric dynamic range so the MILP big-M fits all reactions
         if verbose:
             print("[prep] rescaling merged model", flush=True)
         rescale_for_init(min_model)
+        for rxn in min_model.reactions:  # prepINITModel: bounds back to the standard ±1000
+            if rxn.upper_bound > 0:
+                rxn.upper_bound = 1000.0
+            if rxn.lower_bound < 0:
+                rxn.lower_bound = -1000.0
     if verbose:
         print(f"[prep] done: {len(min_model.reactions)} reactions in min_model, "
               f"{len(essential_pre)} essential (pre-merge)", flush=True)

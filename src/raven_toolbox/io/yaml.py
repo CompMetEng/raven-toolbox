@@ -683,9 +683,9 @@ def _build_metadata(model: cobra.Model, stored_meta: dict, version) -> OrderedDi
     ``id``/``name`` are always present (``"blankID"``/``"blankName"`` when
     unset, matching writeMetadata's own ``valueOrDefault``), as is
     ``date`` (today's date when the model carries none). ``defaultLB``/
-    ``defaultUB`` are recomputed from the model's current bounds (see
-    :func:`_default_bounds`) rather than merely echoed from a stored
-    value. The remaining fields follow in the same order
+    ``defaultUB`` are written only when the model's stored metaData has them,
+    as RAVEN's writer does, and are then recomputed from the model's current
+    bounds (see :func:`_default_bounds`) rather than echoed. The remaining fields follow in the same order
     writeYAMLmodel.m's ``annoFields`` emits them, each only when present
     and non-empty. Any other key left in ``stored_meta`` — a
     caller-specific provenance field with no RAVEN-defined slot, e.g.
@@ -701,9 +701,12 @@ def _build_metadata(model: cobra.Model, stored_meta: dict, version) -> OrderedDi
     if version is not None:
         metadata["version"] = version
     metadata["date"] = stored_meta.get("date") or date.today().isoformat()
-    bounds = _default_bounds(model)
+    bounds = _default_bounds(model) if "defaultLB" in stored_meta or "defaultUB" in stored_meta else None
     if bounds is not None:
-        metadata["defaultLB"], metadata["defaultUB"] = bounds
+        if "defaultLB" in stored_meta:
+            metadata["defaultLB"] = bounds[0]
+        if "defaultUB" in stored_meta:
+            metadata["defaultUB"] = bounds[1]
     for key in _META_ANNOTATION_FIELDS:
         value = stored_meta.get(key)
         if value:
@@ -790,6 +793,24 @@ def write_yaml_model(
             stacklevel=2,
         )
 
+    seen: dict[tuple[str, str], str] = {}
+    duplicated: list[str] = []
+    for met in model.metabolites:
+        if not met.name:
+            continue
+        key = (met.name, met.compartment or "")
+        if key in seen:
+            duplicated.append(f"{met.id} and {seen[key]}")
+        else:
+            seen[key] = met.id
+    if duplicated:
+        shown = ", ".join(duplicated[:5]) + (", ..." if len(duplicated) > 5 else "")
+        warnings.warn(
+            f"{len(duplicated)} metabolite(s) share a name and compartment with another ({shown}); "
+            "the YAML is written anyway, but RAVEN's writeYAMLmodel refuses such a model.",
+            stacklevel=2,
+        )
+
     doc = OrderedDict(_to_plain(model_to_dict(model)))
 
     # cobra's model_to_dict serialises model.notes verbatim into doc["notes"],
@@ -798,8 +819,8 @@ def write_yaml_model(
     # genuine notes the caller stored on the model.
     doc_notes = doc.get("notes")
     if isinstance(doc_notes, dict):
-        for key in ("metaData", "version", "_yaml_sections"):
-            doc_notes.pop(key, None)
+        for note_key in ("metaData", "version", "_yaml_sections"):
+            doc_notes.pop(note_key, None)
         if not doc_notes:
             doc.pop("notes", None)
 
@@ -846,6 +867,11 @@ def write_yaml_model(
         if isinstance(rxn, dict) and rxn.get("gene_reaction_rule") == "":
             rxn.pop("gene_reaction_rule", None)
 
+    # An unnamed reaction has no `name` key in RAVEN's writer either.
+    for rxn in doc.get("reactions", []) or ():
+        if isinstance(rxn, dict) and rxn.get("name") == "":
+            rxn.pop("name", None)
+
     # ec sections come from the typed model.ec (when present), not from the
     # opaque foreign-keys stash. Drop any stale ec-* entries in `foreign` so
     # they can't conflict with the EcData-derived ones.
@@ -874,9 +900,9 @@ def write_yaml_model(
 
     ordered = OrderedDict()
     ordered["metaData"] = metadata
-    for key in ("metabolites", "reactions", "genes", "compartments", "notes"):
-        if key in doc:
-            ordered[key] = doc.pop(key)
+    for section in ("metabolites", "reactions", "genes", "compartments", "notes"):
+        if section in doc:
+            ordered[section] = doc.pop(section)
     if ec_sections is not None:
         ordered["gecko_light"] = ec_sections["gecko_light"]
         ordered["ec-rxns"] = ec_sections["ec-rxns"]

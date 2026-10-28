@@ -33,7 +33,7 @@ from collections.abc import Mapping, Sequence
 
 import cobra
 from cobra import Metabolite, Reaction
-from cobra.core.gene import GPR
+from cobra.core.gene import GPR, Gene
 
 from raven_toolbox.utils.parse import parse_name_comp, subsystem_to_str
 
@@ -297,7 +297,8 @@ def add_reactions_from_equations(
         ``compartment`` (id mode) or an auto ID ``m1``, ``m2``, ... (name mode).
         If False, an unknown metabolite raises.
     allow_new_genes
-        If True (default), genes in a GPR are auto-created by cobra. If False,
+        If True (default), genes in a GPR are created and added to the model in sorted
+        order, independent of the hash seed. If False,
         a GPR referencing a gene not already in the model raises.
     new_met_prefix
         Prefix for auto-generated metabolite IDs in name mode (default ``"m"``).
@@ -354,6 +355,18 @@ def add_reactions_from_equations(
         added.append(rxn)
 
     model.add_reactions(added)  # one batch — per-reaction adds are super-linear at scale
+
+    if allow_new_genes:
+        # New genes enter the model in sorted order (RAVEN's setdiff), not in the
+        # iteration order of the sets cobra builds from each rule.
+        new_genes = sorted(
+            {g for spec in reactions if spec.get("gene_reaction_rule")
+             for g in GPR.from_string(spec["gene_reaction_rule"]).genes} - known_genes
+        )
+        for gene_id in new_genes:
+            gene = Gene(gene_id)
+            gene._model = model
+            model.genes.append(gene)
 
     for spec, rxn, coeffs in zip(reactions, added, pending_coeffs, strict=True):
         rxn.add_metabolites(coeffs)

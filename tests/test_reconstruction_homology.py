@@ -102,6 +102,41 @@ def test_complex_policy_drop_removes_reaction():
     assert "R_cplx" not in {r.id for r in res.model.reactions}
 
 
+def _one_rule_template(model_id, rxn_id, rule):
+    m = cobra.Model(model_id)
+    m.add_metabolites([cobra.Metabolite(x, name=x, compartment="c") for x in ("a_c", "b_c")])
+    add_reactions_from_equations(m, [{"id": rxn_id, "equation": "a_c --> b_c", "gene_reaction_rule": rule}])
+    return m
+
+
+def _rules(res):
+    return {r.id: r.gene_reaction_rule for r in res.model.reactions}
+
+
+def _policy_draft(rule, mapped, policy):
+    hits = make_ortholog_hits([(g, f"n{g}") for g in mapped], "T", "N")
+    return _rules(get_model_from_homology([_one_rule_template("T", "R1", rule)], hits, "N", complex_policy=policy))
+
+
+def test_isozymes_without_ortholog_leave_one_flagged_subunit():
+    assert _policy_draft("(A or B) and C", ["C"], "flag") == {"R1": "OLD_T_B and nC"}
+    assert _policy_draft("(A or B) and C", ["C"], "keep") == {"R1": "nC"}
+    assert _policy_draft("(A or B) and C", ["C"], "drop") == {}
+
+
+def test_flagged_subunit_stays_beside_a_complete_isozyme_branch():
+    flag = _policy_draft("A or (B and C)", ["A", "C"], "flag")
+    assert flag == {"R1": "nA or (OLD_T_B and nC)"}
+    assert _policy_draft("A or (B and C)", ["A", "C"], "keep") == {"R1": "nA or nC"}
+
+
+def test_complex_policy_drop_removes_reaction_with_any_flagged_subunit():
+    assert _policy_draft("A or (B and C)", ["A", "C"], "drop") == {}
+    assert _policy_draft("(A and B) or C", ["C"], "drop") == {}
+    assert _policy_draft("(A and B) or C", ["C"], "flag") == {"R1": "(OLD_T_A and OLD_T_B) or nC"}
+    assert _policy_draft("(A and B) or C", ["C"], "keep") == {"R1": "nC"}
+
+
 # --- strictness ------------------------------------------------------------
 
 def test_strictness_bidirectional_and_best_hits():
@@ -189,6 +224,46 @@ def test_preferred_order_routes_gene_to_one_model():
     # ng1's reaction comes only from modelA
     sources = {r.notes.get("homology_source") for r in res.model.reactions if r.id.startswith("R_single")}
     assert sources == {"modelA"}
+
+
+def _two_templates(pairs1, pairs2, rxn1="R_T1", rxn2="R_T2"):
+    t1 = _one_rule_template("T1", rxn1, "Y")
+    t2 = _one_rule_template("T2", rxn2, "X")
+    hits = pd.concat(
+        [make_ortholog_hits(pairs1, "T1", "N"), make_ortholog_hits(pairs2, "T2", "N")], ignore_index=True
+    )
+    return [t1, t2], hits
+
+
+def test_preferred_order_removes_a_gene_that_maps_to_a_taken_gene():
+    templates, hits = _two_templates([("Y", "N1")], [("X", "N1"), ("X", "N2")])
+    first = get_model_from_homology(templates, hits, "N", preferred_order=["T1", "T2"])
+    assert _rules(first) == {"R_T1": "N1"}
+    assert "X" not in first.gene_map.get("T2", {})
+    second = get_model_from_homology(templates, hits, "N", preferred_order=["T2", "T1"])
+    assert _rules(second) == {"R_T2": "N1 or N2"}
+    assert _rules(get_model_from_homology(templates, hits, "N")) == {"R_T1": "N1", "R_T2": "N1 or N2"}
+
+
+def test_preferred_order_without_shared_genes_merges_in_given_order():
+    templates, hits = _two_templates([("Y", "N1")], [("X", "N2")], rxn1="R1", rxn2="R1")
+    plain = _rules(get_model_from_homology(templates, hits, "N"))
+    ordered = _rules(get_model_from_homology(templates, hits, "N", preferred_order=["T2", "T1"]))
+    assert ordered == plain
+    assert plain["R1"] == "N1"
+
+
+def test_preferred_order_keeps_a_reaction_that_survives_without_the_removed_gene():
+    t1 = _one_rule_template("T1", "R_T1", "Y")
+    t2 = _one_rule_template("T2", "R_T2", "X or Z")
+    add_reactions_from_equations(t2, [{"id": "R_T3", "equation": "b_c --> a_c", "gene_reaction_rule": "X and Z"}])
+    hits = pd.concat(
+        [make_ortholog_hits([("Y", "N1")], "T1", "N"),
+         make_ortholog_hits([("X", "N1"), ("Z", "N3")], "T2", "N")],
+        ignore_index=True,
+    )
+    res = get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"])
+    assert _rules(res) == {"R_T1": "N1", "R_T2": "N3"}  # R_T3 needs the removed X
 
 
 # --- gene-free reactions, notes, duplicate genes, metadata ------------------------

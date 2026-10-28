@@ -15,7 +15,7 @@ Pipeline (typical (f)tINIT entry):
     hpa = parse_hpa("normal_tissue.tsv")
     gene_scores = hpa_gene_scores(hpa, tissue="liver", celltype="hepatocytes")
     rxn_scores  = score_reactions_from_genes(model, gene_scores)
-    # → ftinit(prep, rxn_scores, gene_scores=gene_scores, ...)
+    # → ftinit(prep, rxn_scores=rxn_scores, gene_scores=gene_scores, ...)
 
 or for RNA-seq:
 
@@ -27,6 +27,7 @@ or for RNA-seq:
 """
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,11 +37,11 @@ import pandas as pd
 from raven_toolbox.init.score import gene_scores_from_expression
 
 # RAVEN's hpaLevelScores defaults (scoreModel.m). HPA reports either antibody-staining
-# levels (Strong/Moderate/Weak/Negative) or "APE" classes (High/Medium/Low/Not detected /
-# Ascending/Descending/...); the four common categories are mapped here. Unknown levels
-# (e.g. "Mixed", "N/A") fall through to NaN and are dropped during scoring.
+# levels (Strong/Moderate/Weak/Negative) or "APE" classes (High/Medium/Low/None/Not detected /
+# Ascending/Descending/...); the categories of RAVEN's table are mapped here. A level of the
+# data that the table lacks (e.g. "Mixed", "N/A") raises ValueError in hpa_gene_scores.
 HPA_LEVEL_SCORES: dict[str, float] = {
-    "High": 20.0, "Medium": 15.0, "Low": 10.0, "Not detected": -8.0,
+    "High": 20.0, "Medium": 15.0, "Low": 10.0, "None": -8.0, "Not detected": -8.0,
     "Strong": 20.0, "Moderate": 15.0, "Weak": 10.0, "Negative": -8.0,
 }
 
@@ -102,28 +103,58 @@ def parse_hpa(path: str | Path) -> HPAData:
 
 
 def parse_hpa_rna(path: str | Path) -> HPARnaData:
-    """Parse an HPA RNA-seq dump.
+    """Parse an HPA RNA-seq dump, as RAVEN's ``parseHPArna``.
 
-    Accepts the canonical ≥v17 tidy layout (``Gene  Gene name  Tissue  TPM``, one row per
-    gene × tissue) or the older wide layout with one TPM column per tissue
-    (``Gene  Gene name  TissueA  TissueB  ...``) — the latter is melted into the same
-    tidy shape.
+    One row per gene and tissue. The tissue column is ``Tissue`` (v19) or ``Sample`` (v18); the
+    value column is ``TPM`` (v19) or ``Value`` (v18); ``Gene`` and ``Gene name`` are required.
+    A file without a tissue or value column (for example one TPM column per tissue) raises
+    ``ValueError``. When a gene and tissue occur more than once, the last row is kept and a
+    warning is issued. Values that are not numbers are dropped.
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
-    if {"Gene", "Gene name", "Tissue", "TPM"}.issubset(df.columns):
-        df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name",
-                                 "Tissue": "tissue", "TPM": "tpm"})
-        df = df[["gene_id", "gene_name", "tissue", "tpm"]]
-    elif {"Gene", "Gene name"}.issubset(df.columns):
-        # Wide layout: tissues are extra columns to melt.
-        df = df.melt(id_vars=["Gene", "Gene name"], var_name="tissue", value_name="tpm")
-        df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name"})
-    else:
-        raise ValueError(f"{path}: expected Gene/Gene name/Tissue/TPM columns "
-                         f"(got {list(df.columns)})")
-    df["tpm"] = pd.to_numeric(df["tpm"], errors="coerce")
+    for col in ("Gene", "Gene name"):
+        if col not in df.columns:
+            raise ValueError(f'{path}: could not find the column "{col}" (got {list(df.columns)})')
+    tissue_col = "Tissue" if "Tissue" in df.columns else "Sample" if "Sample" in df.columns else None
+    if tissue_col is None:
+        raise ValueError(f'{path}: could not find a tissue column ("Tissue" or "Sample"; '
+                         f"got {list(df.columns)})")
+    value_col = "TPM" if "TPM" in df.columns else "Value" if "Value" in df.columns else None
+    if value_col is None:
+        raise ValueError(f'{path}: could not find an expression value column ("TPM" or "Value"; '
+                         f"got {list(df.columns)})")
+    df = df.rename(columns={"Gene": "gene_id", "Gene name": "gene_name",
+                            tissue_col: "tissue", value_col: "tpm"})
+    df = df[["gene_id", "gene_name", "tissue", "tpm"]]
+    repeated = df.duplicated(["gene_id", "tissue"], keep="last")
+    if repeated.any():
+        warnings.warn(f"{path}: {int(repeated.sum())} rows repeat a gene and tissue; "
+                      "the last row of each is kept", stacklevel=2)
+        df = df[~repeated]
+    df = df.assign(tpm=pd.to_numeric(df["tpm"], errors="coerce"))
     df = df.dropna(subset=["tpm"]).reset_index(drop=True)
     return HPARnaData(df)
+
+
+def level_score_table(level_scores: Mapping[str, float]) -> dict[str, float]:
+    """Level scores keyed by upper-cased name; the first of names that differ only in case wins."""
+    table: dict[str, float] = {}
+    for name, value in level_scores.items():
+        table.setdefault(str(name).upper(), value)
+    return table
+
+
+def check_levels(df: pd.DataFrame, table: Mapping[str, float]) -> None:
+    """Raise :class:`ValueError` for a level in ``df`` that the upper-cased ``table`` lacks.
+
+    All rows count, whichever tissue is scored, as RAVEN's ``scoreModel`` checks every level of
+    ``hpaData.levels``.
+    """
+    unknown = sorted({str(level) or "<blank>" for level in df["level"]
+                      if str(level).upper() not in table})
+    if unknown:
+        raise ValueError("There are expression level categories that do not match the level scores: "
+                         + ", ".join(unknown))
 
 
 def hpa_gene_scores(
@@ -137,23 +168,27 @@ def hpa_gene_scores(
     """Numeric gene scores from HPA levels for one ``tissue`` (optionally one ``celltype``).
 
     Maps HPA's categorical levels to numbers via ``level_scores`` (default
-    :data:`HPA_LEVEL_SCORES`). Genes absent from the tissue, or whose level is not in the
-    score table, are omitted from the output (downstream
-    :func:`score_reactions_from_genes` will then fall back to ``no_gene_score`` for any
-    reaction whose genes are all absent).
+    :data:`HPA_LEVEL_SCORES`). As in RAVEN's ``scoreModel``, level names, tissue and cell type
+    are compared case-insensitively, and when the table has several names that differ only in
+    case the first one is used. Genes absent from the tissue are omitted from the output
+    (downstream :func:`score_reactions_from_genes` then falls back to ``no_gene_score`` for any
+    reaction whose genes are all absent). A level that occurs anywhere in ``hpa`` and is not in
+    the score table raises :class:`ValueError`, whichever tissue is scored. A tissue or cell type
+    that ``hpa`` does not contain gives an empty result; RAVEN raises only when neither the HPA
+    nor the RNA data contain it, a check that needs both data sets and is not made here.
 
     When several cell types per tissue carry the gene, ``multiple_celltype`` chooses
     between ``"best"`` (max score, RAVEN default) and ``"average"`` (mean across cell types).
     """
     if multiple_celltype not in ("best", "average"):
         raise ValueError(f"multiple_celltype must be 'best' or 'average'; got {multiple_celltype!r}")
-    scores_table = dict(level_scores) if level_scores is not None else HPA_LEVEL_SCORES
+    scores_table = level_score_table(HPA_LEVEL_SCORES if level_scores is None else level_scores)
+    check_levels(hpa.df, scores_table)
 
-    sub = hpa.df.loc[hpa.df["tissue"] == tissue].copy()
-    if celltype is not None:
-        sub = sub.loc[sub["celltype"] == celltype]
-    sub["score"] = sub["level"].map(scores_table)
-    sub = sub.dropna(subset=["score"])  # unknown HPA levels drop out (omitted, not -inf)
+    sub = hpa.df.loc[hpa.df["tissue"].astype(str).str.upper() == tissue.upper()].copy()
+    if celltype:
+        sub = sub.loc[sub["celltype"].astype(str).str.upper() == celltype.upper()]
+    sub["score"] = sub["level"].map(lambda level: scores_table[str(level).upper()]).astype(float)
     if sub.empty:
         return {}
     agg = {"best": "max", "average": "mean"}[multiple_celltype]

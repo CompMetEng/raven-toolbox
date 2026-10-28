@@ -1,4 +1,6 @@
 """Tests for raven_toolbox.io.git (exportForGit port)."""
+from pathlib import Path
+
 import cobra
 import libsbml
 import pytest
@@ -62,9 +64,55 @@ def test_does_not_mutate_model(model, tmp_path):
 def test_txt_table_content(model, tmp_path):
     root = export_for_git(model, tmp_path, formats=("txt",))
     txt = (root / "txt" / "model.txt").read_text()
-    assert txt.splitlines()[0].startswith("Rxn name\t")
+    assert txt.splitlines()[0] == "Rxn id\tFormula\tGene-reaction association\tLB\tUB\tObjective"
     assert "R1" in txt
     assert "ATP[c]" in txt
+
+
+def test_txt_bounds_are_written_exactly(model, tmp_path):
+    reaction = model.reactions.get_by_id("R1")
+    reaction.bounds = (-1 / 3, 0.1)
+    reaction.objective_coefficient = 1e-7
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    fields = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")
+    assert fields[3:] == ["-0.3333333333333333", "0.1", "1e-07"]
+    assert (float(fields[3]), float(fields[4]), float(fields[5])) == (-1 / 3, 0.1, 1e-7)
+    assert not fields[1].endswith(" ")
+
+
+def test_txt_whole_and_infinite_bounds(model, tmp_path):
+    model.reactions.get_by_id("R1").bounds = (-1000.0, float("inf"))
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    fields = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")
+    assert fields[3:5] == ["-1000", "Inf"]
+
+
+def test_all_five_formats_are_written_by_default(model, tmp_path):
+    root = export_for_git(model, tmp_path)
+    for fmt in ("yml", "xml", "mat", "xlsx", "txt"):
+        assert (root / fmt / f"model.{fmt}").exists()
+
+
+def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
+    set_model_metadata(model, version="1.2.0", date="2026-10-05")
+    first = export_for_git(model, tmp_path / "a", formats=("yml",))
+    second = export_for_git(model, tmp_path / "b", formats=("yml",))
+    text = (first / "dependencies.txt").read_text()
+    assert text == (second / "dependencies.txt").read_text()
+    names = [line.split("\t")[0] for line in text.splitlines()]
+    assert names == [
+        "python", "cobra", "libSBML", "ruamel.yaml", "scipy", "openpyxl", "raven_toolbox",
+        "model_version", "model_date",
+    ]
+    assert "model_version\t1.2.0" in text
+
+
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize("value", ["false", "true", "", 0, 1, None])
+def test_export_for_git_refuses_a_flag_that_is_not_a_bool(model, tmp_path, flag, value):
+    with pytest.raises(TypeError, match=flag):
+        export_for_git(model, tmp_path, formats=("yml",), **{flag: value})
+    assert not (tmp_path / "model").exists()
 
 
 def test_bad_format(model, tmp_path):
@@ -207,3 +255,138 @@ def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
         (g.id, g.name) for g in plain_back.genes
     )
     assert back.reactions.R1.gene_reaction_rule == "ENSG1 or ENSG2"
+
+
+def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):
+    model.reactions.get_by_id("R1").add_metabolites({model.metabolites.atp_c: -1})
+    root = export_for_git(model, tmp_path, formats=("txt",))
+    equation = (root / "txt" / "model.txt").read_text().splitlines()[1].split("\t")[1]
+    assert equation == "2 ATP[c] <=> ADP[c]"
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (2.777777777e-05, "2.7778e-05"),
+        (0.123456, "0.12346"),
+        (1234.56789, "1234.5679"),
+        (1.2345678, "1.2346"),
+        (2.0, "2"),
+        (1000000.0, "1000000"),
+        (1000000000000000.125, "1000000000000000"),
+        (2.0**53, "9007199254740992"),
+        (1e20, "1e+20"),
+        (1e300, "1e+300"),
+        (float("inf"), "Inf"),
+    ],
+)
+def test_coefficients_are_written_as_matlab_num2str(value, text):
+    from raven_toolbox.io.excel import _num2str
+
+    assert _num2str(value) == text
+    assert _num2str(-value) == "-" + text
+
+
+def test_num2str_of_infinity_and_negative_zero():
+    from raven_toolbox.io.excel import _num2str
+
+    assert _num2str(float("-inf")) == "-Inf"
+    assert _num2str(-0.0) == "0"
+
+
+def test_main_branch_flag_runs_the_check_only_when_set(model, tmp_path, monkeypatch):
+    calls = []
+
+    def refuse():
+        calls.append(1)
+        raise RuntimeError("raven_toolbox is on branch 'feature'")
+
+    monkeypatch.setattr("raven_toolbox.io.git._check_main_branch", refuse)
+    export_for_git(model, tmp_path, formats=["txt"])
+    assert not calls
+    with pytest.raises(RuntimeError, match="feature"):
+        export_for_git(model, tmp_path, formats=["txt"], main_branch_flag=True)
+
+
+def _git(cwd, *args):
+    import subprocess as sp
+    sp.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.org", *args],
+           check=True, capture_output=True)
+
+
+def _copy_package(dst):
+    import shutil
+
+    import raven_toolbox
+    shutil.copytree(Path(raven_toolbox.__file__).parent, dst,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def _run_check(package_dir):
+    import subprocess as sp
+    import sys
+    code = ("import sys; sys.path.insert(0, sys.argv[1]);"
+            "from raven_toolbox.io.git import _check_main_branch as c; c()")
+    return sp.run([sys.executable, "-c", code, str(package_dir)],
+                  capture_output=True, text=True)
+
+
+def test_main_branch_check_in_checkout_layout(tmp_path):
+    repo = tmp_path / "checkout"
+    _copy_package(repo / "src" / "raven_toolbox")
+    (repo / "pyproject.toml").write_text('[project]\nname = "raven-toolbox"\n')
+    _git(repo, "init", "-q", "-b", "feature")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "x")
+    out = _run_check(repo / "src")
+    assert out.returncode != 0 and "feature" in out.stderr
+    _git(repo, "checkout", "-q", "-b", "main")
+    assert _run_check(repo / "src").returncode == 0
+
+
+def test_main_branch_check_passes_in_unrelated_repository(tmp_path):
+    repo = tmp_path / "project"
+    _copy_package(repo / ".venv" / "lib" / "raven_toolbox")
+    (repo / "pyproject.toml").write_text('[project]\nname = "analysis"\n')
+    _git(repo, "init", "-q", "-b", "analysis")
+    _git(repo, "add", "pyproject.toml")
+    _git(repo, "commit", "-qm", "x")
+    assert _run_check(repo / ".venv" / "lib").returncode == 0
+
+
+def _checkout(tmp_path, *, layout, name):
+    repo = tmp_path / "repo"
+    pkg = repo / "src" / "raven_toolbox" if layout else repo / "lib" / "raven_toolbox"
+    _copy_package(pkg)
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+    _git(repo, "init", "-q", "-b", "feature")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "x")
+    return repo / ("src" if layout else "lib")
+
+
+def test_main_branch_check_passes_with_layout_but_other_project_name(tmp_path):
+    assert _run_check(_checkout(tmp_path, layout=True, name="analysis")).returncode == 0
+
+
+def test_main_branch_check_passes_with_project_name_but_other_layout(tmp_path):
+    assert _run_check(_checkout(tmp_path, layout=False, name="raven-toolbox")).returncode == 0
+
+
+def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
+    out = _run_check(_checkout(tmp_path, layout=True, name="raven-toolbox"))
+    assert out.returncode != 0 and "feature" in out.stderr
+
+
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+def test_export_for_git_accepts_numpy_booleans(model, tmp_path, flag):
+    import numpy as np
+
+    kwargs = {"main_branch_flag": False, "sub_dirs": False, flag: np.False_}
+    export_for_git(model, tmp_path, formats=("yml",), **kwargs)
+    assert (tmp_path / "model.yml").exists()
+
+
+def test_export_for_git_flag_error_names_the_type(model, tmp_path):
+    with pytest.raises(TypeError, match=r"got builtins\.str"):
+        export_for_git(model, tmp_path, formats=("yml",), sub_dirs="no")

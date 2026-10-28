@@ -4,6 +4,11 @@ Oracle: RAVEN tinitTests T0002 — for testModel + the "make e[s] from a[s]" tas
 pre-merge essential reactions are R2 (the only a[s]<->a[c] link) and R7 (the only
 e[c]->e[s] producer); the alternative internal paths make nothing else essential.
 """
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import cobra
 import pytest
 from tinit_oracles import (
@@ -99,6 +104,18 @@ def test_infeasible_task_is_reported_failed():
     # z[s] doesn't exist -> unknown metabolite -> failed.
     res = find_task_essential_reactions(make_test_model(), [impossible])
     assert res.failed_tasks == ["bad"] and res.reactions == {}
+
+
+def test_failed_tasks_are_reported_by_id_and_by_position():
+    """Two tasks share an id; only the second cannot be performed.
+
+    ``failed_tasks`` lists the id, ``failed_indices`` the position, so a caller can drop the
+    failing task and keep the one with the same id.
+    """
+    good = Task(id="t", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("e[s]", 1.0, 1.0)])
+    bad = Task(id="t", outputs=[("z[s]", 1.0, 1.0)])
+    res = find_task_essential_reactions(make_test_model(), [good, bad])
+    assert res.failed_tasks == ["t"] and res.failed_indices == [1]
 
 
 def test_should_fail_task_defines_no_essentials():
@@ -200,3 +217,89 @@ def test_duplicate_name_comp_metabolites_both_constrained():
         res = find_task_essential_reactions(m, [task])
     assert res.failed_tasks == []  # 'a[s]' resolved (to both a1 and a2), task feasible
     assert "R1" in res.reactions
+
+
+_ORDER_SCRIPT = """
+from tinit_oracles import make_test_model, make_test_task
+from raven_toolbox.tasks import find_task_essential_reactions
+res = find_task_essential_reactions(make_test_model(), [make_test_task()])
+print(",".join(res.reactions))
+"""
+
+
+def test_essential_set_and_order_do_not_depend_on_hash_seed():
+    """Candidates are taken in model reaction order, whatever PYTHONHASHSEED is."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parent)] + [p for p in sys.path if p]
+    )
+    outputs = set()
+    for seed in ("0", "1", "2", "3", "4", "5"):
+        env["PYTHONHASHSEED"] = seed
+        run = subprocess.run([sys.executable, "-c", _ORDER_SCRIPT], env=env,
+                             capture_output=True, text=True, check=True)
+        outputs.add(run.stdout.strip().splitlines()[-1])
+    assert outputs == {"R2,R7"}
+
+
+class _FakeProblem:
+    """Solver stand-in whose stored basis makes a feasible knock-out look infeasible."""
+
+    def __init__(self, feasible: bool, warm_status: str):
+        self.feasible, self.warm_status, self.warm, self.resets = feasible, warm_status, True, 0
+
+    def reset(self):
+        self.warm, self.resets = False, self.resets + 1
+
+
+class _FakeModel:
+    def __init__(self, problem: _FakeProblem):
+        self.solver = type("Solver", (), {})()
+        self.solver.problem, self.solver.status = problem, None
+
+    def slim_optimize(self):
+        p = self.solver.problem
+        if p.warm:
+            self.solver.status = p.warm_status
+        else:
+            self.solver.status = "optimal" if p.feasible else "infeasible"
+
+
+def test_knockout_rechecked_cold_after_infeasible_warm_start():
+    """A warm-started 'infeasible' that a cold solve finds feasible is not essential."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    spurious = _FakeProblem(feasible=True, warm_status="infeasible")
+    assert _knockout_feasible(_FakeModel(spurious)) is True
+    assert spurious.resets == 1
+    real = _FakeProblem(feasible=False, warm_status="infeasible")
+    assert _knockout_feasible(_FakeModel(real)) is False
+
+
+def test_knockout_feasible_statuses_follow_raven_check_solution():
+    """Optimal and suboptimal count as feasible without a retry; time_limit gets one."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    for status in ("optimal", "suboptimal"):
+        p = _FakeProblem(feasible=False, warm_status=status)
+        assert _knockout_feasible(_FakeModel(p)) is True
+        assert p.resets == 0
+    p = _FakeProblem(feasible=False, warm_status="time_limit")
+    assert _knockout_feasible(_FakeModel(p)) is False
+    assert p.resets == 1
+
+
+def test_knockout_feasible_on_solver_model():
+    """On a real solver: blocking the only route to a required output is infeasible."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    m = cobra.Model("ko")
+    a, b = cobra.Metabolite("a"), cobra.Metabolite("b")
+    uptake, r1, r2, out = (cobra.Reaction(i) for i in ("EX_a", "R1", "R2", "EX_b"))
+    uptake.add_metabolites({a: 1})
+    r1.add_metabolites({a: -1, b: 1})
+    r2.add_metabolites({a: -1, b: 1})
+    out.add_metabolites({b: -1})
+    m.add_reactions([uptake, r1, r2, out])
+    uptake.bounds, r1.bounds, r2.bounds, out.bounds = (0, 10), (0, 10), (0, 10), (1, 10)
+    r1.bounds = (0.0, 0.0)
+    assert _knockout_feasible(m) is True       # R2 still carries the flux
+    r2.bounds = (0.0, 0.0)
+    assert _knockout_feasible(m) is False

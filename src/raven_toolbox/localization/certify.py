@@ -420,7 +420,8 @@ def _usable_transports(applied, proposal, biomass_id, min_growth, conditions, de
         with applied:
             _apply_medium(applied, medium)
             applied.objective = biomass_id
-            unblocked = set(applied.reactions.list_attr("id")) - set(find_blocked_reactions(applied))
+            blocked_now = set(find_blocked_reactions(applied, processes=1))
+            unblocked = set(applied.reactions.list_attr("id")) - blocked_now
         for trid, bc in tr_of.items():
             if trid in unblocked:
                 keep.add(bc)
@@ -826,7 +827,7 @@ def _diagnose_growth_gap(applied, proposal, biomass_reaction, movable_ids, pinne
         return None
     bio = applied.reactions.get_by_id(biomass_reaction)
     bio_comp = _rxn_compartment(applied.reactions.get_by_id(biomass_reaction))
-    blocked = set(find_blocked_reactions(applied))
+    blocked = set(find_blocked_reactions(applied, processes=1))
     precursors = {base(m) for m, coeff in bio.metabolites.items() if coeff < 0}
     for rid in proposal.placements:
         if rid not in movable_ids or rid in proposal.added_reactions:

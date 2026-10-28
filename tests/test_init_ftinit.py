@@ -274,7 +274,7 @@ def test_time_limit_fallback_warns(monkeypatch):
 
     monkeypatch.setattr(ftinit_mod, "_solve_step", timed_out)
     with pytest.warns(UserWarning, match="unproven MIP gap"):
-        ftinit_mod.ftinit(prep, scores, fill_gaps=False)
+        ftinit_mod.ftinit(prep, rxn_scores=scores, fill_gaps=False)
 
 
 def test_unproven_tie_break_warns():
@@ -448,3 +448,69 @@ def test_glpk_backend_warns_and_does_not_resolve():
         with pytest.warns(UserWarning, match="with GLPK"):
             run_ftinit(model, _scores(model))
     assert len(solves) == 1
+
+
+@pytest.mark.parametrize(("lb", "ub", "cap", "expected"), [
+    (0.0, 500.0, 1000.0, 500.0),             # forward irreversible: its ub
+    (0.0, float("inf"), 1000.0, 1000.0),     # infinite ub counts as the cap
+    (0.0, 0.05, 1000.0, 0.1),                # never below force_on
+    (-50.0, 20.0, 1000.0, 50.0),             # reversible: larger of the two capacities
+    (-2000.0, 300.0, 1000.0, 1000.0),        # each capacity capped
+    (-float("inf"), 5.0, 1000.0, 1000.0),
+    (-70.0, 0.0, 1000.0, 70.0),              # reverse-only: its reverse capacity
+    (-50.0, 20.0, 35.0, 35.0),               # a lower cap binds
+    (float("nan"), 20.0, 1000.0, 1000.0),    # a NaN bound counts as the cap
+])
+def test_reaction_big_m_follows_raven(lb, ub, cap, expected):
+    from raven_toolbox.init.ftinit import _reaction_big_m
+
+    assert _reaction_big_m(lb, ub, cap, 0.1) == pytest.approx(expected)
+
+
+def _big_m_model():
+    m = cobra.Model("bigm")
+    a, b = (cobra.Metabolite(n, name=n, compartment="s") for n in ("a", "b"))
+    m.add_metabolites([a, b])
+    rxns = []
+    for rid, lb, ub, st in [("EX_a", -1000, 1000, {a: 1}), ("EX_b", -1000, 1000, {b: -1}),
+                            ("PR", -50, 20, {a: -1, b: 1}), ("NI", 0, float("inf"), {a: -1, b: 1}),
+                            ("NIs", 0, 0.05, {a: -1, b: 1}), ("NR", -30, 40, {a: -1, b: 1}),
+                            ("NRo", -70, 0, {a: -1, b: 1})]:
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=ub)
+        r.add_metabolites(st)
+        rxns.append(r)
+    m.add_reactions(rxns)
+    return m
+
+
+@pytest.mark.parametrize(("cap", "metabolomics", "expected"), [
+    (None, None, {("dirp_PR", "b_PR"): -50.0, ("dirn_PR", "b_PR"): 50.0,
+                  ("off_NI", "x_NI"): -1000.0, ("off_NIs", "x_NIs"): -0.1,
+                  ("off_NR", "x_NR"): -40.0, ("off_NRo", "x_NRo"): -70.0}),
+    (35.0, None, {("dirp_PR", "b_PR"): -35.0, ("dirn_PR", "b_PR"): 35.0,
+                  ("off_NI", "x_NI"): -35.0, ("off_NIs", "x_NIs"): -0.1,
+                  ("off_NR", "x_NR"): -35.0, ("off_NRo", "x_NRo"): -35.0}),
+    # a metabolite producer gets an indicator and a direction binary with its own big-M
+    (None, {"b": {"NR"}}, {("dirp_NR", "b_NR"): -40.0, ("dirn_NR", "b_NR"): 40.0}),
+])
+def test_each_scored_reaction_class_uses_its_own_big_m(monkeypatch, cap, metabolomics, expected):
+    """Direction and off constraints use RAVEN's per-reaction big-M, capped by big_m."""
+    model = _big_m_model()
+    seen = {}
+    cls = model.problem.Model
+    orig = cls.optimize
+
+    def spy(self, *args, **kwargs):
+        if not seen and "dirp_PR" in self.constraints:  # the ftINIT MILP, not another solve
+            for (cname, vname) in expected:
+                c, v = self.constraints[cname], self.variables[vname]
+                seen[(cname, vname)] = c.get_linear_coefficients([v])[v]
+                if cname.startswith("dirn"):
+                    assert c.ub == pytest.approx(expected[(cname, vname)])
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(cls, "optimize", spy)
+    kw = {} if cap is None else {"big_m": cap}
+    run_ftinit(model, {"PR": 1.0, "NI": -1.0, "NIs": -1.0, "NR": -1.0, "NRo": -1.0},
+               metabolomics=metabolomics, **kw)
+    assert seen == pytest.approx(expected)

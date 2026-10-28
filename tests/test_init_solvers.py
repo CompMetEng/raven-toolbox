@@ -1,7 +1,7 @@
 """Cross-solver smoke tests for the ftINIT MILP path.
 
 The clean-data calibration and robustness studies were run on Gurobi; the tractability
-choices (big-M=100, MIP gap, time limits) and the Gurobi-specific param plumbing
+choices (per-reaction big-M capped at 1000, MIP gap, time limits) and the Gurobi-specific param plumbing
 (``opt.problem.Params.MIPGap``) only matter if those choices also work on the *other*
 MILP backends real users have. These tests assert that each available MILP-capable
 optlang interface produces the same reaction-set verdict as Gurobi on the toy models the
@@ -109,7 +109,7 @@ def test_ftinit_pipeline_with_tasks(solver):
     m.solver = solver
     task = Task(id="make_c", inputs=[("A[c]", 0.0, 1000.0)], outputs=[("C[c]", 1.0, 1.0)])
     prep = prep_init_model(m, [task])
-    out = ftinit(prep, {"r1": 1.0, "r2": 1.0, "rbad": -1.0}, series="1+1")
+    out = ftinit(prep, rxn_scores={"r1": 1.0, "r2": 1.0, "rbad": -1.0}, series="1+1")
     # Functional: the target task remains satisfiable in the extracted model.
     assert check_tasks(out, [task])[0].passed
 

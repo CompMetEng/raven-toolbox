@@ -57,14 +57,22 @@ class _Unmapped:
     def __init__(self, gene: str):
         self.gene = gene
 
+    def __eq__(self, other):
+        return isinstance(other, _Unmapped) and other.gene == self.gene
 
-def _rewrite_node(node, ortho: dict, policy: str, model_id: str):
+    def __hash__(self):
+        return hash(("_Unmapped", self.gene))
+
+
+def _rewrite_node(node, ortho: dict):
     """Rewrite a GPR AST node, substituting template genes by their orthologs.
 
-    Returns ``None`` (nothing survives), a gene id, an ``_Unmapped`` for a bare unmapped
-    leaf (the parent decides what to do), or ``(operator, [children])`` for a group.
-    Groups are flattened and free of duplicates, so several template genes that map to the
-    same ortholog do not repeat it.
+    Returns a gene id, an ``_Unmapped`` for a template gene without an ortholog, or
+    ``(operator, [children])`` for a group. Groups are flattened and free of duplicates,
+    so several template genes that map to the same ortholog do not repeat it. An isozyme
+    group is as good as its mapped members: unmapped members are left out when at least one
+    member is mapped, and when none is the last of them stands for the whole group, so a
+    complex keeps one unmapped subunit where all of its isozymes lack an ortholog.
     """
     if isinstance(node, ast.Name):
         new_genes = ortho.get(node.id)
@@ -72,28 +80,51 @@ def _rewrite_node(node, ortho: dict, policy: str, model_id: str):
             return _group("or", list(new_genes))
         return _Unmapped(node.id)
 
-    if isinstance(node, ast.BoolOp):
-        children = [_rewrite_node(c, ortho, policy, model_id) for c in node.values]
-        if isinstance(node.op, ast.Or):
-            # An isozyme branch with no ortholog is simply absent.
-            return _group("or", [c for c in children if c is not None and not isinstance(c, _Unmapped)])
-        # And: apply the complex policy to unmapped subunits.
-        parts = []
-        for child in children:
-            if isinstance(child, _Unmapped):
-                if policy == "flag":
-                    parts.append(f"OLD_{model_id}_{child.gene}")
-                elif policy == "drop":
-                    return None  # incomplete complex -> reaction unsupported
-                # policy == "keep": drop the unmapped subunit
-            elif child is None:  # a dead sub-branch
-                if policy == "drop":
-                    return None
-            else:
-                parts.append(child)
-        return _group("and", parts)
+    children = [_rewrite_node(c, ortho) for c in node.values]
+    if isinstance(node.op, ast.Or):
+        mapped = [c for c in children if not isinstance(c, _Unmapped)]
+        if mapped:
+            return _group("or", mapped)
+        return children[-1]
+    return _group("and", children)
 
-    return None
+
+def _contains_unmapped(expr) -> bool:
+    if isinstance(expr, _Unmapped):
+        return True
+    return isinstance(expr, tuple) and any(_contains_unmapped(c) for c in expr[1])
+
+
+def _apply_policy(expr, policy: str, model_id: str):
+    """Resolve the unmapped leaves of a rewritten tree under ``complex_policy``.
+
+    ``flag`` turns each into an ``OLD_<model>_<gene>`` placeholder gene, ``keep`` removes
+    them (a group left empty disappears with them) and ``drop`` removes the whole reaction
+    as soon as one is left. Returns ``None`` when nothing remains.
+    """
+    if policy == "drop":
+        return None if _contains_unmapped(expr) else expr
+    if isinstance(expr, _Unmapped):
+        return f"OLD_{model_id}_{expr.gene}" if policy == "flag" else None
+    if isinstance(expr, str):
+        return expr
+    op, children = expr
+    return _group(op, [c for c in (_apply_policy(c, policy, model_id) for c in children) if c is not None])
+
+
+def _prune_genes(node, removed: set):
+    """Remove template genes from a GPR AST, as RAVEN's removeGenes does.
+
+    Returns the pruned tree, or ``None`` when the rule cannot be satisfied without them
+    (a removed gene in an AND, or every branch of an OR removed).
+    """
+    if isinstance(node, ast.Name):
+        return None if node.id in removed else node
+    kids = [_prune_genes(c, removed) for c in node.values]
+    if isinstance(node.op, ast.And):
+        return None if any(k is None for k in kids) else node
+    kept = [k for k in kids if k is not None]
+    return ast.BoolOp(op=ast.Or(), values=kept) if kept else None
 
 
 def _group(op: str, children: list):
@@ -117,17 +148,24 @@ def _render(expr, parent: str | None = None) -> str:
     return f"({text})" if parent is not None and parent != op else text
 
 
-def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str):
-    """Return the rewritten GPR string, or None if the reaction is unsupported."""
+def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str, removed: frozenset = frozenset()):
+    """Return the rewritten GPR string, or None if the reaction is unsupported.
+
+    ``removed`` holds template genes taken out of the template before the rewrite (genes a
+    preferred model already covers); a reaction that cannot work without them is unsupported.
+    """
     if not rxn.gene_reaction_rule:
         return None
     # A reaction is only transferred if at least one of its genes has an ortholog.
-    if not any(g.id in ortho for g in rxn.genes):
+    if not any(g.id in ortho or g.id in removed for g in rxn.genes):
         return None
-    result = _rewrite_node(rxn.gpr.body, ortho, policy, model_id)
-    if result is None or isinstance(result, _Unmapped):
-        return None
-    return _render(result)
+    body = rxn.gpr.body
+    if removed:
+        body = _prune_genes(body, set(removed))
+        if body is None:
+            return None
+    result = _apply_policy(_rewrite_node(body, ortho), policy, model_id)
+    return None if result is None else _render(result)
 
 
 def _strictness_to_flags(strictness: int) -> tuple[bool, bool]:
@@ -199,20 +237,26 @@ def _ortholog_map(
     return ortho
 
 
-def _apply_preferred_order(ortho: dict, order: list[str]) -> dict:
-    """Each new gene's reactions come from the first model (in order) that maps it."""
-    winner: dict = {}  # new_gene -> winning model_id
-    for model_id in order:
-        for new_genes in ortho.get(model_id, {}).values():
-            for ng in new_genes:
-                winner.setdefault(ng, model_id)
+def _apply_preferred_order(ortho: dict, order: list[str]) -> tuple[dict, dict]:
+    """Give each new gene to the first model (in order) that maps it, as RAVEN does.
+
+    A template gene of a later model that maps to any new gene an earlier model already
+    maps is removed from that model altogether, together with its other mappings. The
+    new genes of every model count as taken, including those of its removed genes.
+    Returns the pruned mapping and ``{model_id: {removed template genes}}``.
+    """
+    taken: set = set()
     pruned: dict = {mid: {} for mid in ortho}
-    for model_id, per_model in ortho.items():
+    removed: dict = {mid: set() for mid in ortho}
+    for position, model_id in enumerate(order):
+        per_model = ortho.get(model_id, {})
         for template_gene, new_genes in per_model.items():
-            kept = [ng for ng in new_genes if winner.get(ng) == model_id]
-            if kept:
-                pruned[model_id][template_gene] = kept
-    return pruned
+            if position > 0 and taken.intersection(new_genes):
+                removed[model_id].add(template_gene)
+            else:
+                pruned[model_id][template_gene] = new_genes
+        taken.update(ng for new_genes in per_model.values() for ng in new_genes)
+    return pruned, removed
 
 
 def get_model_from_homology(
@@ -251,8 +295,11 @@ def get_model_from_homology(
       searching from ``model_for``) or ``"old_to_new"``.
     * ``complex_policy`` decides what happens to an AND-linked subunit with no
       ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
-      gene for later curator review, ``"keep"`` drops just that subunit,
-      ``"drop"`` drops the whole reaction.
+      gene (``OLD_<model>_<gene>``) for later curator review, ``"keep"`` drops just that
+      subunit, ``"drop"`` drops the whole reaction. An isozyme group counts as a subunit
+      without an ortholog only when none of its members has one, and then one placeholder
+      stands for it. ``"drop"`` removes the reaction whenever a placeholder would remain,
+      also when another isozyme branch is complete.
     * ``only_genes_in_models`` restricts the hits table to hits whose template
       gene appears in the given ``models`` before mapping orthologs, so a gene
       the templates lack cannot be a best hit. It raises ``ValueError`` when no
@@ -266,8 +313,12 @@ def get_model_from_homology(
       (references, confidence score, free text) and only adds ``homology_source``. By default
       they are replaced by a note that the reaction was included by this function.
     * ``preferred_order`` breaks ties when more than one template maps the
-      same new-organism gene: the earlier template in the list wins that gene
-      (default: the order of ``models``).
+      same new-organism gene: the earlier template in the list wins that gene, and a
+      gene of a later template that maps to any gene an earlier template already maps
+      is removed from that template altogether, with its other mappings. A reaction of
+      the later template that cannot work without the removed gene is not transferred.
+      Templates are merged in the order they were given in ``models``, whatever the
+      preferred order is (default: the order of ``models``).
 
     Organism ids in ``hits`` are case-sensitive. An id that matches
     ``model_for`` or a template id only when case is ignored raises
@@ -386,11 +437,12 @@ def get_model_from_homology(
         )
 
     order = [str(x) for x in preferred_order] if preferred_order else model_ids
+    removed: dict = {}
     if preferred_order and len(models) > 1:
-        ortho = _apply_preferred_order(ortho, order)
+        ortho, removed = _apply_preferred_order(ortho, order)
 
     draft = _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
-                      keep_gene_free, preserve_notes)
+                      keep_gene_free, preserve_notes, removed)
 
     candidates = None
     if review_identity is not None:
@@ -403,11 +455,12 @@ def get_model_from_homology(
             model_genes=model_genes, max_evalue=max_evalue,
             min_align_len=min_align_len, min_identity=review_identity,
         )
+        loose_removed: dict = {}
         if preferred_order and len(models) > 1:
-            loose_ortho = _apply_preferred_order(loose_ortho, order)
+            loose_ortho, loose_removed = _apply_preferred_order(loose_ortho, order)
         loose = _transfer(
             model_by_id, order, loose_ortho, model_for, model_ids, complex_policy,
-            keep_gene_free, preserve_notes,
+            keep_gene_free, preserve_notes, loose_removed,
         )
         extra = {r.id for r in loose.reactions} - {r.id for r in draft.reactions}
         candidates = _candidate_evidence(
@@ -420,18 +473,24 @@ def get_model_from_homology(
 
 
 def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
-              keep_gene_free=False, preserve_notes=False) -> cobra.Model:
-    """Assemble the draft: per-template reactions whose GPRs survive rewriting."""
+              keep_gene_free=False, preserve_notes=False, removed=None) -> cobra.Model:
+    """Assemble the draft: per-template reactions whose GPRs survive rewriting.
+
+    The templates are merged in the order of ``model_ids`` (the order they were given),
+    whatever the preferred order is; reaction ids shared between templates are resolved
+    by that merge. Templates left out of ``order`` contribute nothing.
+    """
+    removed = removed or {}
     transferred = []
-    for mid in order:
+    for mid in model_ids:
         model = model_by_id.get(mid)
-        if model is None:
+        if model is None or mid not in order:
             continue
         per_model = ortho.get(mid, {})
         m = model.copy()
         keep: dict[str, str] = {}
         for rxn in m.reactions:
-            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid)
+            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid, frozenset(removed.get(mid, ())))
             if new_gpr is None and keep_gene_free and not rxn.gene_reaction_rule:
                 new_gpr = ""
             if new_gpr is not None:
@@ -455,7 +514,7 @@ def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
     if draft.notes:
         draft.notes = {k: v for k, v in draft.notes.items() if k not in ("metaData", "version")}
 
-    # Drop OLD_ placeholder genes left orphaned (none survive in OR branches by construction).
+    # Drop genes left without a reaction.
     for g in [g for g in draft.genes if not g.reactions]:
         draft.genes.remove(g)
     return draft

@@ -103,7 +103,11 @@ class GapReportResult:
 
 
 def _blocked_ids(model: cobra.Model, reactions: list[cobra.Reaction] | None = None) -> set[str]:
-    return set(find_blocked_reactions(model, reaction_list=reactions, zero_cutoff=_FLUX_THRESHOLD))
+    return set(
+        find_blocked_reactions(
+            model, reaction_list=reactions, zero_cutoff=_FLUX_THRESHOLD, processes=1
+        )
+    )
 
 
 def _relaxed_copy(model: cobra.Model) -> cobra.Model:

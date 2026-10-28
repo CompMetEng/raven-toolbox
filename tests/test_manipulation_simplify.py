@@ -8,6 +8,9 @@ from raven_toolbox.manipulation import (
     group_linear_reactions,
     remove_dead_end_reactions,
     remove_duplicate_reactions,
+    remove_no_flux_reactions,
+    remove_zero_interval_reactions,
+    simplify_model,
 )
 
 # --- remove_dead_end_reactions --------------------------------------------
@@ -71,35 +74,68 @@ def test_dead_end_ignores_bounds_on_its_own_matching_raven():
 
 # --- remove_duplicate_reactions -------------------------------------------
 
+def _two_rxn_model(eq1, b1, eq2, b2, c2=0.0):
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, name=x, compartment="c") for x in ("a", "b")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "R1", "equation": eq1, "bounds": b1},
+            {"id": "R2", "equation": eq2, "bounds": b2},
+        ],
+    )
+    m.reactions.R2.objective_coefficient = c2
+    return m
+
+
 def test_duplicates_removed():
+    m = _two_rxn_model("a --> b", (0, 1000), "a --> b", (0, 1000))
+    assert remove_duplicate_reactions(m) == ["R2"]
+    assert [r.id for r in m.reactions] == ["R1"]
+
+
+def test_duplicates_with_different_bounds_merge_to_the_widest():
+    m = _two_rxn_model("a <=> b", (-5, 10), "a <=> b", (-10, 20), c2=1.0)
+    with pytest.warns(UserWarning) as rec:
+        removed = remove_duplicate_reactions(m)
+    assert removed == ["R2"]
+    assert m.reactions.R1.bounds == (-10, 20)
+    assert m.reactions.R1.objective_coefficient == 1.0
+    assert len(rec) == 3
+
+
+def test_duplicates_differing_in_reversibility_are_kept():
+    m = _two_rxn_model("a --> b", (0, 10), "a <=> b", (-10, 10))
+    assert remove_duplicate_reactions(m) == []
+
+
+def test_reversible_duplicates_in_opposite_directions_merge():
+    m = _two_rxn_model("a <=> b", (-10, 10), "b <=> a", (-10, 10))
+    assert remove_duplicate_reactions(m) == ["R2"]
+
+
+def test_irreversible_opposite_directions_are_kept():
+    m = _two_rxn_model("a --> b", (0, 10), "b --> a", (0, 10))
+    assert remove_duplicate_reactions(m) == []
+
+
+def test_duplicates_ignore_reserved_like_contract_model():
+    """Reserved reactions are merged away; the survivor takes the widest bounds and all GPRs."""
     m = cobra.Model("t")
     m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("a", "b")])
     add_reactions_from_equations(
         m,
         [
-            {"id": "R1", "equation": "a --> b", "bounds": (0, 1000)},
-            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000)},  # duplicate of R1
-            {"id": "R3", "equation": "a --> b", "bounds": (0, 500)},   # different bounds
+            {"id": "R1", "equation": "a --> b", "bounds": (0, 10), "gene_reaction_rule": "g1"},
+            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000), "gene_reaction_rule": "g2"},
+            {"id": "R3", "equation": "a --> b", "bounds": (0, 10), "gene_reaction_rule": "g3"},
         ],
     )
-    removed = remove_duplicate_reactions(m)
-    assert len(removed) == 1  # one of R1/R2 removed
-    assert {"R3"} <= {r.id for r in m.reactions}
-    assert sum(r.id in ("R1", "R2") for r in m.reactions) == 1
-
-
-def test_duplicates_keep_reserved():
-    m = cobra.Model("t")
-    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("a", "b")])
-    add_reactions_from_equations(
-        m,
-        [
-            {"id": "R1", "equation": "a --> b", "bounds": (0, 1000)},
-            {"id": "R2", "equation": "a --> b", "bounds": (0, 1000)},
-        ],
-    )
-    remove_duplicate_reactions(m, reserved=["R1"])
-    assert "R1" in {r.id for r in m.reactions}  # reserved one kept
+    with pytest.warns(UserWarning, match="upper bounds"):
+        simplify_model(m, delete_duplicates=True, reserved=["R2"])
+    assert [r.id for r in m.reactions] == ["R1"]
+    assert m.reactions.R1.bounds == (0, 1000)
+    assert set(m.reactions.R1.gene_reaction_rule.split(" or ")) == {"g1", "g2", "g3"}
 
 
 # --- constrain_reversible_reactions ---------------------------------------
@@ -208,3 +244,129 @@ def test_constrain_reversible_raises_on_infeasible():
     m.add_reactions([r, forced])
     with pytest.raises(RuntimeError, match="infeasible"):
         constrain_reversible_reactions(m)
+
+
+# --- order, survivor, reserved, orphans (RAVEN simplifyModel) ---------------
+
+def _chain_model():
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("M0", "M1", "M2", "M3")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "IN", "equation": " --> M0"},
+            {"id": "R1", "equation": "M0 --> M1"},
+            {"id": "R2", "equation": "M1 --> M2"},
+            {"id": "R3", "equation": "M2 --> M3"},
+            {"id": "OUT", "equation": "M3 --> "},
+        ],
+    )
+    return m
+
+
+def test_group_linear_keeps_the_first_reaction_of_a_chain():
+    n = 6
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(f"M{i}", compartment="c") for i in range(n + 1)])
+    eqs = [{"id": "IN", "equation": " --> M0"}]
+    eqs += [{"id": f"R{i}", "equation": f"M{i - 1} --> M{i}"} for i in range(1, n + 1)]
+    eqs += [{"id": "OUT", "equation": f"M{n} --> "}]
+    add_reactions_from_equations(m, eqs)
+    group_linear_reactions(m, reserved=["IN", "OUT"])
+    assert [r.id for r in m.reactions] == ["IN", "R1", "OUT"]
+    assert {mm.id for mm in m.reactions.get_by_id("R1").metabolites} == {"M0", f"M{n}"}
+
+
+def test_group_linear_leaves_no_residue_for_non_representable_ratios():
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("A", "B", "C")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "IN", "equation": " --> A"},
+            {"id": "R1", "equation": "A --> 0.7 B"},
+            {"id": "R2", "equation": "0.3 B --> C"},
+            {"id": "OUT", "equation": "C --> "},
+        ],
+    )
+    group_linear_reactions(m, reserved=["IN", "OUT"])
+    assert {mm.id for mm in m.reactions.get_by_id("R1").metabolites} == {"A", "C"}
+    assert "B" not in m.metabolites
+
+
+def test_constrain_reversible_runs_before_group_linear():
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("A", "B")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "IN", "equation": " --> A", "bounds": (0, 1000)},
+            {"id": "R1", "equation": "A <=> B", "bounds": (-1000, 1000)},
+            {"id": "OUT", "equation": "B --> ", "bounds": (0, 1000)},
+        ],
+    )
+    simplify_model(m, constrain_reversible=True, group_linear=True)
+    assert len(m.reactions) == 0 and len(m.metabolites) == 0
+
+
+def test_simplify_model_runs_modes_in_raven_order(monkeypatch):
+    from raven_toolbox.manipulation import simplify as mod
+
+    calls = []
+    for name in (
+        "remove_duplicate_reactions", "remove_zero_interval_reactions",
+        "remove_dead_end_reactions", "remove_no_flux_reactions",
+        "constrain_reversible_reactions", "group_linear_reactions",
+    ):
+        monkeypatch.setattr(mod, name, lambda *a, _n=name, **k: calls.append(_n))
+    simplify_model(
+        cobra.Model("t"), delete_zero_interval=True, delete_dead_end=True, delete_no_flux=True,
+        delete_duplicates=True, group_linear=True, constrain_reversible=True,
+    )
+    assert calls == [
+        "remove_duplicate_reactions", "remove_zero_interval_reactions",
+        "remove_dead_end_reactions", "remove_no_flux_reactions",
+        "constrain_reversible_reactions", "group_linear_reactions",
+    ]
+
+
+def _zero_model():
+    m = cobra.Model("t")
+    m.add_metabolites([cobra.Metabolite(x, compartment="c") for x in ("A", "B", "ORPH")])
+    add_reactions_from_equations(
+        m,
+        [
+            {"id": "R1", "equation": "A --> B", "bounds": (0, 1000)},
+            {"id": "R2", "equation": "A --> B", "bounds": (0, 0), "gene_reaction_rule": "g2"},
+        ],
+    )
+    return m
+
+
+def test_zero_interval_honours_reserved():
+    m = _zero_model()
+    assert remove_zero_interval_reactions(m, reserved=["R2"]) == []
+    assert "R2" in m.reactions and "g2" in m.genes
+
+
+def test_zero_interval_prunes_every_orphan_metabolite():
+    m = _zero_model()
+    assert remove_zero_interval_reactions(m) == ["R2"]
+    assert "ORPH" not in m.metabolites
+    assert "g2" in m.genes
+
+
+def test_no_flux_honours_reserved_and_prunes_orphans():
+    m = _zero_model()
+    m.reactions.get_by_id("R2").bounds = (0, 1000)
+    # A has no source, so both reactions are blocked
+    assert remove_no_flux_reactions(m, reserved=["R2"]) == ["R1"]
+    assert "R2" in m.reactions
+    assert "ORPH" not in m.metabolites
+
+
+def test_no_flux_keeps_the_genes_of_removed_reactions():
+    m = _zero_model()
+    m.reactions.get_by_id("R2").bounds = (0, 1000)
+    assert sorted(remove_no_flux_reactions(m)) == ["R1", "R2"]
+    assert "g2" in m.genes
