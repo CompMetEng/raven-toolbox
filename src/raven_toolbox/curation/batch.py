@@ -179,6 +179,10 @@ def batch_curate(
     called without permission to add genes and stops with an error of its own. The rule of an
     existing reaction may name a gene the model does not have. A gene id that ``genes_df``
     lists more than once raises :class:`ValueError`, whether the model has the gene or not.
+    The reaction gets the rule as this grammar reads it, so ``G1&G2`` is one gene, and it stays
+    one gene through :func:`~raven_toolbox.io.write_yaml_model` and
+    :func:`~raven_toolbox.io.read_yaml_model` and through cobra's SBML files. cobra's JSON
+    reader reads the rule with cobra's own grammar and splits ``G1&G2`` into ``G1`` and ``G2``.
 
     A reaction table with a header and no row is empty: when both reaction tables are empty
     nothing happens, and a coefficient row without a reaction row (or the reverse) raises

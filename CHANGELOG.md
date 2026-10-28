@@ -26,6 +26,9 @@ Milestones in the raven-toolbox port. For function-level status see
 * `curation.batch_curate` (and `batch_curate_from_tsv`) stores a gene rule as `parse_gr_rule`
   reads it, so the reaction gets the genes that were checked: `G1&G2 or G3` has the genes
   `G1&G2` and `G3`, as in RAVEN's `curateModelFromTables` (was: `G1`, `G2` and `G3`).
+* `io.read_yaml_model` reads gene rules with `parse_gr_rule`, so `G1&G2` written by
+  `write_yaml_model` is read back as one gene (was: `G1` and `G2`, cobra's reading). A rule that
+  `parse_gr_rule` refuses is read by cobra as before. cobra's JSON reader still splits `G1&G2`.
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

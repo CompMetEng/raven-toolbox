@@ -1305,6 +1305,24 @@ def test_an_operator_glued_to_a_gene_id_stays_part_of_the_stored_gene(name, ctab
     assert not {"G1", "G2"} & {g.id for g in m.genes}
 
 
+def test_a_glued_gene_id_stays_one_gene_through_the_yaml_files(tmp_path):
+    from raven_toolbox.io import read_yaml_model, write_yaml_model
+
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnNames": "fresh", "grRules": "G1&G2 or G3"}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": "fresh", "metNames": "ATP", "comps": "c", "coefficient": "-1"},
+        {"rxnNames": "fresh", "metNames": "ADP", "comps": "c", "coefficient": "1"}])
+    batch_curate(m, genes_df=_genes_df("G1&G2", "G3"), rxns_df=rxns_df,
+                 rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    write_yaml_model(m, tmp_path / "m.yml")
+    back = read_yaml_model(tmp_path / "m.yml")
+    rxn = _by_name(back, "fresh")
+    assert sorted(g.id for g in rxn.genes) == ["G1&G2", "G3"]
+    assert rxn.gene_reaction_rule == "G1&G2 or G3"
+    assert not {"G1", "G2"} & {g.id for g in back.genes}
+
+
 # --- header-only tables, atomicity of several rows, genes of new reactions, headers ---------
 
 _RXN_HEADER = "rxnIdx\trxnNames\tlb\tub\n"
