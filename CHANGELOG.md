@@ -6,6 +6,10 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `manipulation.merge_compartments` gives a merged metabolite the id of the copy already in
+  the merged compartment, if any, otherwise the id that sorts first (`ACCOA_c` for `ACCOA_c`
+  and `ACCOA_m`), as RAVEN's `mergeCompartments` does. It rewrote the first member's
+  compartment suffix to the merged compartment (`ACCOA_s`).
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its
