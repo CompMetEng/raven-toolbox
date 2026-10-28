@@ -19,7 +19,6 @@ pure and unit-tested; running the search needs HMMER (``hmmsearch``).
 from __future__ import annotations
 
 import math
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,6 +28,7 @@ import pandas as pd
 
 from raven_toolbox.binaries import resolve_binary
 from raven_toolbox.io.yaml import read_yaml_model
+from raven_toolbox.reconstruction.homology.blast import _available_cpus
 from raven_toolbox.reconstruction.kegg.assemble import assemble_model_from_ko_genes
 from raven_toolbox.reconstruction.kegg.parse import _resolve_artefact, read_kegg_table
 
@@ -50,7 +50,7 @@ def run_hmmsearch(
     fasta: str | Path,
     library: str | Path,
     *,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     hmmsearch: str | Path | None = None,
 ) -> str:
     """Search the profile ``library`` against proteome ``fasta``; return tblout text.
@@ -59,8 +59,10 @@ def run_hmmsearch(
     against ``fasta`` (target) — the fast search direction, parallelised with
     ``--cpu``, and no ``hmmpress`` needed. ``-Z`` is fixed to the profile count so the
     per-hit E-values match the convention :func:`assign_kos` is calibrated against
-    (identical to a ``hmmscan`` against the same library).
+    (identical to a ``hmmscan`` against the same library). ``threads`` defaults to every
+    CPU the process may use, as in RAVEN's ``getKEGGModelForOrganism``.
     """
+    threads = _available_cpus() if threads is None else threads
     exe = resolve_binary("hmmsearch", binary=hmmsearch)
     nprofiles = _count_profiles(library)
     z_opt = ["-Z", str(nprofiles)] if nprofiles > 0 else []
@@ -190,14 +192,15 @@ def get_kegg_model_from_sequences(
     keep_undefined_stoich: bool = True,
     keep_incomplete: bool = True,
     keep_general: bool = False,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     hmmsearch: str | Path | None = None,
 ) -> cobra.Model:
     """Reconstruct a draft model for a proteome by HMM-searching the KO library.
 
     Searches the ``library`` against ``fasta`` (3b.3), assigns KOs
     (:func:`assign_kos`), and assembles the model against ``reference_model`` /
-    ``ko_reaction``. Genes are the query proteome's identifiers.
+    ``ko_reaction``. Genes are the query proteome's identifiers. ``threads`` is passed to
+    :func:`run_hmmsearch`.
     """
     if model_id is None:
         # RAVEN always sets model.id (to organismID); default it here so the

@@ -44,6 +44,14 @@ def _as_list(x):
     return [x] if isinstance(x, (str, Path)) else list(x)
 
 
+def _available_cpus() -> int:
+    """Number of CPUs this process may run on, the count MATLAB's ``feature('numcores')``
+    reports as assigned by the OS and RAVEN passes to the aligners."""
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
+    return max(1, os.cpu_count() or 1)
+
+
 def _run(cmd: list[str]) -> str:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -58,7 +66,7 @@ def run_blast(
     ref_fastas: Sequence[str | Path],
     *,
     evalue: float = 1e-4,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     blastp: str | Path | None = None,
     makeblastdb: str | Path | None = None,
 ) -> pd.DataFrame:
@@ -68,7 +76,8 @@ def run_blast(
     reference proteome for template ``model_ids[i]``.
 
     Returns the hits DataFrame (filtered at
-    ``evalue``). Requires BLAST+ (`blastp`, `makeblastdb`).
+    ``evalue``). Requires BLAST+ (`blastp`, `makeblastdb`). ``threads``
+    defaults to every CPU the process may use, as in RAVEN's ``getBlast``.
 
     The default matches MATLAB RAVEN's ``getBlast``, which hardcodes
     ``-evalue 10e-5`` -- that is 1e-4, not 1e-5. Unlike RAVEN's, this one is an
@@ -81,6 +90,7 @@ def run_blast(
     ref_fastas = _as_list(ref_fastas)
     if len(model_ids) != len(ref_fastas):
         raise ValueError("model_ids and ref_fastas must have the same length.")
+    threads = _available_cpus() if threads is None else threads
     blastp = resolve_binary("blastp", binary=blastp)
     makeblastdb = resolve_binary("makeblastdb", binary=makeblastdb)
     outfmt = "10 " + " ".join(_OUTFMT_FIELDS)  # 10 = CSV
@@ -112,7 +122,7 @@ def run_diamond(
     ref_fastas: Sequence[str | Path],
     *,
     evalue: float = 1e-3,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     sensitivity: str = "--more-sensitive",
     diamond: str | Path | None = None,
 ) -> pd.DataFrame:
@@ -123,7 +133,8 @@ def run_diamond(
     passed straight through as a DIAMOND CLI flag (e.g. ``"--more-sensitive"``,
     ``"--sensitive"``, or ``""`` to use DIAMOND's default fast mode).
 
-    Returns the hits DataFrame. Requires DIAMOND.
+    Returns the hits DataFrame. Requires DIAMOND. ``threads`` defaults to
+    every CPU the process may use, as in RAVEN's ``getDiamond``.
 
     The default matches MATLAB RAVEN's ``getDiamond``, which passes no
     ``--evalue`` at all and so inherits DIAMOND's own default of 1e-3. Stated
@@ -136,6 +147,7 @@ def run_diamond(
     ref_fastas = _as_list(ref_fastas)
     if len(model_ids) != len(ref_fastas):
         raise ValueError("model_ids and ref_fastas must have the same length.")
+    threads = _available_cpus() if threads is None else threads
     diamond = resolve_binary("diamond", binary=diamond)
 
     frames = []

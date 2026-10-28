@@ -38,6 +38,7 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from raven_toolbox.binaries import resolve_binary
+from raven_toolbox.reconstruction.homology.blast import _available_cpus
 from raven_toolbox.reconstruction.kegg.taxonomy import organisms_in_domain
 
 logger = logging.getLogger(__name__)
@@ -326,7 +327,7 @@ def build_ko_hmm(
     *,
     seq_identity: float = 0.9,
     parttree_residues: int | None = None,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     fast: bool = True,
     verbose: bool = False,
     cdhit: str | Path | None = None,
@@ -347,8 +348,10 @@ def build_ko_hmm(
     simple residue-count cutoff.
     ``verbose`` logs (via the ``logging`` module, INFO/DEBUG) which tool is running
     for this KO, sequence counts at each stage, timings, and the tools' own
-    output. Returns ``out_hmm``.
+    output. ``threads`` (CD-HIT, MAFFT and hmmbuild) defaults to every CPU the process may
+    use. Returns ``out_hmm``.
     """
+    threads = _available_cpus() if threads is None else threads
     ko_fasta = Path(ko_fasta)
     out_hmm = Path(out_hmm)
     label = out_hmm.stem
@@ -431,7 +434,7 @@ def build_hmm_library(
     domain: str,
     seq_identity: float = 0.9,
     parttree_residues: int | None = None,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     fast: bool = True,
     verbose: bool = False,
     progress: bool = False,
@@ -456,7 +459,8 @@ def build_hmm_library(
     ``progress`` shows tqdm bars for the multi-FASTA and per-KO HMM passes (the
     headline ``N of M`` counter for the long build); it is independent of
     ``verbose`` (per-KO INFO logging). With both on, per-KO log lines are routed
-    through ``tqdm.write`` so they don't corrupt the bar.
+    through ``tqdm.write`` so they don't corrupt the bar. ``threads`` goes to
+    :func:`build_ko_hmm` and defaults to every CPU the process may use.
     """
     out_dir = Path(out_dir)
     fasta_dir = out_dir / "fasta"

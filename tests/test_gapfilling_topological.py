@@ -15,7 +15,7 @@ def chain_with_gap():
 
     C has no consumer and B is a dead-end — nothing past B is reachable.
     Template supplies B -(r3)-> C -(r4)-> D and EX_D (exchange).
-    Biomass: B -> (biomass reaction).
+    Objective: r2, so the default targets are B and C.
 
     With seeds = {A}, the scope reaches A and B (via r1) but NOT C (r2 is blocked
     because C has no further consumer). If targets = {D}, D is unreachable.
@@ -34,6 +34,7 @@ def chain_with_gap():
     r2.add_metabolites({B: -1, C: 1})  # B -> C, but C has no consumer
 
     draft.add_reactions([exa, r1, r2])
+    draft.objective = "r2"
 
     # Template supplies C consumer and D pathway
     template = cobra.Model("template")
@@ -116,3 +117,43 @@ def test_reversible_reaction_allows_reverse_scope(chain_with_gap):
     # r2 is irreversible, so scope still can't reach B (and hence A) from seed
     # C_c even with r1 now reversible; this only exercises the reverse-scope path.
     assert isinstance(result, TopologicalAnalysisResult)
+
+
+def test_default_targets_are_the_objective_metabolites(chain_with_gap):
+    """As in RAVEN: substrates and products of the first objective reaction."""
+    draft, template = chain_with_gap
+    result = analyse_topology(draft, template, verbose=False)
+    assert result.blocked_metabolites == set()
+    draft.objective = "EX_A"
+    draft.reactions.EX_A.lower_bound = 0
+    with pytest.warns(UserWarning, match="no uptake exchange"):
+        result = analyse_topology(draft, template, verbose=False)
+    assert result.blocked_metabolites == {"A_c"}
+
+
+def test_default_targets_need_an_objective(chain_with_gap):
+    draft, template = chain_with_gap
+    draft.objective = {}
+    with pytest.raises(ValueError, match="no objective function"):
+        analyse_topology(draft, template, verbose=False)
+
+
+def test_default_seeds_follow_ravens_exchange_rule():
+    """Seeds: metabolites of an only-substrate reaction with lb < 0 or an only-product one
+    with ub > 0, whatever the number of metabolites; nothing else."""
+    model = cobra.Model("m")
+    mets = {mid: _met(mid) for mid in ("A_c", "B_c", "C_c", "D_c", "E_c")}
+    model.add_metabolites(list(mets.values()))
+    rxns = [
+        ("EX_AB", {"A_c": -1, "B_c": -1}, -10, 0),   # two-metabolite uptake: seeds A and B
+        ("EX_C", {"C_c": -1}, 0, 1000),              # excretion only: not a seed
+        ("R_DE", {"D_c": -1, "E_c": 1}, -10, 10),    # internal, reversible: not a seed
+    ]
+    for rid, stoich, lb, ub in rxns:
+        rxn = cobra.Reaction(rid, lower_bound=lb, upper_bound=ub)
+        rxn.add_metabolites({mets[m]: c for m, c in stoich.items()})
+        model.add_reactions([rxn])
+    model.objective = "R_DE"
+    result = analyse_topology(model, cobra.Model("t"), verbose=False)
+    assert result.reachable_metabolites == {"A_c", "B_c"}
+    assert result.blocked_metabolites == {"D_c", "E_c"}

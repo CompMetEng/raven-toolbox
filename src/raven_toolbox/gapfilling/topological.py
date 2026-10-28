@@ -15,6 +15,7 @@ matched; if templates use a different namespace, align them first using
 """
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -147,18 +148,28 @@ def analyse_topology(
         Universal database model(s) containing candidate reactions.
         Metabolite identifiers must match those in *model*.
     seeds:
-        Metabolite IDs available from the medium. Default: metabolites
-        involved in exchange reactions (one-metabolite reactions) where
-        ``lower_bound < 0`` (uptake is allowed).
+        Metabolite IDs available from the medium. Default: the metabolites of
+        every exchange reaction whose bounds let it supply them, as RAVEN's
+        ``gapFillTopological`` picks them: a reaction with only substrates
+        (``met -->``) and ``lower_bound < 0``, or one with only products
+        (``--> met``) and ``upper_bound > 0``. An exchange reaction may have
+        more than one metabolite. A :class:`UserWarning` is issued when there
+        is none.
     targets:
-        Metabolite IDs that should be reachable. Default: all metabolites
-        in *model*.
+        Metabolite IDs that should be reachable. Default: every metabolite of
+        the first objective reaction (in model order), substrates and products,
+        as in RAVEN's ``gapFillTopological``.
     verbose:
         Print a summary of the results.
 
     Returns
     -------
     TopologicalAnalysisResult
+
+    Raises
+    ------
+    ValueError
+        If *targets* is not given and the model has no objective reaction.
     """
     templates = _as_models(templates)
 
@@ -166,13 +177,16 @@ def analyse_topology(
     if seeds is None:
         seed_ids: set[str] = set()
         for rxn in model.reactions:
-            mets = list(rxn.metabolites)
-            if len(mets) == 1 and rxn.lower_bound < 0:
-                seed_ids.add(mets[0].id)
-        if not seed_ids and verbose:
-            print(
-                "analyse_topology: no uptake exchange reactions found — "
-                "supply seeds explicitly via the 'seeds' argument."
+            coeffs = list(rxn.metabolites.values())
+            no_products = all(c < 0 for c in coeffs)
+            no_substrates = all(c > 0 for c in coeffs)
+            if (no_products and rxn.lower_bound < 0) or (no_substrates and rxn.upper_bound > 0):
+                seed_ids.update(m.id for m in rxn.metabolites)
+        if not seed_ids:
+            warnings.warn(
+                "analyse_topology: no uptake exchange reactions found. "
+                "Provide seeds manually via the 'seeds' argument.",
+                stacklevel=2,
             )
     else:
         seed_ids = set(seeds)
@@ -180,7 +194,13 @@ def analyse_topology(
     # ---- Targets ----
     all_model_met_ids = {m.id for m in model.metabolites}
     if targets is None:
-        target_ids = all_model_met_ids
+        objective = [r for r in model.reactions if r.objective_coefficient != 0]
+        if not objective:
+            raise ValueError(
+                "analyse_topology: no objective function defined. "
+                "Provide targets manually via the 'targets' argument."
+            )
+        target_ids = {m.id for m, c in objective[0].metabolites.items() if c != 0}
     else:
         target_ids = set(targets) & all_model_met_ids
 
