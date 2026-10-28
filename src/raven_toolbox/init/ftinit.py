@@ -726,8 +726,10 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     value plus ``max(1e-7·Σ|v|, 1e-6)``, and minimises ``Σ w·max(0, -v)`` over the reactions
     whose flux can take either sign. The weight is the reaction's id rank from the end:
     sorted by ``rank_key``, the first of ``n`` reactions gets ``n`` and the last ``1``, so a
-    reaction with a lower id prefers its forward direction. It stops at a relative or
-    absolute gap of 1e-6, with the full ``time_limit`` as its budget.
+    reaction with a lower id prefers its forward direction. On Gurobi the phase-2c solution
+    is its MIP start, as the tight cap on ``Σ|v|`` leaves the solver's heuristics little
+    room to find a first solution. It stops at a relative or absolute gap of 1e-6, with
+    the full ``time_limit`` as its budget.
 
     Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
     ``False`` otherwise (the caller keeps the phase-2c fluxes). It never fails the
@@ -735,6 +737,8 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     """
     if not free_sign:
         return False
+    # Read the phase-2c solution before the model changes: a change discards it.
+    start = {var.name: var.primal or 0.0 for var in opt.variables} if _is_gurobi(prob) else {}
     tol = max(abs(total) * 1e-7, 1e-6)
     n = len(free_sign)
     weight = {rid: float(n - i) for i, rid in enumerate(sorted(free_sign, key=rank_key))}
@@ -749,6 +753,14 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     if _is_gurobi(prob):
         opt.problem.Params.MIPGap = 1e-6
         opt.problem.Params.MIPGapAbs = 1e-6
+        opt.update()
+        grb = opt.problem
+        grb.update()
+        for name, val in start.items():
+            grb.getVarByName(name).Start = val
+        for rid in free_sign:
+            net = sum(sign * start[var.name] for var, sign in flux_terms[rid])
+            grb.getVarByName(f"_bwd_{rid}").Start = max(0.0, -net)
     if time_limit is not None:
         opt.configuration.timeout = max(1, int(time_limit))
     opt.optimize()
