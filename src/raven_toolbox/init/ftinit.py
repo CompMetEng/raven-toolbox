@@ -525,7 +525,9 @@ def run_ftinit(
                 if any(score < 0 for _, score in indicators.values()) else None)
         if held is not None:
             fluxes = _read_solution()[1]
-            if _min_backward_flux(opt, prob, flux_terms, *held, rank_key, time_limit):
+            abs_expr, total, free_sign = held
+            if _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign,
+                                  rank_key, time_limit):
                 fluxes = _read_solution()[1]
 
     kept = free_or_essential | on
