@@ -187,7 +187,8 @@ def run_ftinit(
     exhaust ``time_limit``; when that happens the (still-adopted) incumbent is an
     unproven tie-break and a warning is raised. The tie-break is skipped when the primary
     solve itself stops at ``time_limit``, since there is then no proven optimum to hold.
-    See :func:`_resolve_ties`.
+    After it, the reported ``fluxes`` are a least-total-flux solution for the selected on
+    set (:func:`_min_abs_flux`). See :func:`_resolve_ties`.
 
     ``metabolomics`` (already in **this model's** id space — :func:`ftinit` resolves a
     caller-facing metabolite-name list into this once) maps a detected-metabolite label
@@ -507,6 +508,10 @@ def run_ftinit(
     elif resolve_ties and indicators and _resolve_ties(opt, prob, obj_expr, indicators,
                                                         primary_obj, time_limit):
         on, fluxes = _read_solution()
+        # Like phases 2a/2b, only when there is a removable (negative-score) reaction.
+        if any(score < 0 for _, score in indicators.values()) \
+                and _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
+            fluxes = _read_solution()[1]
 
     kept = free_or_essential | on
     deleted = [r.id for r in model.reactions if r.id not in kept]
@@ -556,9 +561,9 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
     indicators are continuous and pinned near 1 by the score objective), so the two phases
     run over those: their count and id-sum are integers, provable with a cheap absolute gap
     below 1 rather than the near-full proof a tiny relative gap would need. This resolves
-    the removable-reaction choices — the genuine seed-fragile degeneracy; a residual
-    flux-distribution degeneracy (which only feeds the next step's small ``ess_force``
-    clamp) is left to the solver.
+    the removable-reaction choices, the genuine seed-fragile degeneracy. The flux
+    distribution, which the staged schedule reads for the next step's forced directions and
+    ``ess_force`` clamp, is pinned afterwards by :func:`_min_abs_flux`.
 
     Caveat, measured on genome-scale Human-GEM (not visible at toy/unit-test scale, where
     both phases prove in milliseconds): the phases can themselves exhaust ``time_limit``,
@@ -627,6 +632,64 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
             stacklevel=3,
         )
     return ok
+
+
+def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
+    """Phase 2c of ``resolve_ties``: the least total absolute flux for the tie-broken on set.
+
+    Phases 2a/2b fix which reactions are on but leave the flux distribution free, and the
+    staged schedule reads that distribution: the next step forces a reversible reaction in
+    the direction of its flux and at ``min(0.99·|flux|, force_on)``. This phase holds the
+    on/off state of every indicator (a binary at its value; a continuous indicator that is
+    on keeps at least its value, one that is off at most its value) and minimises
+    ``Σ|v|`` over all reactions, so the flux read-out comes from a minimal-flux solution
+    rather than from whichever vertex the solver happened to reach. Directions of
+    reversible scored reactions stay free, so the phase is still a MILP; its objective is
+    proven to an absolute gap of 1e-6.
+
+    Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
+    ``False`` otherwise (the caller keeps the phase-2b fluxes). It never fails the
+    extraction; a phase ending at the time limit is adopted with a warning.
+    """
+    # Read every value before changing a bound: a bound change discards the solution.
+    values = [(ind, ind.primal or 0.0) for ind, _ in indicators.values()]
+    for ind, val in values:
+        if ind.type == "binary":
+            ind.set_bounds(round(val), round(val))
+        elif val >= 0.5:
+            ind.lb = min(max(val, 0.0), 1.0)
+        else:
+            ind.ub = min(max(val, 0.0), 1.0)
+    abs_terms, extra = [], []
+    for rid, terms in flux_terms.items():
+        if len(terms) == 1 and terms[0][0].lb is not None and terms[0][0].lb >= 0:
+            abs_terms.append(mul([Real(terms[0][1]), terms[0][0]]))
+        elif len(terms) == 1 and terms[0][0].ub is not None and terms[0][0].ub <= 0:
+            abs_terms.append(mul([Real(-terms[0][1]), terms[0][0]]))
+        else:
+            net = add([mul([Real(sign), var]) for var, sign in terms])
+            t = prob.Variable(f"_abs_{rid}", lb=0.0)
+            extra += [t, prob.Constraint(t - net, lb=0.0, name=f"_absp_{rid}"),
+                      prob.Constraint(t + net, lb=0.0, name=f"_absn_{rid}")]
+            abs_terms.append(t)
+    opt.add(extra)
+    opt.objective = prob.Objective(add(abs_terms), direction="min")
+    if _is_gurobi(prob):
+        opt.problem.Params.MIPGap = 0.0
+        opt.problem.Params.MIPGapAbs = 1e-6
+    if time_limit is not None:
+        opt.configuration.timeout = max(1, int(time_limit * _TIE_BREAK_TIME_FRACTION))
+    opt.optimize()
+    _dbg(f"[ftinit] tie-break phase2c-minflux: status={opt.status} obj={opt.objective.value}")
+    if opt.status == "time_limit":
+        warnings.warn(
+            "ftINIT minimal-flux phase (resolve_ties) stopped at the time limit: the flux "
+            "distribution, and hence the next step's forced directions, is an unproven "
+            "incumbent. Raise time_limit for a proven minimal-flux solution.",
+            stacklevel=3,
+        )
+    return (opt.status in ("optimal", "feasible", "suboptimal", "time_limit")
+            and _has_solution(opt))
 
 
 def _nudge_scores(rxn_scores: Mapping[str, float]) -> dict[str, float]:
@@ -860,7 +923,10 @@ def ftinit(
 
       * ``resolve_ties`` adds a lexicographic phase 2 that selects the sparsest (then
         lowest-id) optimum, so the degenerate choice is pinned rather than left to the
-        solver — applied both to each extraction step and to the task gap-fill.
+        solver — applied both to each extraction step and to the task gap-fill. In each
+        extraction step it then takes the fluxes from the least-total-flux solution for
+        that on set, so the directions and forced magnitudes the next step reads from
+        them do not depend on the solver's vertex either.
       * ``prove_abs_gap`` replaces the loose relative-gap escalation with a single solve per
         step proven to this fixed *absolute* gap, so the kept-set objective is optimal at
         any scale — not an arbitrary within-gap incumbent. **Try 1.0**: on Human-GEM/DLD1

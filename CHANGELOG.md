@@ -15,6 +15,9 @@ Milestones in the raven-toolbox port. For function-level status see
   counts the reaction as essential only if that solve is not feasible either, as RAVEN's
   `solveLP` does. Gurobi could report a feasible knock-out as infeasible when started from
   the previous knock-out's basis, which added reactions to the essential set.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` take each step's fluxes from the
+  least-total-flux solution for the tie-broken on set, so the direction and magnitude at
+  which the next step forces a reaction no longer depend on the solver's vertex.
 
 ## 3.0.0b1 — 2026-09-07
 
