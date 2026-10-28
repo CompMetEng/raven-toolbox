@@ -66,6 +66,11 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install --upgrade pip
+      # swiglpk (a cobra/optlang dependency) publishes no Python 3.15 wheel, so pip
+      # builds it from source, which needs the GLPK headers and SWIG.
+      - name: Install GLPK build dependencies
+        if: matrix.python == '3.15'
+        run: sudo apt-get update && sudo apt-get install -y libglpk-dev swig
       # ``-e .[dev,excel]`` so every optional extra is exercised.
       # Gurobi is not installable on free runners; the relevant tests
       # skip themselves when ``optlang.gurobi_interface`` cannot import.
