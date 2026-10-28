@@ -1285,6 +1285,26 @@ def test_a_valid_gene_rule_in_any_spelling_is_stored(rule, genes):
     assert sorted(g.id for g in _by_name(m, "fresh").genes) == genes
 
 
+@pytest.mark.parametrize("name, ctable", [("fresh", ("-2", "2")), ("ATP hydrolysis", ("-1", "1"))])
+@pytest.mark.parametrize("rule, genes", [
+    ("G1&G2 or G3", ["G1&G2", "G3"]),
+    ("G1|G2", ["G1|G2"]),
+])
+def test_an_operator_glued_to_a_gene_id_stays_part_of_the_stored_gene(name, ctable, rule, genes):
+    """RAVEN's parseGrRule reads G1&G2 as one gene id; the stored rule has the same genes."""
+    m = _base_model()
+    rxns_df = pd.DataFrame([{"rxnNames": name, "grRules": rule}])
+    coeffs_df = pd.DataFrame([
+        {"rxnNames": name, "metNames": "ATP", "comps": "c", "coefficient": ctable[0]},
+        {"rxnNames": name, "metNames": "ADP", "comps": "c", "coefficient": ctable[1]}])
+    batch_curate(m, genes_df=_genes_df(*genes), rxns_df=rxns_df,
+                 rxns_coeffs_df=coeffs_df, rxn_id_prefix="r_")
+    rxn = _by_name(m, name)
+    assert sorted(g.id for g in rxn.genes) == genes
+    assert rxn.gene_reaction_rule == rule
+    assert not {"G1", "G2"} & {g.id for g in m.genes}
+
+
 # --- header-only tables, atomicity of several rows, genes of new reactions, headers ---------
 
 _RXN_HEADER = "rxnIdx\trxnNames\tlb\tub\n"

@@ -22,6 +22,9 @@ Milestones in the raven-toolbox port. For function-level status see
   RAVEN's `RAVEN:badGrRule` for a malformed rule. `G1 && G2`, `G1 || G2` and `G1 Or G2` are
   read as rules, `G1&G2` is one gene id. Whitespace is what MATLAB's `isspace` counts, so a
   no-break space (U+00A0), U+0085, U+2007 and U+202F are part of a word.
+* `curation.batch_curate` (and `batch_curate_from_tsv`) stores a gene rule as `parse_gr_rule`
+  reads it, so the reaction gets the genes that were checked: `G1&G2 or G3` has the genes
+  `G1&G2` and `G3`, as in RAVEN's `curateModelFromTables` (was: `G1`, `G2` and `G3`).
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

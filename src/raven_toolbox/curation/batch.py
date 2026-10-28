@@ -12,8 +12,9 @@ from pathlib import Path
 import cobra
 import numpy as np
 import pandas as pd
+from cobra.core.gene import GPR
 
-from raven_toolbox.utils.gpr import _RULE_TOKEN, parse_gr_rule, rule_tokens
+from raven_toolbox.utils.gpr import parse_gr_rule, rule_tokens
 from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
 
@@ -435,10 +436,6 @@ def _row_has_content(row, columns=None) -> bool:
     return any(_has_value(v) for v in values)
 
 
-#: Spellings of the operators that cobra reads as they are.
-_COBRA_OPERATORS = frozenset({"and", "AND", "&", "or", "OR", "|"})
-
-
 def _rule_genes(rule: str) -> list[str]:
     """Gene ids of a gene rule, in order; :class:`ValueError` when the rule is not well formed.
 
@@ -462,23 +459,12 @@ def _row_rule_genes(row: pd.Series) -> list[str]:
         ) from None
 
 
-def _stored_gene_rule(rule) -> str:
-    """The rule as cobra reads it: operator spellings cobra does not know (``And``, ``&&``,
-    ``||``) are written as ``and``/``or``; everything else is kept as it is."""
-    text = str(rule)
-    pieces: list[str] = []
-    last = 0
-    for match in _RULE_TOKEN.finditer(text):
-        word = match.group()
-        kind = rule_tokens(word)[0][0]
-        if word in _COBRA_OPERATORS or kind not in ("and", "or"):
-            continue
-        replacement = kind
-        pieces.append(text[last:match.start()])
-        pieces.append(replacement)
-        last = match.end()
-    pieces.append(text[last:])
-    return "".join(pieces)
+def _stored_gpr(rule) -> GPR:
+    """The rule as :func:`~raven_toolbox.utils.parse_gr_rule` reads it, so the reaction gets the
+    genes that were validated: ``G1&G2`` stays one gene id, as in RAVEN, where cobra reading the
+    string would split it."""
+    parsed = parse_gr_rule(str(rule))
+    return parsed if parsed is not None else GPR()
 
 
 def _check_gene_rules(rxns_df: pd.DataFrame) -> None:
@@ -848,7 +834,7 @@ def _update_reaction(
     if _is_written(row, "rxnNames", overwrite_with_empty):
         rxn.name = _text(row["rxnNames"])
     if _has_value(row.get("grRules")):
-        rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
+        rxn.gpr = _stored_gpr(row["grRules"])
     if _has_value(row.get("lb")) or _has_value(row.get("ub")):
         # Both bounds are set together, so that a pair that is valid as a whole is accepted
         # whatever the stored bounds are.
@@ -904,7 +890,7 @@ def _build_new_reactions(
         )
         rxn.add_metabolites(stoich)
         if _has_value(row.get("grRules")):
-            rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
+            rxn.gpr = _stored_gpr(row["grRules"])
         if _has_value(row.get("subSystems")):
             rxn.subsystem = subsystem_to_str(row["subSystems"])
         if _has_value(row.get("eccodes")):
