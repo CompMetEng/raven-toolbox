@@ -54,7 +54,7 @@ jobs:
         # Full Python range on Linux; a single Python on macOS/Windows to catch
         # OS-specific issues (paths, subprocess, file I/O) at low runner cost.
         os: [ubuntu-latest]
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         include:
           - { os: macos-latest, python: "3.12" }
           - { os: windows-latest, python: "3.12" }
