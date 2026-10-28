@@ -64,6 +64,17 @@ Milestones in the raven-toolbox port. For function-level status see
   counts the reaction as essential only if that solve is not feasible either, as RAVEN's
   `solveLP` does. Gurobi could report a feasible knock-out as infeasible when started from
   the previous knock-out's basis, which added reactions to the essential set.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` take each step's fluxes from the
+  least-total-flux solution for the tie-broken on set, so the direction and magnitude at
+  which the next step forces a reaction no longer depend on the solver's vertex.
+  That phase stops at a relative or absolute gap of 1e-6 and has the full `time_limit`, as
+  in RAVEN.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties`: among the least-total-flux
+  solutions, each step takes its fluxes from the one with the least id-rank-weighted backward
+  flux, so the direction of a flux that carries the same total either way no longer depends
+  on the solver. The id-rank phases rank a merged reaction by the smallest original reaction
+  id in its group (new `run_ftinit` argument `rank_keys`), so they no longer depend on which
+  member names it.
 
 ## 3.0.0b1 — 2026-09-07
 

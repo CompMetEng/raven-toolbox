@@ -220,6 +220,81 @@ def test_resolve_ties_safe_on_unique_optimum():
     assert res.objective == pytest.approx(8.0, abs=1e-6)
 
 
+def _direction_model():
+    """A positive reversible R3 (m <=> q) that can be on in either direction.
+
+    Run forward it needs m from a via the free R1; run backward it imports q and feeds the
+    essential E. Both directions reach the same score, so the flux of R3 (and the direction
+    the next ftINIT step would force it in) is a tie that only the flux distribution
+    resolves. The free loop L1/L2 can carry any flux. R2 is a negative-score dead end.
+    """
+    m = cobra.Model("direction")
+    a, mm, p, q, n, z = (cobra.Metabolite(x, name=x, compartment="s")
+                         for x in ("a", "m", "p", "q", "n", "z"))
+    rxns = {
+        "R1": ({a: -1, mm: 1}, 0), "R2": ({a: -1, z: 1}, 0), "R3": ({mm: -1, q: 1}, -1000),
+        "E": ({mm: -1, p: 1}, 0), "L1": ({mm: -1, n: 1}, 0), "L2": ({n: -1, mm: 1}, 0),
+        "EX_a": ({a: -1}, -1000), "EX_p": ({p: -1}, -1000), "EX_q": ({q: -1}, -1000),
+    }
+    for rid, (mets, lb) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        m.add_reactions([r])
+        r.add_metabolites(mets)
+    return m
+
+
+def test_resolve_ties_takes_fluxes_from_a_minimal_flux_solution():
+    """resolve_ties reports the least-total-flux distribution for the tie-broken on set.
+
+    The backward R3 route (import q, feed E) carries 0.4 in total, the forward one (a via
+    R1 into both R3 and E) 0.8, and the free loop L1/L2 carries nothing.
+    """
+    res = run_ftinit(_direction_model(), {"R2": -1.0, "R3": 1.0}, essential_rxns=["E"],
+                     resolve_ties=True)
+    assert "R3" in res.on_reactions and "R2" not in res.kept_reactions
+    expected = {"R1": 0.0, "R2": 0.0, "R3": -0.1, "E": 0.1, "L1": 0.0, "L2": 0.0,
+                "EX_a": 0.0, "EX_p": 0.1, "EX_q": -0.1}
+    for rid, v in expected.items():
+        assert res.fluxes[rid] == pytest.approx(v, abs=1e-6), rid
+    assert res.objective == pytest.approx(1.0, abs=1e-6)
+
+
+def _two_route_model():
+    """The essential E consumes y, which the reversible R1 (y <=> x) or R2 (y <=> z) can
+    supply when run backward from the imports IN_x or IN_z.
+
+    Both routes carry the same total flux, so the least total flux leaves open which of R1
+    and R2 runs backward. N is a negative-score dead end.
+    """
+    m = cobra.Model("two_route")
+    x, y, z, p, d = (cobra.Metabolite(k, name=k, compartment="s") for k in "xyzpd")
+    rxns = {
+        "IN_x": ({x: 1}, 0), "IN_z": ({z: 1}, 0), "R1": ({y: -1, x: 1}, -1000),
+        "R2": ({y: -1, z: 1}, -1000), "E": ({y: -1, p: 1}, 0), "OUT_p": ({p: -1}, 0),
+        "N": ({x: -1, d: 1}, 0),
+    }
+    for rid, (mets, lb) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        m.add_reactions([r])
+        r.add_metabolites(mets)
+    return m
+
+
+def test_resolve_ties_lower_ranked_reaction_keeps_its_forward_direction():
+    """Between equal-total-flux directions, resolve_ties runs the higher-ranked one backward.
+
+    Ranked by id, R1 comes before R2, so R2 carries the backward flux; with ``rank_keys``
+    ranking R1 last, R1 does.
+    """
+    def solve(rank_keys=None):
+        res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
+                         resolve_ties=True, rank_keys=rank_keys)
+        return res.fluxes["R1"], res.fluxes["R2"]
+
+    assert solve() == pytest.approx((0.0, -0.1), abs=1e-6)
+    assert solve({"R1": "R9"}) == pytest.approx((-0.1, 0.0), abs=1e-6)
+
+
 # --------------------------------------------------------------------------- #
 # seed as an explicit parameter, and the unproven-incumbent warning.
 # --------------------------------------------------------------------------- #
@@ -314,7 +389,7 @@ def test_unproven_tie_break_warns():
     try:
         with pytest.warns(UserWarning, match="tie resolution did not converge"):
             ok = ftinit_mod._resolve_ties(stub, interface, interface.Variable("objx"),
-                                          {"R1": (ind, -1.0)}, -1.0, 1.0)
+                                          {"R1": (ind, -1.0)}, -1.0, 1.0, str)
     finally:
         ftinit_mod._has_solution = monkey
     assert ok  # the incumbent is still adopted, just no longer silently
