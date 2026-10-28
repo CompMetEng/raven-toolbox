@@ -21,6 +21,7 @@ from raven_toolbox.init.hpa import (
     rna_gene_scores,
 )
 from raven_toolbox.init.merge import group_rxn_scores, merge_linear
+from raven_toolbox.init.model_scores import RAVEN_HPA_LEVEL_SCORES, TranscrData, score_for_init
 from raven_toolbox.init.prep import PrepData, ReactionMasks, classify_reactions, prep_init_model
 from raven_toolbox.init.score import gene_scores_from_expression, score_reactions_from_genes
 from raven_toolbox.init.steps import InitStep, get_init_steps
@@ -33,8 +34,10 @@ __all__ = [
     "HPARnaData",
     "InitStep",
     "PrepData",
+    "RAVEN_HPA_LEVEL_SCORES",
     "ReactionMasks",
     "TaskFillResult",
+    "TranscrData",
     "classify_reactions",
     "fill_tasks",
     "ftinit",
@@ -49,5 +52,6 @@ __all__ = [
     "remove_low_score_genes",
     "rna_gene_scores",
     "run_ftinit",
+    "score_for_init",
     "score_reactions_from_genes",
 ]

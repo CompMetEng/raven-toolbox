@@ -296,3 +296,28 @@ def test_name_comp_unknown_compartment_warns(model):
             [{"id": "R1", "equation": "ATP[c] --> AMP[mito]"}],
             mets_by="name",
         )
+
+
+def test_new_genes_are_added_in_sorted_order_whatever_the_hash_seed():
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import cobra\n"
+        "from raven_toolbox.manipulation import add_reactions_from_equations\n"
+        "m = cobra.Model('t')\n"
+        "add_reactions_from_equations(m, [{'id': 'PX', 'equation': 'a[c] --> b[c]', "
+        "'gene_reaction_rule': 'YPROBE2 and YPROBE1 and YPROBE10'}], mets_by='name', compartment='c')\n"
+        "print('GENES:' + ','.join(g.id for g in m.genes))\n"
+    )
+    def genes_line(seed):
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        ).stdout
+        (line,) = [x for x in out.splitlines() if x.startswith("GENES:")]
+        return line.removeprefix("GENES:")
+
+    orders = {genes_line(seed) for seed in ("0", "3")}
+    assert orders == {"YPROBE1,YPROBE10,YPROBE2"}

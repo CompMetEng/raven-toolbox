@@ -1,21 +1,19 @@
-"""Flux Scanning based on Enforced Objective Flux — FSEOF (port + redesign).
+"""Flux Scanning based on Enforced Objective Flux (FSEOF).
 
 FSEOF (Choi et al., Appl Environ Microbiol 2010) finds metabolic-engineering targets
 for over-producing a metabolite: enforce an increasing flux toward the target product
-while optimising growth, and watch how each reaction's flux responds. This is a port
-of RAVEN's ``FSEOF`` with a substantially richer, more robust output (RAVEN's
-weaknesses are noted in IMPROVEMENTS, FS1–FS4):
+while optimising growth, and watch how each reaction's flux responds. This follows
+RAVEN's ``FSEOF`` and returns tables instead of a printed list:
 
-* **Robust trend, not strict monotonicity.** Each reaction's flux is regressed against
-  the enforced product flux across the scan; the **slope** is the response and the
-  **correlation** (|r|) is a quality score. A reaction is a target if it tracks the
-  product cleanly (|r| ≥ ``correlation_threshold``), so one noisy step from LP
-  alternative optima does not discard it (and pFBA per step keeps the scan stable).
-* **Direction classification RAVEN lacks.** Targets are labelled ``amplify`` (|flux|
-  rises with the product → over-express), ``knockdown`` (|flux| falls), or ``knockout``
-  (|flux| → ~0 → delete). RAVEN only ever reports the amplification targets.
-* **Gene-level view** via :attr:`FSEOFResult.gene_targets`, and the full flux scan is
-  retained in :attr:`FSEOFResult.scan` — all as DataFrames, not a printed TSV.
+* **Trend of the absolute flux.** Each reaction's absolute flux is regressed against the
+  enforced product flux across the scan; the **slope** is the response and the
+  **correlation** (|r|) is a quality score. A reaction is a target when its track is not
+  constant and |r| >= ``correlation_threshold``. Every step is solved with pFBA.
+* **Direction classification.** Targets are labelled ``amplify`` (the absolute flux
+  rises with the product), ``knockdown`` (it falls) or ``knockout`` (it falls to at most
+  1e-8), like the Amplify, Knockdown and Knockout labels of RAVEN's ``FSEOF``.
+* **Gene-level view** via :attr:`FSEOFResult.gene_targets`, and the full flux scan in
+  :attr:`FSEOFResult.scan`, both as DataFrames.
 """
 from __future__ import annotations
 
@@ -97,7 +95,17 @@ def fseof(
         product flux for it to be reported as a target; raise it to keep only
         the most cleanly-trending reactions.
     flux_eps:
-        Tolerance below which a flux or slope is treated as zero.
+        Tolerance below which the theoretical maximum of the target flux is treated as zero
+        (the scan then raises). Reaction fluxes are classified as in RAVEN's ``FSEOF``: a
+        reaction is a target when some absolute flux exceeds 1e-10, the standard deviation of
+        its absolute flux is above 0 and the correlation reaches ``correlation_threshold``;
+        it is ``knockout`` when the slope is negative and the last absolute flux is at most
+        1e-8, ``knockdown`` for a negative slope otherwise.
+
+        Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
+        so the last absolute flux used for the knockout label is that of the last feasible
+        level; ``targets`` is sorted by ``|slope| * |r|`` and not grouped by label; and
+        ``flux_eps`` only gates the check of the theoretical maximum.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
         (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.
@@ -127,40 +135,39 @@ def fseof(
             try:
                 columns[level] = pfba(model).fluxes
             except OptimizationError:
-                break  # enforced flux became infeasible — stop scanning
+                break  # enforced flux became infeasible: stop scanning
             enforced.append(level)
     if len(enforced) < 2:
         raise RuntimeError("FSEOF needs at least two feasible enforced-flux levels.")
 
     scan = pd.DataFrame(columns)
-    targets = _classify(model, scan, np.asarray(enforced), correlation_threshold, flux_eps)
+    targets = _classify(model, scan, np.asarray(enforced), correlation_threshold)
     return FSEOFResult(scan=scan, enforced=enforced, targets=targets)
 
 
-def _classify(model, scan, enforced, corr_threshold, flux_eps) -> pd.DataFrame:
+_TRACK_EPS = 1e-10  # a track must exceed this somewhere to be fitted, as in FSEOF.m
+_KNOCKOUT_EPS = 1e-8  # last absolute flux at or below this is a knockout, as in FSEOF.m
+
+
+def _classify(model, scan, enforced, corr_threshold) -> pd.DataFrame:
     rows = []
     for rxn in model.reactions:
         flux = scan.loc[rxn.id, enforced.tolist() if hasattr(enforced, "tolist") else enforced]
         flux = flux.to_numpy(dtype=float)
         initial, final = flux[0], flux[-1]
-        if flux.std() < flux_eps:  # flat -> no response
+        # Slope and correlation are taken on absolute flux, as in RAVEN's FSEOF, so a
+        # reversible reaction running backwards counts by its magnitude.
+        magnitude = np.abs(flux)
+        if not (magnitude > _TRACK_EPS).any() or magnitude.std() <= 0:
             continue
-        fit = linregress(enforced, flux)
+        fit = linregress(enforced, magnitude)
         slope, corr = float(fit.slope), float(fit.rvalue)
-        if abs(corr) < corr_threshold or abs(slope) < flux_eps:
+        if abs(corr) < corr_threshold or slope == 0:
             continue
-        # Classify on the slope of |flux| vs the enforced product flux — the
-        # criterion the docstring states (|flux| rises = amplify, etc.), not an
-        # endpoint-only ``abs(final) vs abs(initial)`` comparison, which can
-        # mislabel a track whose first/last values straddle a peak/trough even
-        # though its overall trend runs the other way. Keep ``knockout`` for
-        # tracks the regression drives essentially to zero.
-        abs_fit = linregress(enforced, np.abs(flux))
-        abs_slope = float(abs_fit.slope)
-        if abs(final) < flux_eps and abs_slope < 0:
-            ttype = "knockout"
-        elif abs_slope > 0:
+        if slope > 0:
             ttype = "amplify"
+        elif abs(final) <= _KNOCKOUT_EPS:
+            ttype = "knockout"
         else:
             ttype = "knockdown"
         rows.append({

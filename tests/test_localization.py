@@ -535,3 +535,64 @@ def test_prepare_deeploc_input_from_model(monkeypatch, tmp_path):
     # headers are the model's gene ids -> they become DeepLoc's Protein_ID and load_deeploc lines up
     assert ">YAL001C" in fasta and ">YBR002W" in fasta and "YDR999W" not in fasta
     assert str(res).isascii()                            # printable on cp1252 stdout (Windows)
+
+
+# --- load_uniprot: RAVEN parseScores parity ---------------------------------
+
+def _uniprot_file(tmp_path, rows):
+    p = tmp_path / "u.tsv"
+    p.write_text("Entry\tSubcellular location [CC]\n" + "".join(f"{g}\t{t}\n" for g, t in rows))
+    return p
+
+
+def test_load_uniprot_matches_whole_words_only(tmp_path):
+    p = _uniprot_file(tmp_path, [
+        ("A", "SUBCELLULAR LOCATION: Cytoplasmic vesicle membrane."),
+        ("B", "SUBCELLULAR LOCATION: Cytoplasm."),
+    ])
+    s = load_uniprot(p)
+    assert s.genes == ["B"]
+
+
+def test_load_uniprot_keeps_later_isoform_after_a_note(tmp_path):
+    p = _uniprot_file(tmp_path, [
+        ("A", "SUBCELLULAR LOCATION: [Isoform 1]: Mitochondrion. Note=Imported. "
+              "[Isoform 2]: Nucleus."),
+    ])
+    s = load_uniprot(p)
+    assert s.df.loc["A", "m"] == 1.0 and s.df.loc["A", "n"] == 1.0
+
+
+def test_load_uniprot_columns_are_all_codes_in_sorted_key_order(tmp_path):
+    p = _uniprot_file(tmp_path, [("A", "SUBCELLULAR LOCATION: Peroxisome.")])
+    s = load_uniprot(p)
+    assert s.compartments == ["ce", "c", "er", "e", "g", "lp", "v", "m", "n", "p"]
+    assert s.df.loc["A"].to_dict() == {c: (1.0 if c == "p" else 0.0) for c in s.compartments}
+
+
+def test_load_uniprot_duplicate_genes_keep_first_row_sorted_with_warning(tmp_path):
+    p = _uniprot_file(tmp_path, [
+        ("Y9", "SUBCELLULAR LOCATION: Nucleus."),
+        ("Y2", "SUBCELLULAR LOCATION: Vacuole."),
+        ("Y9", "SUBCELLULAR LOCATION: Peroxisome."),
+    ])
+    with pytest.warns(UserWarning, match="duplicate genes"):
+        s = load_uniprot(p)
+    assert s.genes == ["Y2", "Y9"]
+    assert s.df.loc["Y9", "n"] == 1.0 and s.df.loc["Y9", "p"] == 0.0
+
+
+def test_load_uniprot_keeps_input_order_without_duplicates(tmp_path):
+    p = _uniprot_file(tmp_path, [
+        ("Y9", "SUBCELLULAR LOCATION: Nucleus."),
+        ("Y2", "SUBCELLULAR LOCATION: Vacuole."),
+    ])
+    assert load_uniprot(p).genes == ["Y9", "Y2"]
+
+
+def test_write_fasta_empty_sequence_has_no_body_line(tmp_path):
+    from raven_toolbox.localization import write_fasta
+
+    p = tmp_path / "x.fasta"
+    write_fasta({"P3": "MKV", "P4": ""}, p)
+    assert p.read_text() == ">P3\nMKV\n>P4\n"

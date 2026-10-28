@@ -283,3 +283,17 @@ def test_objective_coefficient_preserved_on_expansion():
     expand_model(m)
     coeffs = {rx.id: rx.objective_coefficient for rx in m.reactions}
     assert coeffs == {"r1_EXP_1": 1.0, "r1_EXP_2": 1.0}  # objective survives on both copies
+
+
+def test_first_copy_keeps_the_original_position_and_other_copies_are_appended():
+    model = _build_model([
+        ("r1", {"A": -1.0, "B": 1.0}, 0.0, 1000.0, "g1 or g2"),
+        ("r2", {"B": -1.0, "C": 1.0}, 0.0, 1000.0, "g3"),
+        ("r3", {"C": -1.0, "D": 1.0}, 0.0, 1000.0, "g4 or g5 or g6"),
+        ("r4", {"D": -1.0, "E": 1.0}, 0.0, 1000.0, "g7"),
+    ])
+    expand_model(model)
+    assert [r.id for r in model.reactions] == [
+        "r1_EXP_1", "r2", "r3_EXP_1", "r4", "r1_EXP_2", "r3_EXP_2", "r3_EXP_3",
+    ]
+    assert model.reactions.index("r4") == 3

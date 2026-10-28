@@ -31,12 +31,30 @@ def _miriam_string(annotation: dict, exclude: tuple[str, ...] = ()) -> str:
     return ";".join(parts)
 
 
+def _num2str(value: float) -> str:
+    """A scalar as MATLAB's ``num2str`` writes it.
+
+    Integer values below 2**53 (and Inf, -Inf, NaN) are written in full. Other values use
+    ``min(12, max(1, floor(log10(abs(value))) + 1)) + 4`` significant digits.
+    """
+    value = value + 0.0  # removes a negative zero
+    if not math.isfinite(value):
+        return "NaN" if math.isnan(value) else ("Inf" if value > 0 else "-Inf")
+    magnitude = abs(value)
+    if value == math.floor(value) and math.ulp(magnitude) <= 1:
+        return str(int(value))
+    digits = min(12, max(1, math.floor(math.log10(magnitude)) + 1)) + 4
+    return f"{value:.{digits}g}"
+
+
 def _equation(rxn: cobra.Reaction) -> str:
     """Human-readable equation in RAVEN ``name[comp]`` form."""
 
     def side(items):
+        # A coefficient of 1 is left out, as RAVEN's constructEquations does.
         return " + ".join(
-            f"{abs(coef):g} {met.name}[{met.compartment}]" for met, coef in items
+            f"{'' if abs(coef) == 1 else f'{_num2str(abs(coef))} '}{met.name}[{met.compartment}]"
+            for met, coef in items
         )
 
     reactants = [(m, c) for m, c in rxn.metabolites.items() if c < 0]

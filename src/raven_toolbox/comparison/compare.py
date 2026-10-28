@@ -228,10 +228,10 @@ def compare_models(
                      else list(tasks))
         task_ids = [t.id for t in task_list]
         task_df = pd.DataFrame(False, index=task_ids, columns=model_ids, dtype=bool)
-        for mid, m in zip(model_ids, models_list, strict=True):
+        for col, (mid, m) in enumerate(zip(model_ids, models_list, strict=True)):
             results = check_tasks(m, task_list)
-            for r in results:
-                task_df.at[r.id, mid] = bool(r.passed)
+            for row, r in enumerate(results):  # by position: task ids may repeat
+                task_df.iat[row, col] = bool(r.passed)
                 if not r.passed and r.error:
                     failed.setdefault(mid, []).append(f"{r.id}: {r.error}")
 
