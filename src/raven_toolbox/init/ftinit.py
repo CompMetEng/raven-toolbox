@@ -142,6 +142,7 @@ def run_ftinit(
     time_limit: float | None = None,
     prove_abs_gap: float | None = None,
     resolve_ties: bool = False,
+    rank_keys: Mapping[str, str] | None = None,
     metabolomics: Mapping[str, Iterable[str]] | None = None,
     prod_weight: float = 0.5,
     seed: int = _EXTRACT_SEED,
@@ -188,7 +189,13 @@ def run_ftinit(
     unproven tie-break and a warning is raised. The tie-break is skipped when the primary
     solve itself stops at ``time_limit``, since there is then no proven optimum to hold.
     After it, the reported ``fluxes`` are a least-total-flux solution for the selected on
-    set (:func:`_min_abs_flux`). See :func:`_resolve_ties`.
+    set (:func:`_min_abs_flux`) and, among those, the one with the least id-rank-weighted
+    backward flux (:func:`_min_backward_flux`). See :func:`_resolve_ties`.
+
+    ``rank_keys`` maps a reaction id to the key the id-rank phases of ``resolve_ties``
+    sort it by (default: the id itself). :func:`ftinit` passes the smallest original
+    reaction id of each merge group, so the order does not depend on which member names
+    the merged reaction.
 
     ``metabolomics`` (already in **this model's** id space — :func:`ftinit` resolves a
     caller-facing metabolite-name list into this once) maps a detected-metabolite label
@@ -503,15 +510,23 @@ def run_ftinit(
     # It is skipped when the primary solve stopped at the time limit: phase 2 would pin
     # an unproven incumbent's objective, so it cannot select among true optima, and at
     # genome scale it then only spends its own time budget without finding a solution.
+    keys = dict(rank_keys or {})
+
+    def rank_key(rid: str) -> str:
+        return keys.get(rid, rid)
+
     if resolve_ties and indicators and _status == "time_limit":
         _dbg("[ftinit] tie-break skipped: the primary solve stopped at the time limit")
     elif resolve_ties and indicators and _resolve_ties(opt, prob, obj_expr, indicators,
-                                                        primary_obj, time_limit):
+                                                        primary_obj, time_limit, rank_key):
         on, fluxes = _read_solution()
         # Like phases 2a/2b, only when there is a removable (negative-score) reaction.
-        if any(score < 0 for _, score in indicators.values()) \
-                and _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
+        held = (_min_abs_flux(opt, prob, indicators, flux_terms, time_limit)
+                if any(score < 0 for _, score in indicators.values()) else None)
+        if held is not None:
             fluxes = _read_solution()[1]
+            if _min_backward_flux(opt, prob, flux_terms, *held, rank_key, time_limit):
+                fluxes = _read_solution()[1]
 
     kept = free_or_essential | on
     deleted = [r.id for r in model.reactions if r.id not in kept]
@@ -541,7 +556,7 @@ def _has_solution(opt) -> bool:
         return True
 
 
-def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
+def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit, rank_key) -> bool:
     """Pin ftINIT's degenerate optimum to a single, reproducible solution (on ``opt``).
 
     The ftINIT MILP is highly degenerate: many reaction subsets reach the same score
@@ -551,8 +566,9 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
 
     This runs a lexicographic phase 2, holding the score objective at its optimum with a
     floor constraint: first minimise the count of kept removable reactions (the sparsest
-    optimum), then, among the sparsest, minimise their summed id rank (prefer lower ids).
-    The result is a stable, near-unique optimum independent of seed/solver version *when
+    optimum), then, among the sparsest, minimise their summed id rank (prefer lower ids;
+    ``rank_key`` maps a reaction id to the key it is ranked by). The result is a stable,
+    near-unique optimum independent of seed/solver version *when
     both phases converge* — see the caveat below. ``opt`` is left holding the phase-2
     solution, which the caller reads for the "on" set and fluxes; the reported objective
     stays the phase-1 ``primary`` value.
@@ -618,7 +634,7 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
         unproven.append("phase2a-objective-not-finite")
     # Phase 2b — among the sparsest, prefer lower reaction ids (deterministic tie-break).
     opt.add(prob.Constraint(count, ub=kmin + 0.5, name="_canon_count_cap"))
-    ranks = {rid: i for i, rid in enumerate(sorted(binaries))}
+    ranks = {rid: i for i, rid in enumerate(sorted(binaries, key=rank_key))}
     idsum = add([mul([Real(float(1 + ranks[rid])), ind]) for rid, ind in binaries.items()])
     ok = _phase(prob.Objective(idsum, direction="min"), "phase2b-idrank")
     if ok and unproven:
@@ -634,7 +650,7 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit) -> bool:
     return ok
 
 
-def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
+def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
     """Phase 2c of ``resolve_ties``: the least total absolute flux for the tie-broken on set.
 
     Phases 2a/2b fix which reactions are on but leave the flux distribution free, and the
@@ -648,9 +664,11 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
     relative or absolute gap of 1e-6, with the full ``time_limit`` as its budget (as RAVEN's
     phase 2c).
 
-    Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
-    ``False`` otherwise (the caller keeps the phase-2b fluxes). It never fails the
-    extraction; a phase ending at the time limit is adopted with a warning.
+    Returns ``(abs_expr, total, free_sign)`` if it produced a usable solution (the caller
+    then reads its fluxes): the ``Σ|v|`` expression, its value and the ids of the
+    reactions whose flux can take either sign. Returns ``None`` otherwise (the caller keeps
+    the phase-2b fluxes). It never fails the extraction; a phase ending at the time limit
+    is adopted with a warning.
     """
     # Read every value before changing a bound: a bound change discards the solution.
     values = [(ind, ind.primal or 0.0) for ind, _ in indicators.values()]
@@ -661,7 +679,7 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
             ind.lb = min(max(val, 0.0), 1.0)
         else:
             ind.ub = min(max(val, 0.0), 1.0)
-    abs_terms, extra = [], []
+    abs_terms, extra, free_sign = [], [], []
     for rid, terms in flux_terms.items():
         if len(terms) == 1 and terms[0][0].lb is not None and terms[0][0].lb >= 0:
             abs_terms.append(mul([Real(terms[0][1]), terms[0][0]]))
@@ -673,8 +691,10 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
             extra += [t, prob.Constraint(t - net, lb=0.0, name=f"_absp_{rid}"),
                       prob.Constraint(t + net, lb=0.0, name=f"_absn_{rid}")]
             abs_terms.append(t)
+            free_sign.append(rid)
     opt.add(extra)
-    opt.objective = prob.Objective(add(abs_terms), direction="min")
+    abs_expr = add(abs_terms)
+    opt.objective = prob.Objective(abs_expr, direction="min")
     if _is_gurobi(prob):
         opt.problem.Params.MIPGap = 1e-6
         opt.problem.Params.MIPGapAbs = 1e-6
@@ -687,6 +707,56 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit) -> bool:
             "ftINIT minimal-flux phase (resolve_ties) stopped at the time limit: the flux "
             "distribution, and hence the next step's forced directions, is an unproven "
             "incumbent. Raise time_limit for a proven minimal-flux solution.",
+            stacklevel=3,
+        )
+    if opt.status in ("optimal", "feasible", "suboptimal", "time_limit") and _has_solution(opt):
+        return abs_expr, float(opt.objective.value), free_sign
+    return None
+
+
+def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_key,
+                       time_limit) -> bool:
+    """Phase 2d of ``resolve_ties``: fix the directions left open by the minimal total flux.
+
+    Phase 2c can leave the direction of a flux free when two directions carry the same total
+    flux, for example a pair of reversible reactions that close a loop in either direction.
+    This phase keeps the on/off state of phase 2c, holds ``Σ|v|`` at most at its phase-2c
+    value plus ``max(1e-7·Σ|v|, 1e-6)``, and minimises ``Σ w·max(0, -v)`` over the reactions
+    whose flux can take either sign. The weight is the reaction's id rank from the end:
+    sorted by ``rank_key``, the first of ``n`` reactions gets ``n`` and the last ``1``, so a
+    reaction with a lower id prefers its forward direction. It stops at a relative or
+    absolute gap of 1e-6, with the full ``time_limit`` as its budget.
+
+    Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
+    ``False`` otherwise (the caller keeps the phase-2c fluxes). It never fails the
+    extraction; a phase ending at the time limit is adopted with a warning.
+    """
+    if not free_sign:
+        return False
+    tol = max(abs(total) * 1e-7, 1e-6)
+    n = len(free_sign)
+    weight = {rid: float(n - i) for i, rid in enumerate(sorted(free_sign, key=rank_key))}
+    extra, bwd_terms = [prob.Constraint(abs_expr, ub=total + tol, name="_minflux_cap")], []
+    for rid in free_sign:
+        net = add([mul([Real(sign), var]) for var, sign in flux_terms[rid]])
+        b = prob.Variable(f"_bwd_{rid}", lb=0.0)
+        extra += [b, prob.Constraint(b + net, lb=0.0, name=f"_bwdc_{rid}")]
+        bwd_terms.append(mul([Real(weight[rid]), b]))
+    opt.add(extra)
+    opt.objective = prob.Objective(add(bwd_terms), direction="min")
+    if _is_gurobi(prob):
+        opt.problem.Params.MIPGap = 1e-6
+        opt.problem.Params.MIPGapAbs = 1e-6
+    if time_limit is not None:
+        opt.configuration.timeout = max(1, int(time_limit))
+    opt.optimize()
+    _dbg(f"[ftinit] tie-break phase2d-direction: status={opt.status} obj={opt.objective.value}")
+    if opt.status == "time_limit":
+        warnings.warn(
+            "ftINIT direction phase (resolve_ties) stopped at the time limit: the "
+            "directions of fluxes that carry the same total flux either way, and hence the "
+            "next step's forced directions, are an unproven incumbent. Raise time_limit "
+            "for a proven solution.",
             stacklevel=3,
         )
     return (opt.status in ("optimal", "feasible", "suboptimal", "time_limit")
@@ -771,7 +841,7 @@ def _metabolomics_producers(prep, metabolomics: Iterable[str]) -> dict[str, set[
 def _solve_step(
     min_model, scores, step, *, essential, directions, ess_force, force_on, big_m,
     mip_gap, mip_gap_abs, time_limit, prove_abs_gap=None, resolve_ties=False,
-    metabolomics=None, prod_weight=0.5,
+    rank_keys=None, metabolomics=None, prod_weight=0.5,
     seed=_EXTRACT_SEED, threads=_EXTRACT_THREADS,
     feas_tol=_EXTRACT_TOL, opt_tol=_EXTRACT_TOL, int_feas_tol=_EXTRACT_TOL,
     presolve=_EXTRACT_PRESOLVE,
@@ -792,7 +862,7 @@ def _solve_step(
             rem_pos_rev=step.pos_rev_off, ignore_mets=step.mets_to_ignore,
             force_on=force_on, force_on_ess=force_on, big_m=big_m,
             mip_gap=mg, mip_gap_abs=mga, time_limit=tl,
-            prove_abs_gap=prove, resolve_ties=resolve_ties,
+            prove_abs_gap=prove, resolve_ties=resolve_ties, rank_keys=rank_keys,
             metabolomics=metabolomics, prod_weight=prod_weight,
             seed=seed, threads=threads, feas_tol=feas_tol, opt_tol=opt_tol,
             int_feas_tol=int_feas_tol, presolve=presolve,
@@ -992,6 +1062,14 @@ def ftinit(
     # it is never forced above what it last carried (ftINIT.m:172,248) — this applies to
     # the permanent (prep) essentials too, not only reactions turned on by a prior step.
     flux_of: dict[str, float] = {r.id: force_on for r in min_model.reactions}
+    # resolve_ties ranks a merged reaction by its group's smallest original id, which does
+    # not depend on which member names the merged reaction.
+    smallest: dict[int, str] = {}
+    for rid, gid in zip(prep.orig_rxn_ids, prep.group_ids, strict=True):
+        if gid and (gid not in smallest or rid < smallest[gid]):
+            smallest[gid] = rid
+    rank_keys = {r.id: smallest[group_of[r.id]] for r in min_model.reactions
+                 if group_of.get(r.id, 0)}
     n_steps = len(steps)
     for i, step in enumerate(steps):
         if verbose:
@@ -1011,7 +1089,7 @@ def ftinit(
             min_model, scores, step, essential=essential, directions=directions,
             ess_force=ess_force, force_on=force_on, big_m=big_m,
             mip_gap=mip_gap, mip_gap_abs=mip_gap_abs, time_limit=time_limit,
-            prove_abs_gap=prove_abs_gap, resolve_ties=resolve_ties,
+            prove_abs_gap=prove_abs_gap, resolve_ties=resolve_ties, rank_keys=rank_keys,
             metabolomics=met_producers, prod_weight=prod_weight,
             seed=seed, threads=threads, feas_tol=feas_tol, opt_tol=opt_tol,
             int_feas_tol=int_feas_tol, presolve=presolve,

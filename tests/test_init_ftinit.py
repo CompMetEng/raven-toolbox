@@ -259,6 +259,42 @@ def test_resolve_ties_takes_fluxes_from_a_minimal_flux_solution():
     assert res.objective == pytest.approx(1.0, abs=1e-6)
 
 
+def _two_route_model():
+    """The essential E consumes y, which the reversible R1 (y <=> x) or R2 (y <=> z) can
+    supply when run backward from the imports IN_x or IN_z.
+
+    Both routes carry the same total flux, so the least total flux leaves open which of R1
+    and R2 runs backward. N is a negative-score dead end.
+    """
+    m = cobra.Model("two_route")
+    x, y, z, p, d = (cobra.Metabolite(k, name=k, compartment="s") for k in "xyzpd")
+    rxns = {
+        "IN_x": ({x: 1}, 0), "IN_z": ({z: 1}, 0), "R1": ({y: -1, x: 1}, -1000),
+        "R2": ({y: -1, z: 1}, -1000), "E": ({y: -1, p: 1}, 0), "OUT_p": ({p: -1}, 0),
+        "N": ({x: -1, d: 1}, 0),
+    }
+    for rid, (mets, lb) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        m.add_reactions([r])
+        r.add_metabolites(mets)
+    return m
+
+
+def test_resolve_ties_lower_ranked_reaction_keeps_its_forward_direction():
+    """Between equal-total-flux directions, resolve_ties runs the higher-ranked one backward.
+
+    Ranked by id, R1 comes before R2, so R2 carries the backward flux; with ``rank_keys``
+    ranking R1 last, R1 does.
+    """
+    def solve(rank_keys=None):
+        res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
+                         resolve_ties=True, rank_keys=rank_keys)
+        return res.fluxes["R1"], res.fluxes["R2"]
+
+    assert solve() == pytest.approx((0.0, -0.1), abs=1e-6)
+    assert solve({"R1": "R9"}) == pytest.approx((-0.1, 0.0), abs=1e-6)
+
+
 # --------------------------------------------------------------------------- #
 # seed as an explicit parameter, and the unproven-incumbent warning.
 # --------------------------------------------------------------------------- #
@@ -353,7 +389,7 @@ def test_unproven_tie_break_warns():
     try:
         with pytest.warns(UserWarning, match="tie resolution did not converge"):
             ok = ftinit_mod._resolve_ties(stub, interface, interface.Variable("objx"),
-                                          {"R1": (ind, -1.0)}, -1.0, 1.0)
+                                          {"R1": (ind, -1.0)}, -1.0, 1.0, str)
     finally:
         ftinit_mod._has_solution = monkey
     assert ok  # the incumbent is still adopted, just no longer silently
