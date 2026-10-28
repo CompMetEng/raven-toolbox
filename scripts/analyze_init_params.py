@@ -20,7 +20,7 @@ re-run skips finished ones):
 * ``ftinit_milp``  — single staged-MILP step (step 0 of series '1+1') on the merged model.
                      Cheap (~30-200 s each); the core sweep for ``mip_gap``/``big_m``/``force_on``.
 * ``prep_scale``   — rescaleModelForINIT on/off and its ``max_stoich_diff``, fed into the
-                     same step-0 MILP. Shows why scaling is needed for a fixed big-M.
+                     same step-0 MILP. Shows why scaling is needed when the big-M is capped.
 * ``ftinit_full``  — the whole ``ftinit`` pipeline (both steps + gap-fill). Sweeps
                      ``mip_gap``/``big_m``. Expensive (~200 s+/config).
 
@@ -185,7 +185,7 @@ def sweep_ftinit_milp(prep, rxn_scores, store, save) -> list:
             save()
         return store[key]
 
-    # mip_gap sweep (big_m=100, force_on=0.1)
+    # mip_gap sweep (force_on=0.1; big_m=100 caps the per-reaction big-M)
     res = [cfg(f"gap={g}", mip_gap=g, big_m=100.0, force_on=0.1, time_limit=900) for g in MIP_GAPS]
     _finalize(res)
     doc += _print_table("ftINIT step-0: mip_gap (big_m=100, force_on=0.1)", res)
@@ -194,9 +194,10 @@ def sweep_ftinit_milp(prep, rxn_scores, store, save) -> list:
     res = [cfg(f"big_m={int(b)}", mip_gap=0.001, big_m=b, force_on=0.1, time_limit=900) for b in BIG_MS]
     _finalize(res)
     doc += _print_table("ftINIT step-0: big_m (gap=0.001, force_on=0.1)", res,
-                        "big_m caps a scored reaction's flux; large values weaken the LP relaxation.")
+                        "big_m caps the per-reaction big-M (a scored reaction's flux capacity); "
+                        "large values weaken the LP relaxation.")
 
-    # force_on sweep (gap=0.001, big_m=100) — changes the model (connectivity threshold)
+    # force_on sweep (gap=0.001, big_m=100 as the big-M cap); changes the model (connectivity threshold)
     res = [cfg(f"force_on={fo}", mip_gap=0.001, big_m=100.0, force_on=fo, time_limit=900) for fo in FORCE_ONS]
     _finalize(res)
     doc += _print_table("ftINIT step-0: force_on (gap=0.001, big_m=100)", res,
@@ -236,7 +237,7 @@ def sweep_prep_scale(ref, spont, custom, rxn_scores, store, save) -> list:
     res.append(cfg("scale=off", None))
     _finalize(res)
     doc += _print_table("prep scaling: rescaleModelForINIT max_stoich_diff (+scale off), big_m=100", res,
-                        "With big_m=100 fixed, scale=off / poor conditioning is expected to be "
+                        "With the big-M capped at big_m=100, scale=off / poor conditioning is expected to be "
                         "infeasible or far slower — that is the reason scaling is on by default.")
     return doc
 

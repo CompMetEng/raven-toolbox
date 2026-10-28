@@ -4,6 +4,13 @@ Milestones in the raven-toolbox port. For function-level status see
 [docs/raven_migration.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/migration.md); for open work see
 [docs/todo.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/todo.md).
 
+## Unreleased
+
+* `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
+  capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
+  `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its
+  default is 1000 (was 100).
+
 ## 3.0.0b1 — 2026-09-07
 
 First beta toward 3.0, matching the upcoming MATLAB RAVEN 3.0 beta.
