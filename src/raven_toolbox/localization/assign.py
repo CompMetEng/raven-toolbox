@@ -20,7 +20,7 @@ Built on raven-toolbox + cobra.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 import cobra
@@ -33,6 +33,40 @@ def _base_met(m: cobra.Metabolite) -> str:
     if m.compartment and m.id.endswith(f"_{m.compartment}"):
         return m.id[: -(len(m.compartment) + 1)]
     return m.id
+
+
+def _default_base(compartments: Iterable[str]) -> Callable[[cobra.Metabolite], str]:
+    """The default compartment-agnostic key: the id without a trailing ``_<compartment>`` suffix,
+    for the metabolite's own compartment or for any of ``compartments``.
+
+    A metabolite of a :func:`~raven_toolbox.manipulation.merge_compartments` model keeps the id of
+    one of its copies, so ``ACCOA_c`` in ``s`` has the key ``ACCOA``, the key of ``ACCOA_m`` of a
+    universal model. Callers pass the compartments of the model, the universal model, the scores and
+    the placements.
+    """
+    suffixes = sorted({f"_{c}" for c in compartments if c}, key=len, reverse=True)
+
+    def base(m: cobra.Metabolite) -> str:
+        own = _base_met(m)
+        if own != m.id:
+            return own
+        for sfx in suffixes:
+            if len(m.id) > len(sfx) and m.id.endswith(sfx):
+                return m.id[: -len(sfx)]
+        return m.id
+
+    return base
+
+
+def _known_compartments(model: cobra.Model, universal: cobra.Model | None,
+                        *others: Iterable[str]) -> set[str]:
+    """Compartment ids of ``model``, of ``universal`` and of ``others``."""
+    comps = set(model.compartments)
+    if universal is not None:
+        comps |= set(universal.compartments)
+    for extra in others:
+        comps |= set(extra)
+    return comps
 
 
 def _rxn_compartment(rxn: cobra.Reaction) -> str | None:
@@ -122,10 +156,18 @@ def apply_assignment(
     ``default_compartment`` is the hub compartment star-topology transports route through. Pass the
     same ``base_metabolite`` and ``universal`` used in :func:`assign_compartments` so the same
     compartment-agnostic keying is used (existing per-compartment metabolites are reused rather than
-    duplicated) and the chosen gap-fill reactions are added.
+    duplicated) and the chosen gap-fill reactions are added. The default key is the id without a
+    trailing ``_<compartment>`` suffix, for the metabolite's own compartment or for a compartment of
+    the model, ``universal`` or the proposal, so a merged ``ACCOA_c`` in ``s`` and a universal
+    ``ACCOA_m`` share the key ``ACCOA``.
     """
     out = model.copy()
-    base = base_metabolite if base_metabolite is not None else _base_met
+    if base_metabolite is not None:
+        base = base_metabolite
+    else:
+        base = _default_base(_known_compartments(
+            model, universal, [default_compartment], *proposal.placements.values(),
+            [c for _, c in proposal.added_transports]))
 
     # (base key, compartment) -> existing metabolite, so a reaction moved into a compartment
     # reuses the species already there instead of creating a parallel duplicate.

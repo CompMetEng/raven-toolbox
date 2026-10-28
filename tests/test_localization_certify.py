@@ -431,3 +431,41 @@ def test_growth_conditions_are_certified_per_medium():
     assert res.certified
     assert res.growths["__primary__"] >= 1.0
     assert res.growths["onB"] >= 1.0
+
+
+def _merged_two_compartment_draft():
+    """A draft merged by merge_compartments: A has copies A_c and A_m, so the merged A keeps the id
+    A_c in compartment s."""
+    from raven_toolbox.manipulation import merge_compartments
+
+    m = cobra.Model("draft")
+    a_c = cobra.Metabolite("A_c", name="A", compartment="c")
+    a_m = cobra.Metabolite("A_m", name="A", compartment="m")
+    x_c = cobra.Metabolite("X_c", name="X", compartment="c")
+    r1 = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    r2 = cobra.Reaction("R2", lower_bound=0, upper_bound=1000)
+    ex = cobra.Reaction("EX_X", lower_bound=-10, upper_bound=1000)
+    m.add_reactions([r1, r2, ex])
+    r1.add_metabolites({x_c: -1, a_c: 1})
+    r2.add_metabolites({a_m: -1, x_c: 1})
+    ex.add_metabolites({x_c: -1})
+    merged, _, _ = merge_compartments(m)
+    assert merged.metabolites.A_c.compartment == "s"
+    return merged
+
+
+def test_apply_assignment_matches_a_merged_metabolite_to_the_universal_copy():
+    """The merged A_c (in s) and the universal A_m share the key A, so the gap-fill reaction lands
+    on the A that R1 makes in m instead of on a second copy."""
+    merged = _merged_two_compartment_draft()
+    universal = cobra.Model("u")
+    u1 = cobra.Reaction("U1", lower_bound=0, upper_bound=1000)
+    universal.add_reactions([u1])
+    u1.add_metabolites({cobra.Metabolite("A_m", name="A", compartment="m"): -1,
+                        cobra.Metabolite("Y_m", name="Y", compartment="m"): 1})
+    proposal = AssignmentProposal(placements={"R1": ["m"]}, added_reactions=["U1"])
+    out = apply_assignment(merged, proposal, universal=universal)
+    a_in_m = [x for x in out.metabolites if x.name == "A" and x.compartment == "m"]
+    assert len(a_in_m) == 1
+    assert a_in_m[0] in out.reactions.R1.metabolites
+    assert a_in_m[0] in out.reactions.U1.metabolites

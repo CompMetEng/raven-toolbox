@@ -51,7 +51,12 @@ from typing import Any
 
 import cobra
 
-from raven_toolbox.localization.assign import AssignmentProposal, _base_met, _rxn_compartment
+from raven_toolbox.localization.assign import (
+    AssignmentProposal,
+    _default_base,
+    _known_compartments,
+    _rxn_compartment,
+)
 from raven_toolbox.localization.scores import LocalizationScores
 
 __all__ = ["curation_priority"]
@@ -170,7 +175,12 @@ def curation_priority(
     """
     import pandas as pd
 
-    base = base_metabolite if base_metabolite is not None else _base_met
+    if base_metabolite is not None:
+        base = base_metabolite
+    else:
+        base = _default_base(_known_compartments(
+            model, universal, [default_compartment], scores.compartments,
+            *proposal.placements.values()))
     df = scores.df
     extra_currency = {_norm_key(x) for x in (currency_metabolites or ())}
     unplaced = set(proposal.unplaced_reactions)

@@ -41,7 +41,8 @@ from optlang.symbolics import Real, add, mul
 from raven_toolbox.localization.assign import (
     AssignmentProposal,
     GrowthCondition,
-    _base_met,
+    _default_base,
+    _known_compartments,
     _rxn_compartment,
     apply_assignment,
 )
@@ -102,7 +103,7 @@ def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_
     pinned = [r for r in model.reactions if r.id not in movable_ids]
     pinned_comp = {r.id: _rxn_compartment(r) for r in pinned}
 
-    base = base_metabolite if base_metabolite is not None else _base_met
+    base = base_metabolite
     movable_base = {base(m) for r in movable for m in r.metabolites}
     transp = set(movable_base) if transportable is None else set(transportable) & movable_base
 
@@ -649,6 +650,8 @@ def assign_compartments(
     if default_compartment not in compartments:
         raise ValueError(f"default_compartment={default_compartment!r} not in {compartments}")
 
+    if base_metabolite is None:
+        base_metabolite = _default_base(_known_compartments(model, universal, compartments))
     sc = _prepare_scope(model, scores, reactions_to_relocate, transportable=transportable,
                         base_metabolite=base_metabolite, biomass_reaction=biomass_reaction,
                         min_growth=min_growth)
