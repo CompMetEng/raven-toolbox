@@ -10,6 +10,11 @@ Milestones in the raven-toolbox port. For function-level status see
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its
   default is 1000 (was 100).
+* `tasks.find_task_essential_reactions` (and so `init.prep_init_model`) re-solves a knock-out
+  from a cold start when the warm-started solve does not report a feasible status, and
+  counts the reaction as essential only if that solve is not feasible either, as RAVEN's
+  `solveLP` does. Gurobi could report a feasible knock-out as infeasible when started from
+  the previous knock-out's basis, which added reactions to the essential set.
 
 ## 3.0.0b1 — 2026-09-07
 

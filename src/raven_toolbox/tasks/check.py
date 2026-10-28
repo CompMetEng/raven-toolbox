@@ -324,14 +324,17 @@ def _task_essential_reactions(
 
     1. **Min-flux solve** (``solveLP(model,1)`` = pFBA, minimise ``Σ|flux|``); candidates are
        the reactions carrying ``|flux| > 1e-12``.
-    2. **Shrink loop** (``getEssentialRxns.m:38-55``): minimise, then maximise, the *sum of
+    2. **Shrink loop** (``getEssentialRxns.m:55-71``): minimise, then maximise, the *sum of
        the candidate fluxes*, each time keeping only candidates still carrying
        ``|flux| > 1e-8``; repeat within a phase until it stops shrinking, then switch
        min→max, then stop. This yields a candidate set that does not depend on which
        degenerate min-flux vertex the solver happened to pick.
-    3. **Exact test** (``:57-63``): constrain each remaining candidate to 0 and re-solve; if
-       the task is then infeasible the reaction is essential. Direction is the sign it
-       carries in the min-flux solution (RAVEN's ``essentialFluxes``).
+    3. **Exact test** (``:73-79``): constrain each remaining candidate to 0 and re-solve; if
+       the task is then infeasible the reaction is essential. A solve that does not report
+       a feasible status is repeated from a cold start before the reaction counts as
+       essential, as ``solveLP`` does after a failed hot-started solve
+       (:func:`_knockout_feasible`). Direction is the sign it carries in the min-flux
+       solution (RAVEN's ``essentialFluxes``).
 
     Returns ``{reaction id: +1 forward | -1 reverse}``.
     """
@@ -366,11 +369,44 @@ def _task_essential_reactions(
         rxn = task_model.reactions.get_by_id(rid)
         saved = rxn.bounds
         rxn.bounds = (0.0, 0.0)
-        task_model.slim_optimize()
-        if task_model.solver.status != "optimal":   # infeasible ⇒ essential
+        if not _knockout_feasible(task_model):
             essential[rid] = 1 if fluxes.get(rid, 0.0) >= 0 else -1
         rxn.bounds = saved
     return essential
+
+
+# Statuses RAVEN's checkSolution counts as feasible (Gurobi OPTIMAL, SUBOPTIMAL, UNBOUNDED).
+_FEASIBLE_STATUSES = frozenset({"optimal", "suboptimal", "unbounded"})
+
+
+def _discard_basis(model: cobra.Model) -> None:
+    """Drop the solver's stored basis so the next solve starts cold (Gurobi and GLPK)."""
+    problem = model.solver.problem
+    if hasattr(problem, "reset"):          # gurobipy.Model
+        problem.reset()
+        return
+    try:
+        import swiglpk
+        swiglpk.glp_std_basis(problem)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _knockout_feasible(model: cobra.Model) -> bool:
+    """Whether the current constrain-to-0 problem is feasible, with RAVEN ``solveLP``'s retry.
+
+    The solve starts from the basis the previous knock-out left behind. From such a start
+    Gurobi can declare a feasible LP infeasible (seen on Human-GEM tasks), so a status
+    outside :data:`_FEASIBLE_STATUSES` is checked again from a cold start, as ``solveLP``
+    re-solves without its hot-start basis when the hot-started solve is not feasible. Only a
+    problem that is not feasible on both solves counts as infeasible.
+    """
+    model.slim_optimize()
+    if model.solver.status in _FEASIBLE_STATUSES:
+        return True
+    _discard_basis(model)
+    model.slim_optimize()
+    return model.solver.status in _FEASIBLE_STATUSES
 
 
 def _compute_one_task(
