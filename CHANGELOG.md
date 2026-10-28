@@ -6,6 +6,12 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `manipulation.remove_genes` defaults to `blocked_reactions="constrain"` (was: `"remove"`), as
+  RAVEN's `removeGenes` does: a reaction whose rule loses its last enzyme stays, with the rule
+  dropped and bounds `(0, 0)`. Pass `blocked_reactions="remove"` to delete such reactions.
+* `manipulation.remove_genes` also removes every gene that no remaining reaction named in its
+  rule before the removal, also when not requested (was: only the requested genes), as RAVEN's
+  `removeGenes` does. A gene kept only by a constrained reaction stays.
 * `init.merge_linear` numbers the merged groups 1, 2, ... in the order of the first reaction
   of each group in the original model, as RAVEN's `mergeLinear` does, so `group_ids` no
   longer depends on the merge order.

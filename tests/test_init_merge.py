@@ -119,6 +119,24 @@ def test_groups_are_numbered_by_their_first_reaction():
     assert sorted(r.id for r in reduced.reactions) == ["R1", "R5"]
 
 
+def test_reaction_flipped_in_later_pass_is_marked_reversed():
+    """R1 and R2 merge through A in the first pass; the second pass merges R1 and R4 through
+    Y and flips R4, so R4 (not R3, the third reaction) is the reversed one."""
+    m = cobra.Model("lateflip")
+    mets = {i: cobra.Metabolite(i, name=i, compartment="c") for i in "AYQW"}
+    spec = [("R1", {"A": 1, "Y": 1}, 0), ("R2", {"A": -1, "Y": 1}, 0), ("R3", {"Q": -1}, 0),
+            ("R4", {"W": -1, "Y": 1}, -1000), ("R5", {"W": 1}, 0), ("R6", {"W": -1}, 0)]
+    for rid, stoichiometry, lb in spec:
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        r.add_metabolites({mets[k]: v for k, v in stoichiometry.items()})
+        m.add_reactions([r])
+
+    reduced, orig_ids, group_ids, reversed_rxns = merge_linear(m)
+    assert group_ids == [1, 1, 0, 1, 0, 0]
+    assert [rid for rid, flag in zip(orig_ids, reversed_rxns, strict=True) if flag] == ["R4"]
+    assert sorted(r.id for r in reduced.reactions) == ["R1", "R3", "R5", "R6"]
+
+
 def test_group_scores_zero_handling():
     """Genuine-zero score → 0.01; a group cancelling to zero with nonzero members → 0.01."""
     reduced, orig_ids, group_ids, _ = merge_linear(make_test_model())
