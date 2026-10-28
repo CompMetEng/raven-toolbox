@@ -15,10 +15,16 @@ Milestones in the raven-toolbox port. For function-level status see
   compartment suffix to the merged compartment (`ACCOA_s`). The merged metabolite also keeps
   the annotation of that copy (was: dropped), and `drop_single_metabolite_reactions` defaults to
   `False`, as RAVEN's `deleteRxnsWithOneMet` (was: `True`).
-* `localization.assign_compartments`, `apply_assignment`, `relocate_reactions` and
-  `curation_priority`: the default metabolite key also strips a trailing `_<compartment>` suffix
-  that names a compartment of the model, the universal model, the scores or the placements, so
-  the merged `ACCOA_c` in `s` and a universal `ACCOA_m` share the key `ACCOA`.
+* `manipulation.merge_compartments` stores the base id of each merged metabolite in
+  `notes["merged_base_id"]` (`ACCOA` for the kept `ACCOA_c`; the own id when two merged
+  metabolites would get the same base id). The default metabolite key of
+  `localization.assign_compartments`, `apply_assignment`, `relocate_reactions` and
+  `curation_priority` is that stored base id, otherwise the id without the suffix of the
+  metabolite's own compartment, so the merged `ACCOA_c` in `s` and a universal `ACCOA_m` share
+  the key `ACCOA`. The four functions raise `ValueError` when two metabolites in one
+  compartment have the same key (was: one of them stood for both).
+* `io.read_yaml_model` puts the notes that `write_yaml_model` writes as a `notes` mapping (notes
+  without a RAVEN field) back into `notes` (was: nested under `notes["note"]`).
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

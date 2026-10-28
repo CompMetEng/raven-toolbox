@@ -27,8 +27,8 @@ import cobra
 
 from raven_toolbox.localization.assign import (
     AssignmentProposal,
-    _default_base,
-    _known_compartments,
+    _base_met,
+    _check_unique_keys,
     apply_assignment,
 )
 from raven_toolbox.localization.curation import _is_impermeant
@@ -117,12 +117,8 @@ def relocate_reactions(
     removes a transport of species ``b`` at a reaction's old compartment when nothing else uses ``b``
     there any more. The transport repair only touches species of the moved reactions.
     """
-    if base_metabolite is not None:
-        base = base_metabolite
-    else:
-        base = _default_base(_known_compartments(
-            model, universal, [default_compartment], decisions.values(),
-            *proposal.placements.values()))
+    base = base_metabolite if base_metabolite is not None else _base_met
+    _check_unique_keys(model.metabolites, base)
     floor = float(min_growth if min_growth is not None else proposal.min_growth)
     warnings: list[str] = []
 

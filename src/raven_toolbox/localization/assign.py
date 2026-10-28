@@ -25,48 +25,43 @@ from dataclasses import dataclass, field
 
 import cobra
 
+from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
 __all__ = ["AssignmentProposal", "GrowthCondition", "apply_assignment"]
 
 
 # --------------------------------------------------------------------------- helpers
 def _base_met(m: cobra.Metabolite) -> str:
+    """The default compartment-agnostic key of a metabolite.
+
+    The base id that :func:`~raven_toolbox.manipulation.merge_compartments` stored in
+    ``notes["merged_base_id"]``, if there is one; otherwise the id without the trailing
+    ``_<compartment>`` suffix of the metabolite's own compartment.
+    """
+    stored = (m.notes or {}).get(MERGED_BASE_ID_NOTE)
+    if isinstance(stored, str) and stored:
+        return stored
     if m.compartment and m.id.endswith(f"_{m.compartment}"):
         return m.id[: -(len(m.compartment) + 1)]
     return m.id
 
 
-def _default_base(compartments: Iterable[str]) -> Callable[[cobra.Metabolite], str]:
-    """The default compartment-agnostic key: the id without a trailing ``_<compartment>`` suffix,
-    for the metabolite's own compartment or for any of ``compartments``.
-
-    A metabolite of a :func:`~raven_toolbox.manipulation.merge_compartments` model keeps the id of
-    one of its copies, so ``ACCOA_c`` in ``s`` has the key ``ACCOA``, the key of ``ACCOA_m`` of a
-    universal model. Callers pass the compartments of the model, the universal model, the scores and
-    the placements.
-    """
-    suffixes = sorted({f"_{c}" for c in compartments if c}, key=len, reverse=True)
-
-    def base(m: cobra.Metabolite) -> str:
-        own = _base_met(m)
-        if own != m.id:
-            return own
-        for sfx in suffixes:
-            if len(m.id) > len(sfx) and m.id.endswith(sfx):
-                return m.id[: -len(sfx)]
-        return m.id
-
-    return base
-
-
-def _known_compartments(model: cobra.Model, universal: cobra.Model | None,
-                        *others: Iterable[str]) -> set[str]:
-    """Compartment ids of ``model``, of ``universal`` and of ``others``."""
-    comps = set(model.compartments)
-    if universal is not None:
-        comps |= set(universal.compartments)
-    for extra in others:
-        comps |= set(extra)
-    return comps
+def _check_unique_keys(metabolites: Iterable[cobra.Metabolite],
+                       base: Callable[[cobra.Metabolite], str]) -> None:
+    """Raise :class:`ValueError` when two metabolites in one compartment have the same key, which
+    would make them one species."""
+    seen: dict[tuple[str, str], str] = {}
+    clashes: list[str] = []
+    for m in metabolites:
+        key = (base(m), m.compartment)
+        if key in seen and seen[key] != m.id:
+            clashes.append(f"{seen[key]} and {m.id} (key {key[0]!r} in {key[1]!r})")
+        else:
+            seen.setdefault(key, m.id)
+    if clashes:
+        raise ValueError("metabolites with the same key in one compartment: "
+                         + "; ".join(clashes[:5])
+                         + "; pass a base_metabolite that tells them apart")
 
 
 def _rxn_compartment(rxn: cobra.Reaction) -> str | None:
@@ -156,18 +151,14 @@ def apply_assignment(
     ``default_compartment`` is the hub compartment star-topology transports route through. Pass the
     same ``base_metabolite`` and ``universal`` used in :func:`assign_compartments` so the same
     compartment-agnostic keying is used (existing per-compartment metabolites are reused rather than
-    duplicated) and the chosen gap-fill reactions are added. The default key is the id without a
-    trailing ``_<compartment>`` suffix, for the metabolite's own compartment or for a compartment of
-    the model, ``universal`` or the proposal, so a merged ``ACCOA_c`` in ``s`` and a universal
-    ``ACCOA_m`` share the key ``ACCOA``.
+    duplicated) and the chosen gap-fill reactions are added. The default key is the base id that
+    :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged metabolite, otherwise
+    the id without the suffix of the metabolite's own compartment. :class:`ValueError` when two
+    metabolites in one compartment of ``model`` have the same key.
     """
     out = model.copy()
-    if base_metabolite is not None:
-        base = base_metabolite
-    else:
-        base = _default_base(_known_compartments(
-            model, universal, [default_compartment], *proposal.placements.values(),
-            [c for _, c in proposal.added_transports]))
+    base = base_metabolite if base_metabolite is not None else _base_met
+    _check_unique_keys(out.metabolites, base)
 
     # (base key, compartment) -> existing metabolite, so a reaction moved into a compartment
     # reuses the species already there instead of creating a parallel duplicate.
@@ -180,10 +171,13 @@ def apply_assignment(
         met = index.get(key)
         if met is None:
             new_id = f"{template.id}__{compartment}"
-            met = (out.metabolites.get_by_id(new_id) if new_id in out.metabolites
-                   else cobra.Metabolite(new_id, name=template.name, compartment=compartment,
-                                         formula=template.formula, charge=template.charge))
-            if new_id not in out.metabolites:
+            if new_id in out.metabolites:
+                met = out.metabolites.get_by_id(new_id)
+            else:
+                met = cobra.Metabolite(new_id, name=template.name, compartment=compartment,
+                                       formula=template.formula, charge=template.charge)
+                if MERGED_BASE_ID_NOTE in (template.notes or {}):
+                    met.notes[MERGED_BASE_ID_NOTE] = template.notes[MERGED_BASE_ID_NOTE]
                 out.add_metabolites([met])
             index[key] = met
         return met

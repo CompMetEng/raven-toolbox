@@ -259,9 +259,50 @@ def test_merge_compartments_keeps_the_annotation_and_notes_of_the_chosen_copy():
     merged, _, _ = merge_compartments(m, base_metabolite=lambda mm: mm.name)
     kept = merged.metabolites.ACCOA_c
     assert dict(kept.annotation) == {"chebi": "CHEBI:2", "kegg.compound": "C00024"}
-    assert kept.notes == {"note": "cytosolic copy"}
+    assert kept.notes == {"note": "cytosolic copy", "merged_base_id": "ACCOA"}
     kept.annotation["chebi"] = "changed"
     assert m.metabolites.ACCOA_c.annotation["chebi"] == "CHEBI:2"
+
+
+def test_merge_compartments_stores_the_base_id_of_each_merged_metabolite():
+    """The base id is the kept copy's id without the suffix of the compartment it came from."""
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    merged, _, _ = merge_compartments(_two_compartment_model())
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in merged.metabolites} == {"A_c": "A", "B_c": "B"}
+    named, _, _ = merge_compartments(_name_keyed_model(), base_metabolite=lambda x: x.name)
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in named.metabolites} == {"s_1": "s_1", "s_3": "s_3"}
+
+
+def test_merge_compartments_stores_the_own_id_when_two_base_ids_coincide():
+    """X_c (name X) and X_m (name X mito) are kept apart by a name key; their base ids are both X,
+    so each stores its own id and the two stay distinct species."""
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    m = cobra.Model("m")
+    m.add_metabolites([cobra.Metabolite("X_c", name="X", compartment="c"),
+                       cobra.Metabolite("X_m", name="X mito", compartment="m"),
+                       cobra.Metabolite("Y_c", name="Y", compartment="c")])
+    merged, _, _ = merge_compartments(m, base_metabolite=lambda x: x.name)
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in merged.metabolites} == {
+        "X_c": "X_c", "X_m": "X_m", "Y_c": "Y"}
+
+
+def test_merged_base_id_survives_copy_and_model_files(tmp_path):
+    from raven_toolbox.io import read_yaml_model, write_yaml_model
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    m = _two_compartment_model()
+    m.metabolites.A_c.notes = {"note": "free text"}
+    merged, _, _ = merge_compartments(m)
+    write_yaml_model(merged, tmp_path / "m.yml")
+    cobra.io.write_sbml_model(merged, str(tmp_path / "m.xml"))
+    for model in (merged.copy(), read_yaml_model(tmp_path / "m.yml"),
+                  cobra.io.from_json(cobra.io.to_json(merged)),
+                  cobra.io.read_sbml_model(str(tmp_path / "m.xml"))):
+        assert model.metabolites.A_c.notes[MERGED_BASE_ID_NOTE] == "A"
+        assert model.metabolites.B_c.notes[MERGED_BASE_ID_NOTE] == "B"
+    assert read_yaml_model(tmp_path / "m.yml").metabolites.A_c.notes["note"] == "free text"
 
 
 # ----------------------------------------------------------------- copy_to_compartment

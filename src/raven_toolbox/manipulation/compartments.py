@@ -18,6 +18,10 @@ import cobra
 # Compartments produced by merge_compartments (RAVEN uses 's' for "system").
 _MERGED_COMPARTMENT = "s"
 
+#: Key in ``Metabolite.notes`` where :func:`merge_compartments` stores the base id of a merged
+#: metabolite, read by the default metabolite key of :mod:`raven_toolbox.localization`.
+MERGED_BASE_ID_NOTE = "merged_base_id"
+
 
 def merge_compartments(
     model: cobra.Model,
@@ -64,7 +68,23 @@ def merge_compartments(
     already had a single metabolite before merging is an exchange (``=> glucose``) and is always
     kept, as in RAVEN; dropping those would remove the model's medium and its biomass reaction.
     Reactions that become identical after merging are deduplicated (one survives). The
-    objective is carried over to the returned model.
+    objective is carried over to the returned model. ``deleted_single_met_reactions`` lists the
+    reactions whose metabolites all cancelled and, with ``drop_single_metabolite_reactions=True``,
+    those reduced to one metabolite. RAVEN's ``deletedRxns`` lists only the latter, so it is empty
+    with ``deleteRxnsWithOneMet`` off.
+
+    Each merged metabolite stores its base id in ``notes["merged_base_id"]``
+    (:data:`MERGED_BASE_ID_NOTE`): the id of the kept copy without the suffix of the compartment it
+    came from (``ACCOA`` for ``ACCOA_c``). The default metabolite key of
+    :func:`~raven_toolbox.localization.assign_compartments`,
+    :func:`~raven_toolbox.localization.apply_assignment`,
+    :func:`~raven_toolbox.localization.relocate_reactions` and
+    :func:`~raven_toolbox.localization.curation_priority` reads it, so the merged ``ACCOA_c`` in
+    ``s`` and ``ACCOA_m`` of a universal model are the same species there. When two merged
+    metabolites would get the same base id (a ``base_metabolite`` that keeps ``X_c`` and ``X_m``
+    apart), both store their own id instead, so they stay distinct species. The note survives
+    ``model.copy()``, cobra's JSON and SBML files and :func:`~raven_toolbox.io.write_yaml_model`
+    with :func:`~raven_toolbox.io.read_yaml_model`.
     """
     out = model.copy()
     key = base_metabolite if base_metabolite is not None else _base_id
@@ -79,15 +99,22 @@ def merge_compartments(
     # 2. Build the merged metabolites and rewrite reactions. Each merged metabolite is a copy of one
     #    member, chosen as the docstring states. Groups are disjoint and model ids are unique, so the
     #    chosen ids are unique too.
-    canonical: dict[str, cobra.Metabolite] = {}
+    protos = {}
     for base, mets in new_to_old.items():
         in_target = [m for m in mets if m.compartment == merged_id]
-        proto = min(in_target or mets, key=lambda m: m.id)
+        protos[base] = min(in_target or mets, key=lambda m: m.id)
+    base_id_count: dict[str, int] = {}
+    for proto in protos.values():
+        base_id_count[_base_id(proto)] = base_id_count.get(_base_id(proto), 0) + 1
+    canonical: dict[str, cobra.Metabolite] = {}
+    for base, proto in protos.items():
         mid = proto.id
         new_met = cobra.Metabolite(mid, name=proto.name, compartment=merged_id,
                                     formula=proto.formula, charge=proto.charge)
         new_met.notes = copy.deepcopy(proto.notes or {})
         new_met.annotation = copy.deepcopy(proto.annotation or {})
+        stored = _base_id(proto)
+        new_met.notes[MERGED_BASE_ID_NOTE] = stored if base_id_count[stored] == 1 else mid
         new_met._bound = proto._bound
         canonical[base] = new_met
 
