@@ -99,6 +99,26 @@ def test_multipass_chain_collapses_to_one_group():
     assert {mt.id: c for mt, c in only.metabolites.items()} == {"A": -1.0, "Z": 1.0}
 
 
+def test_groups_are_numbered_by_their_first_reaction():
+    """Group numbers follow the first reaction of each group in the original model, not the
+    merge order. Here R3+R4 merge before R1+R2's group reaches them, and the merge of two
+    groups keeps the larger number, so numbering by merge order gives 2, 2, 2, 2, 3, 3."""
+    m = cobra.Model("numbering")
+    mets = {i: cobra.Metabolite(i, name=i, compartment="c") for i in ("x", "a", "m", "b", "y", "z", "c", "w")}
+    m.add_metabolites(list(mets.values()))
+    chain = [("R1", "x", "a"), ("R2", "a", "m"), ("R3", "m", "b"), ("R4", "b", "y"),
+             ("R5", "z", "c"), ("R6", "c", "w")]
+    for rid, sub, prod in chain:
+        r = cobra.Reaction(rid, lower_bound=0, upper_bound=1000)
+        r.add_metabolites({mets[sub]: -1, mets[prod]: 1})
+        m.add_reactions([r])
+
+    reduced, orig_ids, group_ids, _ = merge_linear(m)
+    assert orig_ids == ["R1", "R2", "R3", "R4", "R5", "R6"]
+    assert group_ids == [1, 1, 1, 1, 2, 2]
+    assert sorted(r.id for r in reduced.reactions) == ["R1", "R5"]
+
+
 def test_group_scores_zero_handling():
     """Genuine-zero score → 0.01; a group cancelling to zero with nonzero members → 0.01."""
     reduced, orig_ids, group_ids, _ = merge_linear(make_test_model())

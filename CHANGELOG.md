@@ -6,6 +6,9 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `init.merge_linear` numbers the merged groups 1, 2, ... in the order of the first reaction
+  of each group in the original model, as RAVEN's `mergeLinear` does, so `group_ids` no
+  longer depends on the merge order.
 * `manipulation.merge_compartments` gives a merged metabolite the id of the copy already in
   the merged compartment, if any, otherwise the id that sorts first (`ACCOA_c` for `ACCOA_c`
   and `ACCOA_m`), as RAVEN's `mergeCompartments` does. It rewrote the first member's
