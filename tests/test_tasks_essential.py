@@ -4,6 +4,11 @@ Oracle: RAVEN tinitTests T0002 — for testModel + the "make e[s] from a[s]" tas
 pre-merge essential reactions are R2 (the only a[s]<->a[c] link) and R7 (the only
 e[c]->e[s] producer); the alternative internal paths make nothing else essential.
 """
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import cobra
 import pytest
 from tinit_oracles import (
@@ -212,3 +217,26 @@ def test_duplicate_name_comp_metabolites_both_constrained():
         res = find_task_essential_reactions(m, [task])
     assert res.failed_tasks == []  # 'a[s]' resolved (to both a1 and a2), task feasible
     assert "R1" in res.reactions
+
+
+_ORDER_SCRIPT = """
+from tinit_oracles import make_test_model, make_test_task
+from raven_toolbox.tasks import find_task_essential_reactions
+res = find_task_essential_reactions(make_test_model(), [make_test_task()])
+print(",".join(res.reactions))
+"""
+
+
+def test_essential_set_and_order_do_not_depend_on_hash_seed():
+    """Candidates are taken in model reaction order, whatever PYTHONHASHSEED is."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parent)] + [p for p in sys.path if p]
+    )
+    outputs = set()
+    for seed in ("0", "1", "2", "3", "4", "5"):
+        env["PYTHONHASHSEED"] = seed
+        run = subprocess.run([sys.executable, "-c", _ORDER_SCRIPT], env=env,
+                             capture_output=True, text=True, check=True)
+        outputs.add(run.stdout.strip().splitlines()[-1])
+    assert outputs == {"R2,R7"}

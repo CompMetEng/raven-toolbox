@@ -336,7 +336,11 @@ def _task_essential_reactions(
     Returns ``{reaction id: +1 forward | -1 reverse}``.
     """
     fluxes = pfba(task_model).fluxes
-    candidates = [rid for rid in original_ids if abs(fluxes.get(rid, 0.0)) > 1e-12]
+    # Model reaction order, so the candidate order does not depend on the hash seed.
+    candidates = [
+        r.id for r in task_model.reactions
+        if r.id in original_ids and abs(fluxes.get(r.id, 0.0)) > 1e-12
+    ]
 
     n_to_check = len(candidates)
     minimize = True
