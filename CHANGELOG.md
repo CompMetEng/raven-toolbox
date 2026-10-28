@@ -6,6 +6,12 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `gapfilling.analyse_topology` takes RAVEN's `gapFillTopological` defaults. Seeds: the
+  metabolites of every reaction with only substrates and `lower_bound < 0` or only products
+  and `upper_bound > 0`, whatever its number of metabolites (was: one-metabolite reactions with
+  `lower_bound < 0`); a `UserWarning` when there is none (was: a message only when `verbose`).
+  Targets: the metabolites of the first objective reaction, substrates and products (was: every
+  metabolite of the model); `ValueError` when the model has no objective.
 * New: `utils.parse_gr_rule` reads a grRule in the grammar of RAVEN's `parseGrRule`
   (`and`/`or` in any case, `&`, `&&`, `|`, `||`, operators as whole words). `manipulation.gpr_to_dnf`
   now also takes a rule string and reads it with this parser, as RAVEN's `grRuleToDNF` does;
