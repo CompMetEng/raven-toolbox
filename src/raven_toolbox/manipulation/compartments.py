@@ -9,6 +9,7 @@ constructing dual-localised pathways. cobra has no equivalents.
 """
 from __future__ import annotations
 
+import copy
 import warnings
 from collections.abc import Callable, Iterable
 
@@ -24,7 +25,7 @@ def merge_compartments(
     merged_id: str = _MERGED_COMPARTMENT,
     merged_name: str = "system",
     base_metabolite: Callable[[cobra.Metabolite], str] | None = None,
-    drop_single_metabolite_reactions: bool = True,
+    drop_single_metabolite_reactions: bool = False,
     deduplicate_reactions: bool = True,
 ) -> tuple[cobra.Model, list[str], list[str]]:
     """Merge every metabolite of ``model`` into one ``merged_id`` compartment.
@@ -48,19 +49,20 @@ def merge_compartments(
     yeast-GEM's ``s_####`` ids — need ``base_metabolite=lambda m: m.name`` (or an annotation
     key) so the compartments actually unify; pass the same callable to
     :func:`~raven_toolbox.localization.assign_compartments`. The key **only decides grouping**. The
-    merged metabolite keeps the id, name, formula, charge and notes of one of its copies, never an id
-    minted from the key: the copy already in ``merged_id`` if there is one, otherwise the copy whose id
-    sorts first (``ACCOA_c`` before ``ACCOA_m``); among several copies in ``merged_id`` the one whose id
-    sorts first. RAVEN's ``mergeCompartments`` applies the same rule. The id can therefore name a
+    merged metabolite keeps the id, name, formula, charge, annotation and notes of one of its copies,
+    never an id minted from the key: the copy already in ``merged_id`` if there is one, otherwise
+    the copy whose id sorts first (``ACCOA_c`` before ``ACCOA_m``); among several copies in
+    ``merged_id`` the one whose id sorts first. RAVEN's ``mergeCompartments`` applies the same rule. The id can therefore name a
     compartment that no longer exists. A name-based key like ``"1-acyl-sn-glycerol 3-phosphate (16:0)"``
     unifies the copies while the merged id stays the model's own, already solver/SBML-safe identifier.
 
     Metabolites that share a key collapse into one entity in the merged compartment; their
-    stoichiometric contributions are summed per reaction. Reactions that *become* trivial
-    through the merge (e.g. ``A[c] → A[m]`` becomes ``A → A`` = nothing) are deleted by
-    default (RAVEN's ``deleteRxnsWithOneMet``). A reaction that already had a single
-    metabolite before merging is an exchange (``=> glucose``) and is always kept —
-    dropping those would silently remove the model's medium and its biomass reaction.
+    stoichiometric contributions are summed per reaction. A reaction whose metabolites all cancel
+    (``A[c] → A[m]`` becomes ``A → A``) is always deleted. With
+    ``drop_single_metabolite_reactions=True`` (RAVEN's ``deleteRxnsWithOneMet``; default ``False``
+    on both sides) a reaction reduced to one metabolite by the merge is deleted too. A reaction that
+    already had a single metabolite before merging is an exchange (``=> glucose``) and is always
+    kept, as in RAVEN; dropping those would remove the model's medium and its biomass reaction.
     Reactions that become identical after merging are deduplicated (one survives). The
     objective is carried over to the returned model.
     """
@@ -84,7 +86,9 @@ def merge_compartments(
         mid = proto.id
         new_met = cobra.Metabolite(mid, name=proto.name, compartment=merged_id,
                                     formula=proto.formula, charge=proto.charge)
-        new_met.notes = dict(proto.notes or {})
+        new_met.notes = copy.deepcopy(proto.notes or {})
+        new_met.annotation = copy.deepcopy(proto.annotation or {})
+        new_met._bound = proto._bound
         canonical[base] = new_met
 
     # Rewrite all reactions: replace each metabolite with its canonical, summing

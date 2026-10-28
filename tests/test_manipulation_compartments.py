@@ -111,6 +111,10 @@ def test_merge_compartments_keeps_single_met_reactions_when_asked():
     # With keep, sym survives as a one-met reaction (consumes H).
     assert "sym" not in deleted_keep
     assert "sym" in {r.id for r in merged_keep.reactions}
+    merged_default, deleted_default, _ = merge_compartments(m)
+    # The default is RAVEN's deleteRxnsWithOneMet default, false.
+    assert "sym" in {r.id for r in merged_default.reactions}
+    assert deleted_default == deleted_keep
 
 
 def test_merge_compartments_keeps_pre_existing_exchange_reactions():
@@ -244,6 +248,20 @@ def test_merge_compartments_prefers_the_copy_in_the_merged_compartment():
     merged, _, _ = merge_compartments(_acetyl_coa_model(("ACCOA_c", "c"), ("ACCOA_z", "s")),
                                       base_metabolite=lambda mm: mm.name)
     assert {x.id for x in merged.metabolites} == {"ACCOA_z", "X_c"}
+
+
+def test_merge_compartments_keeps_the_annotation_and_notes_of_the_chosen_copy():
+    """RAVEN keeps every field of the kept row, metMiriams included."""
+    m = _acetyl_coa_model(("ACCOA_m", "m"), ("ACCOA_c", "c"))
+    m.metabolites.ACCOA_m.annotation = {"chebi": "CHEBI:1"}
+    m.metabolites.ACCOA_c.annotation = {"chebi": "CHEBI:2", "kegg.compound": "C00024"}
+    m.metabolites.ACCOA_c.notes = {"note": "cytosolic copy"}
+    merged, _, _ = merge_compartments(m, base_metabolite=lambda mm: mm.name)
+    kept = merged.metabolites.ACCOA_c
+    assert dict(kept.annotation) == {"chebi": "CHEBI:2", "kegg.compound": "C00024"}
+    assert kept.notes == {"note": "cytosolic copy"}
+    kept.annotation["chebi"] = "changed"
+    assert m.metabolites.ACCOA_c.annotation["chebi"] == "CHEBI:2"
 
 
 # ----------------------------------------------------------------- copy_to_compartment
