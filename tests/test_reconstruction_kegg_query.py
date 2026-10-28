@@ -174,3 +174,25 @@ def test_prune_orthology_keeps_only_matched_kos():
     # Default (organism path) keeps the full reference KO list.
     full, _ = assemble_model_from_ko_genes(ref, ko_reaction, ko_to_genes)
     assert full.reactions.get_by_id("R1").annotation["kegg.orthology"] == ["K1", "K2", "K3"]
+
+
+def test_hmmsearch_threads_default_to_every_available_cpu(tmp_path, monkeypatch):
+    """As RAVEN's getKEGGModelForOrganism, which passes feature('numcores')'s assigned count."""
+    import subprocess
+
+    import raven_toolbox.reconstruction.kegg.query as query
+
+    calls = []
+    monkeypatch.setattr(query, "_available_cpus", lambda: 7)
+    monkeypatch.setattr(query, "resolve_binary", lambda name, binary=None: name)
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        open(cmd[cmd.index("--tblout") + 1], "w").close()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(query.subprocess, "run", fake_run)
+    library = tmp_path / "lib.hmm"
+    library.write_text("HMMER3/f\n")
+    query.run_hmmsearch("org.faa", library)
+    assert calls[0][calls[0].index("--cpu") + 1] == "7"
