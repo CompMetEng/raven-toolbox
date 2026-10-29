@@ -6,6 +6,8 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `io.read_yaml_model` reads an ec reaction written as `- enzymes: !!omap` with nothing under the tag, the form GECKO and RAVEN write for a reaction without enzymes, as a reaction with no enzymes, as `readYAMLmodel` does. It raised `AttributeError: 'ScalarNode' object has no attribute 'flow_style'`.
+* `io.read_yaml_model` reads a scalar written as `""text""` (invalid YAML, written by older RAVEN and GECKO for a note that carried its own quotes) as `"text"`, as `readYAMLmodel` does. Files that parse as YAML are read unchanged.
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

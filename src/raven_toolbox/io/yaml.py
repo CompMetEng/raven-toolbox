@@ -49,8 +49,10 @@ from pathlib import Path
 
 import cobra
 from cobra.io.dict import model_from_dict, model_to_dict
-from cobra.io.yaml import yaml as _cobra_yaml  # ruamel round-trip YAML (handles !!omap)
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from raven_toolbox.io.ec_data import (
@@ -59,11 +61,10 @@ from raven_toolbox.io.ec_data import (
     ec_data_to_yaml_sections,
 )
 
-# A dedicated instance for *writing* only (reading still goes through
-# _cobra_yaml, whose parsing is unaffected by any of this). Mutating
-# _cobra_yaml's own width would also change cobra.io.save_yaml_model for
-# the rest of the process, so this module gets its own ruamel round-trip
-# instance instead. `width` is set far past any real line length so
+# A dedicated instance for *writing* only (reading uses _read_yaml below).
+# Mutating cobra's own YAML instance would change its width for
+# cobra.io.save_yaml_model in the rest of the process, so this module gets its own
+# ruamel round-trip instance instead. `width` is set far past any real line length so
 # ruamel never folds a long scalar onto a continuation line, matching
 # writeYAMLmodel.m. `indent` is pinned explicitly (to the values ruamel
 # already used implicitly, verified byte-identical) rather than left for
@@ -81,6 +82,59 @@ from raven_toolbox.io.ec_data import (
 _write_yaml = YAML(typ="rt")
 _write_yaml.width = 1_000_000
 _write_yaml.indent(mapping=2, sequence=2, offset=0)
+
+
+class _OmapConstructor(RoundTripConstructor):
+    """Round-trip constructor that reads a content-less ``!!omap`` as an empty map.
+
+    GECKO and RAVEN write an ec reaction without enzymes as ``- enzymes: !!omap``
+    with nothing under the tag. YAML parses that as a null scalar carrying the omap
+    tag, which ruamel's own constructor rejects; RAVEN's ``readYAMLmodel.m`` reads
+    it as an empty enzyme list.
+    """
+
+    def construct_yaml_omap(self, node):
+        if isinstance(node, ScalarNode) and not node.value:
+            yield OrderedDict()
+            return
+        yield from super().construct_yaml_omap(node)
+
+
+_OmapConstructor.add_constructor("tag:yaml.org,2002:omap", _OmapConstructor.construct_yaml_omap)
+
+# A dedicated instance for *reading*, so the constructor above does not change
+# cobra.io.load_yaml_model for the rest of the process.
+_read_yaml = YAML(typ="rt")
+_read_yaml.Constructor = _OmapConstructor
+
+# A scalar written as `""text""` (two quotes on each side), the shape older RAVEN
+# and GECKO writers gave to a note that already carried its own quotes. It is not
+# valid YAML. `readYAMLmodel.m` strips one pair of quotes per line and unescapes
+# `\\` and `\"` in what is left, so the value is `"text"`.
+_DOUBLED_QUOTES = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)"(?P<body>".*")"\s*$"""
+)
+
+
+def _fix_doubled_quotes(text: str) -> str:
+    """Rewrite every ``""text""`` scalar as the single-quoted scalar ``'"text"'``."""
+
+    def fix(match: re.Match) -> str:
+        inner = re.sub(r'\\(["\\])', r"\1", match["body"])
+        return f"{match['head']}'{inner.replace(chr(39), chr(39) * 2)}'"
+
+    return "\n".join(_DOUBLED_QUOTES.sub(fix, line) for line in text.split("\n"))
+
+
+def _load_yaml_text(text: str):
+    """Parse ``text`` strictly; when that fails, retry with doubled quotes repaired."""
+    try:
+        return _read_yaml.load(text)
+    except YAMLError:
+        repaired = _fix_doubled_quotes(text)
+        if repaired == text:
+            raise
+        return _read_yaml.load(repaired)
 
 
 def _open_text(path: str | Path, mode: str):
@@ -166,7 +220,7 @@ def read_yaml_model(path: str | Path) -> cobra.Model:
     latter is merged into one mapping before parsing.
     """
     with _open_text(path, "r") as handle:
-        raw = _to_plain(_cobra_yaml.load(handle))
+        raw = _to_plain(_load_yaml_text(handle.read()))
 
     if isinstance(raw, list):
         # Very old RAVEN files: a sequence of one-key mappings instead of
