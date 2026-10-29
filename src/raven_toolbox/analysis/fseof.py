@@ -27,6 +27,13 @@ from cobra.flux_analysis import pfba
 from scipy.stats import linregress
 
 
+# pFBA keeps the objective at this fraction of the optimum found at the same level, as
+# RAVEN's solveLP does when it minimises the flux sum (``solution.f*0.999999``). A solver
+# reports its optimum to within its feasibility tolerance, so a second solve that demands
+# the full value can be infeasible on that solver (HiGHS at the top level of ecYeastGEM).
+_PFBA_FRACTION = 0.999999
+
+
 @dataclass
 class FSEOFResult:
     """FSEOF output.
@@ -102,6 +109,10 @@ def fseof(
         it is ``knockout`` when the slope is negative and the last absolute flux is at most
         1e-8, ``knockdown`` for a negative slope otherwise.
 
+        Each level is solved in two steps as in RAVEN: the objective is maximised, then the
+        flux sum is minimised with the objective held at 0.999999 of its optimum at that
+        level. A level at which the first step is infeasible ends the scan.
+
         Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
         so the last absolute flux used for the knockout label is that of the last feasible
         level; ``targets`` is sorted by ``|slope| * |r|`` and not grouped by label; and
@@ -133,7 +144,7 @@ def fseof(
                 model.objective = biomass_rxn
             model.reactions.get_by_id(target_rxn).lower_bound = level
             try:
-                columns[level] = pfba(model).fluxes
+                columns[level] = pfba(model, fraction_of_optimum=_PFBA_FRACTION).fluxes
             except OptimizationError:
                 break  # enforced flux became infeasible: stop scanning
             enforced.append(level)

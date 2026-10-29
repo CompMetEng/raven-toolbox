@@ -171,3 +171,30 @@ def test_knockout_threshold_is_1e_minus_8():
     table = _classify(m, scan, enforced, corr_threshold=0.5).set_index("reaction")
     assert table.loc["r_down", "target_type"] == "knockdown"
     assert table.loc["r_out", "target_type"] == "knockout"
+
+
+def test_pfba_holds_objective_at_matlab_fraction(model, monkeypatch):
+    # RAVEN's solveLP minimises the flux sum with the objective fixed at 0.999999 of its optimum,
+    # so a solver whose optimum overshoots by its tolerance still has a feasible second step.
+    import importlib
+
+    module = importlib.import_module("raven_toolbox.analysis.fseof")
+
+    fractions = []
+    real = module.pfba
+
+    def spy(m, **kwargs):
+        fractions.append(kwargs.get("fraction_of_optimum"))
+        return real(m, **kwargs)
+
+    monkeypatch.setattr(module, "pfba", spy)
+    res = fseof(model, "EX_P", n_steps=4)
+    assert len(fractions) >= len(res.enforced) >= 2
+    assert set(fractions) == {0.999999}
+
+
+def test_level_with_infeasible_maximisation_ends_the_scan(model):
+    # The theoretical maximum of EX_P is 10; levels above it cannot be enforced and are not
+    # reported, however the second pFBA step is tolerated.
+    res = fseof(model, "EX_P", n_steps=4, max_fraction=2.0)
+    assert res.enforced == pytest.approx([5.0, 10.0])

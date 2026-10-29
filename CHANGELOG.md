@@ -6,6 +6,7 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `analysis.fseof` (and so `geckopy.ec_fseof`) solves each level with pFBA that holds the objective at 0.999999 of its optimum at that level, as RAVEN's `solveLP` does, where it held the full value. On the scipy solver (HiGHS) the optimum is only accurate to the solver's feasibility tolerance, so the second step was infeasible at the top level of ecYeastGEM and the scan returned 9 of 10 levels; it now returns all 10, as on Gurobi and GLPK. A level at which the biomass maximisation is infeasible still ends the scan.
 * `io.read_yaml_model` reads an ec reaction written as `- enzymes: !!omap` with nothing under the tag, the form GECKO and RAVEN write for a reaction without enzymes, as a reaction with no enzymes, as `readYAMLmodel` does. It raised `AttributeError: 'ScalarNode' object has no attribute 'flow_style'`.
 * `io.read_yaml_model` reads a scalar written as `""text""` (invalid YAML, written by older RAVEN and GECKO for a note that carried its own quotes) as `"text"`, as `readYAMLmodel` does. Files that parse as YAML are read unchanged.
 * `io.read_yaml_model` reads a double-quoted scalar with an unescaped quote inside, such as `- notes: "a "b" c"`, as `a "b" c`: it drops the outer pair of quotes and unescapes `\\` and `\"`, as `readYAMLmodel` does. This repair runs only when the strict parse fails.
