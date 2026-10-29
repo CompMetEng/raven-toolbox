@@ -526,6 +526,34 @@ def test_interior_unescaped_quote_is_kept_like_matlab(tmp_path, note, expected):
     assert model.ec.rxns == ["std", "enz"]
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("'it's'", "it's"),
+        ("'a 'b' c'", "a 'b' c"),
+        ("'it's ''x'' z'", "it's 'x' z"),
+        ("'say \"hi\" it's'", 'say "hi" it\'s'),
+    ],
+)
+def test_interior_apostrophe_in_single_quoted_value_is_kept_like_matlab(tmp_path, value, expected):
+    # readYAMLmodel.m strips the outer pair of quotes and turns each '' into ', keeping a lone '.
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note='"ok"', empty="").replace('- name: "A"', f"- name: {value}")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == expected
+    assert model.ec.rxns == ["std", "enz"]
+
+
+def test_valid_single_quoted_values_are_read_unchanged(tmp_path):
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note="'a ''b'' c'", empty="").replace('- name: "A"', "- name: 'it''s'")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == "it's"
+    assert model.ec.notes[0] == "a 'b' c"
+
+
 def test_valid_quoted_scalars_are_read_unchanged_next_to_a_repaired_one(tmp_path):
     path = tmp_path / "m.yml"
     text = _GECKO_FILE.format(note='"a "b" c"', empty="").replace(

@@ -10,6 +10,7 @@ Milestones in the raven-toolbox port. For function-level status see
 * `io.read_yaml_model` reads an ec reaction written as `- enzymes: !!omap` with nothing under the tag, the form GECKO and RAVEN write for a reaction without enzymes, as a reaction with no enzymes, as `readYAMLmodel` does. It raised `AttributeError: 'ScalarNode' object has no attribute 'flow_style'`.
 * `io.read_yaml_model` reads a scalar written as `""text""` (invalid YAML, written by older RAVEN and GECKO for a note that carried its own quotes) as `"text"`, as `readYAMLmodel` does. Files that parse as YAML are read unchanged.
 * `io.read_yaml_model` reads a double-quoted scalar with an unescaped quote inside, such as `- notes: "a "b" c"`, as `a "b" c`: it drops the outer pair of quotes and unescapes `\\` and `\"`, as `readYAMLmodel` does. This repair runs only when the strict parse fails.
+* `io.read_yaml_model` reads a single-quoted scalar with an apostrophe inside, such as `- name: 'it's'`, as `it's`: it drops the outer pair of quotes and reads each `''` as `'`, as `readYAMLmodel` does. This repair runs only when the strict parse fails; a comment after the closing quote is not handled.
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

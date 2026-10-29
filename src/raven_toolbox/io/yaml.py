@@ -117,6 +117,27 @@ _QUOTED_VALUE = re.compile(
 )
 
 
+# A single-quoted scalar that holds an apostrophe no second apostrophe pairs with, such as
+# `'it's'`. It is not valid YAML. `readYAMLmodel.m` strips the outer pair of quotes of the line
+# and turns each `''` in what is left into `'`, so the value is `it's`.
+_SINGLE_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)'(?P<body>.*)'\s*$"""
+)
+
+
+def _has_lone_apostrophe(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``'`` that is not half of a ``''``."""
+    i = 0
+    while i < len(body):
+        if body[i] != "'":
+            i += 1
+        elif body[i : i + 2] == "''":
+            i += 2
+        else:
+            return True
+    return False
+
+
 def _has_unescaped_quote(body: str) -> bool:
     """Whether ``body``, the text between the outer quotes, has a ``"`` that no backslash escapes."""
     i = 0
@@ -131,10 +152,13 @@ def _has_unescaped_quote(body: str) -> bool:
 
 
 def _fix_doubled_quotes(text: str) -> str:
-    """Rewrite each double-quoted scalar with an unescaped interior quote as a single-quoted scalar.
+    """Rewrite each quoted scalar with an unpaired interior quote as a valid single-quoted scalar.
 
-    The value is the text between the outer quotes with escaped backslashes and quotes
-    unescaped, as ``readYAMLmodel.m`` reads it; quoted scalars without such a quote are left alone.
+    A double-quoted scalar with an unescaped ``"`` takes the text between the outer quotes with
+    escaped backslashes and quotes unescaped as its value. A single-quoted scalar with an
+    apostrophe that no second apostrophe pairs with takes the text between the outer quotes
+    with each ``''`` read as ``'``. Both are the values ``readYAMLmodel.m`` reads; quoted
+    scalars without such a quote are left alone.
     """
 
     def fix(match: re.Match) -> str:
@@ -144,11 +168,19 @@ def _fix_doubled_quotes(text: str) -> str:
         value = re.sub(r'\\(["\\])', r"\1", body)
         return f"{match['head']}'{value.replace(chr(39), chr(39) * 2)}'"
 
-    return "\n".join(_QUOTED_VALUE.sub(fix, line) for line in text.split("\n"))
+    def fix_single(match: re.Match) -> str:
+        body = match["body"]
+        if not _has_lone_apostrophe(body):
+            return match[0]
+        return f"{match['head']}'{body.replace(chr(39) * 2, chr(39)).replace(chr(39), chr(39) * 2)}'"
+
+    return "\n".join(
+        _SINGLE_QUOTED_VALUE.sub(fix_single, _QUOTED_VALUE.sub(fix, line)) for line in text.split("\n")
+    )
 
 
 def _load_yaml_text(text: str):
-    """Parse ``text`` strictly; when that fails, retry with quotes inside double-quoted scalars repaired."""
+    """Parse ``text`` strictly; when that fails, retry with unpaired quotes inside quoted scalars repaired."""
     try:
         return _read_yaml.load(text)
     except YAMLError:
