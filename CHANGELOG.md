@@ -85,6 +85,9 @@ Milestones in the raven-toolbox port. For function-level status see
   on the solver. The id-rank phases rank a merged reaction by the smallest original reaction
   id in its group (new `run_ftinit` argument `rank_keys`), so they no longer depend on which
   member names it.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` warn (`phase2c-minflux`,
+  `phase2d-direction`) when the minimal-flux or the direction phase finds no solution, as
+  RAVEN does; the fluxes of the phase before it are kept (was: kept without a warning).
 
 ## 3.0.0b1 — 2026-09-07
 

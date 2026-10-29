@@ -188,9 +188,12 @@ def run_ftinit(
     exhaust ``time_limit``; when that happens the (still-adopted) incumbent is an
     unproven tie-break and a warning is raised. The tie-break is skipped when the primary
     solve itself stops at ``time_limit``, since there is then no proven optimum to hold.
-    After it, the reported ``fluxes`` are a least-total-flux solution for the selected on
+    Phases 2a and 2b get half of ``time_limit`` each (rounded down, at least 1 s).
+    After them, the reported ``fluxes`` are a least-total-flux solution for the selected on
     set (:func:`_min_abs_flux`) and, among those, the one with the least id-rank-weighted
-    backward flux (:func:`_min_backward_flux`). See :func:`_resolve_ties`.
+    backward flux (:func:`_min_backward_flux`), each with the full ``time_limit``. When one
+    of these two flux phases finds no solution, the fluxes of the phase before it are kept
+    and a warning is raised. See :func:`_resolve_ties`.
 
     ``rank_keys`` maps a reaction id to the key the id-rank phases of ``resolve_ties``
     sort it by (default: the id itself). :func:`ftinit` passes the smallest original
@@ -668,9 +671,9 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
 
     Returns ``(abs_expr, total, free_sign)`` if it produced a usable solution (the caller
     then reads its fluxes): the ``Σ|v|`` expression, its value and the ids of the
-    reactions whose flux can take either sign. Returns ``None`` otherwise (the caller keeps
-    the phase-2b fluxes). It never fails the extraction; a phase ending at the time limit
-    is adopted with a warning.
+    reactions whose flux can take either sign. Returns ``None`` otherwise, with a
+    ``phase2c-minflux`` warning (the caller keeps the phase-2b fluxes). It never fails the
+    extraction; a phase ending at the time limit is adopted with a warning.
     """
     # Read every value before changing a bound: a bound change discards the solution.
     values = [(ind, ind.primal or 0.0) for ind, _ in indicators.values()]
@@ -713,6 +716,12 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
         )
     if opt.status in ("optimal", "feasible", "suboptimal", "time_limit") and _has_solution(opt):
         return abs_expr, float(opt.objective.value), free_sign
+    warnings.warn(
+        "ftINIT minimal-flux phase (resolve_ties) found no solution (phase2c-minflux): "
+        "the fluxes, and hence the next step's forced directions, stay those of the "
+        "tie-broken on/off state.",
+        stacklevel=3,
+    )
     return None
 
 
@@ -732,7 +741,8 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     the full ``time_limit`` as its budget.
 
     Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
-    ``False`` otherwise (the caller keeps the phase-2c fluxes). It never fails the
+    ``False`` otherwise (the caller keeps the phase-2c fluxes), with a
+    ``phase2d-direction`` warning when the solve found nothing. It never fails the
     extraction; a phase ending at the time limit is adopted with a warning.
     """
     if not free_sign:
@@ -773,8 +783,15 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
             "for a proven solution.",
             stacklevel=3,
         )
-    return (opt.status in ("optimal", "feasible", "suboptimal", "time_limit")
-            and _has_solution(opt))
+    found = (opt.status in ("optimal", "feasible", "suboptimal", "time_limit")
+             and _has_solution(opt))
+    if not found:
+        warnings.warn(
+            "ftINIT direction phase (resolve_ties) found no solution (phase2d-direction): "
+            "the fluxes stay those of the minimal-flux phase.",
+            stacklevel=3,
+        )
+    return found
 
 
 def _nudge_scores(rxn_scores: Mapping[str, float]) -> dict[str, float]:
@@ -1011,7 +1028,8 @@ def ftinit(
         solver — applied both to each extraction step and to the task gap-fill. In each
         extraction step it then takes the fluxes from the least-total-flux solution for
         that on set, so the directions and forced magnitudes the next step reads from
-        them do not depend on the solver's vertex either.
+        them do not depend on the solver's vertex either. A step whose primary solve
+        stops at ``time_limit`` keeps its primary solution without these phases.
       * ``prove_abs_gap`` replaces the loose relative-gap escalation with a single solve per
         step proven to this fixed *absolute* gap, so the kept-set objective is optimal at
         any scale — not an arbitrary within-gap incumbent. **Try 1.0**: on Human-GEM/DLD1
