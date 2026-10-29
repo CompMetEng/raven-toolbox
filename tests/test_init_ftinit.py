@@ -295,6 +295,43 @@ def test_resolve_ties_lower_ranked_reaction_keeps_its_forward_direction():
     assert solve({"R1": "R9"}) == pytest.approx((-0.1, 0.0), abs=1e-6)
 
 
+def _no_solution_in(monkeypatch, constraint_prefix):
+    """Make ``_has_solution`` report no solution while ``opt`` holds a constraint whose name
+    starts with ``constraint_prefix``, so the phase that adds it finds nothing."""
+    import importlib
+
+    ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
+    real = ftinit_mod._has_solution
+
+    def has_solution(opt):
+        if any(c.name.startswith(constraint_prefix) for c in opt.constraints):
+            return False
+        return real(opt)
+
+    monkeypatch.setattr(ftinit_mod, "_has_solution", has_solution)
+
+
+def test_resolve_ties_warns_when_the_minimal_flux_phase_finds_nothing(monkeypatch):
+    """When phase 2c finds no solution, a phase2c-minflux warning is raised and the
+    tie-broken on set is kept."""
+    _no_solution_in(monkeypatch, "_absp_")
+    with pytest.warns(UserWarning, match="phase2c-minflux"):
+        res = run_ftinit(_direction_model(), {"R2": -1.0, "R3": 1.0}, essential_rxns=["E"],
+                         resolve_ties=True)
+    assert "R3" in res.on_reactions and "R2" not in res.kept_reactions
+    assert abs(res.fluxes["E"]) >= 0.1 - 1e-6
+
+
+def test_resolve_ties_warns_when_the_direction_phase_finds_nothing(monkeypatch):
+    """When phase 2d finds no solution, a phase2d-direction warning is raised and the
+    fluxes stay a least-total-flux solution of phase 2c."""
+    _no_solution_in(monkeypatch, "_minflux_cap")
+    with pytest.warns(UserWarning, match="phase2d-direction"):
+        res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
+                         resolve_ties=True)
+    assert abs(res.fluxes["R1"]) + abs(res.fluxes["R2"]) == pytest.approx(0.1, abs=1e-6)
+
+
 # --------------------------------------------------------------------------- #
 # seed as an explicit parameter, and the unproven-incumbent warning.
 # --------------------------------------------------------------------------- #
