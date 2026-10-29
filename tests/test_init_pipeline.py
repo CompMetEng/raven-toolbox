@@ -257,17 +257,18 @@ def _two_merged_paths_model():
 
     Model order and group numbers put P first ({R1, R2} is group 1, P group 2, Q group 3), and
     the merged reactions are named by their first members Rm and Rn, but the smallest original
-    id of Q (Rb) sorts before that of P (Rc).
+    id of Q (Rb) sorts before that of P (Rc). The model is that of RAVEN's tINIT test
+    ftINITResolveTiesRanksMergedRxnBySmallestOriginalId.
     """
     mets = {"as": ("a", "s"), "ac": ("a", "c"), "xc": ("x", "c"), "yc": ("y", "c"),
             "mc": ("m", "c"), "ec": ("e", "c"), "es": ("e", "s")}
     rxns = {
         "R1": ({"as": 1}, 0, 1000, ""),
         "R2": ({"as": -1, "ac": 1}, -1000, 1000, ""),
-        "Rm": ({"ac": -1, "xc": 1}, 0, 1000, "Gm"),
-        "Rc": ({"xc": -1, "mc": 1}, 0, 1000, "Gc"),
-        "Rn": ({"ac": -1, "yc": 1}, 0, 1000, "Gn"),
-        "Rb": ({"yc": -1, "mc": 1}, 0, 1000, "Gb"),
+        "Rm": ({"ac": -1, "xc": 1}, -1000, 1000, "Gm"),
+        "Rc": ({"xc": -1, "mc": 1}, -1000, 1000, "Gc"),
+        "Rn": ({"ac": -1, "yc": 1}, -1000, 1000, "Gn"),
+        "Rb": ({"yc": -1, "mc": 1}, -1000, 1000, "Gb"),
         "E": ({"mc": -1, "ec": 1}, 0, 1000, "GE"),
         "R7": ({"ec": -1, "es": 1}, 0, 1000, "G7"),
         "R8": ({"es": -1}, 0, 1000, ""),
