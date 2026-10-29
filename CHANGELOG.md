@@ -30,6 +30,11 @@ Milestones in the raven-toolbox port. For function-level status see
   metabolite's own compartment, so the merged `ACCOA_c` in `s` and a universal `ACCOA_m` share
   the key `ACCOA`. The four functions raise `ValueError` when two metabolites in one
   compartment have the same key (was: one of them stood for both).
+* `manipulation.merge_compartments` documents where `notes["merged_base_id"]` survives: YAML
+  written and read by raven-toolbox, `copy()`, cobra JSON and SBML. RAVEN's `readYAMLmodel`
+  shows it in `metNotes` (`merged_base_id: ACCOA note: free text note`) and no RAVEN function
+  uses it. A round trip through RAVEN YAML or a .mat file loses it, and the localization
+  functions then key a merged `ACCOA_c` in `s` as `ACCOA_c`, without an error.
 * `io.read_yaml_model` puts the notes that `write_yaml_model` writes as a `notes` mapping (notes
   without a RAVEN field) back into `notes` (was: nested under `notes["note"]`).
 * `reconstruction.homology.run_blast`, `run_diamond` and `run_supporth`, and

@@ -86,7 +86,16 @@ def merge_compartments(
     metabolites would get the same base id (a ``base_metabolite`` that keeps ``X_c`` and ``X_m``
     apart), both store their own id instead, so they stay distinct species. The note survives
     ``model.copy()``, cobra's JSON and SBML files and :func:`~raven_toolbox.io.write_yaml_model`
-    with :func:`~raven_toolbox.io.read_yaml_model`.
+    with :func:`~raven_toolbox.io.read_yaml_model`. RAVEN's ``readYAMLmodel`` shows it in
+    ``metNotes``, for example ``merged_base_id: ACCOA note: free text note`` for a metabolite
+    that also has the free-text note ``free text note``; no RAVEN function uses it. A round trip
+    through RAVEN YAML (``readYAMLmodel`` and ``writeYAMLmodel``) or through a .mat file loses
+    it: RAVEN joins the key and the free text into one string, which
+    :func:`~raven_toolbox.io.read_yaml_model` reads back as the free-text note, and
+    :func:`~raven_toolbox.io.write_matlab_model` and :func:`~raven_toolbox.io.read_matlab_model`
+    carry no metabolite notes. The localization functions then key the metabolite by its id
+    without the suffix of its own compartment, so a merged ``ACCOA_c`` in ``s`` gets the key
+    ``ACCOA_c``, and no error is raised.
     """
     out = model.copy()
     key = base_metabolite if base_metabolite is not None else _base_id
