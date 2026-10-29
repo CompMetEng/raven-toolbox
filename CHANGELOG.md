@@ -54,7 +54,16 @@ Milestones in the raven-toolbox port. For function-level status see
   `G1&G2` and `G3`, as in RAVEN's `curateModelFromTables` (was: `G1`, `G2` and `G3`).
 * `io.read_yaml_model` reads gene rules with `parse_gr_rule`, so `G1&G2` written by
   `write_yaml_model` is read back as one gene (was: `G1` and `G2`, cobra's reading). A rule that
-  `parse_gr_rule` refuses is read by cobra as before. cobra's JSON reader still splits `G1&G2`.
+  `parse_gr_rule` refuses is read by cobra as before.
+* Functions that copy or build a gene rule keep RAVEN's reading of it, so `G1&G2` stays one
+  gene (was: the rule was copied as a string and cobra split `G1&G2` into `G1` and `G2`):
+  `manipulation.merge_compartments`, `copy_to_compartment`, `convert_to_irreversible`,
+  `merge_models`, `add_reactions_from_model`, `expand_model`, `change_gene_reaction_rules`,
+  `add_reactions_from_equations`, `localization.apply_assignment`, `init.fill_tasks`,
+  `init.remove_low_score_genes`, `reconstruction.homology.get_model_from_homology`,
+  `reconstruction.kegg.assemble_model_from_ko_genes` and `io.read_matlab_model`. A rule string
+  is read with `parse_gr_rule`; one that `parse_gr_rule` refuses is read by cobra. cobra's JSON
+  reader (`cobra.io.load_json_model`) still splits `G1&G2`; cobra's SBML reader keeps it.
 * `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
   capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
   `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its

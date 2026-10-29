@@ -15,6 +15,8 @@ from collections.abc import Callable, Iterable
 
 import cobra
 
+from raven_toolbox.utils.gpr import set_gene_rule
+
 # Compartments produced by merge_compartments (RAVEN uses 's' for "system").
 _MERGED_COMPARTMENT = "s"
 
@@ -162,7 +164,7 @@ def merge_compartments(
         new_r = cobra.Reaction(r.id, name=r.name, lower_bound=r.lower_bound,
                                 upper_bound=r.upper_bound)
         new_r.add_metabolites({merged.metabolites.get_by_id(mid): c for mid, c in stoich.items()})
-        new_r.gene_reaction_rule = r.gene_reaction_rule
+        set_gene_rule(new_r, r.gpr)
         if r.subsystem:
             new_r.subsystem = r.subsystem
         new_r.notes = dict(r.notes or {})
@@ -238,7 +240,7 @@ def copy_to_compartment(
         new_r = cobra.Reaction(new_id, name=src.name,
                                 lower_bound=src.lower_bound, upper_bound=src.upper_bound)
         new_r.add_metabolites(new_stoich)
-        new_r.gene_reaction_rule = src.gene_reaction_rule
+        set_gene_rule(new_r, src.gpr)
         if src.subsystem:
             new_r.subsystem = src.subsystem
         new_r.notes = dict(src.notes or {})

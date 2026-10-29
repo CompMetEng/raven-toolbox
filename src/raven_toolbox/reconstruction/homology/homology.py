@@ -22,6 +22,7 @@ import pandas as pd
 
 from raven_toolbox.manipulation.merge import merge_models
 from raven_toolbox.reconstruction.homology.hits import validate_hits
+from raven_toolbox.utils.gpr import set_gene_rule
 
 # cobra's GPR parser splits a gene id at whitespace, parentheses, "|" and "&".
 _GPR_SPLIT = re.compile(r"[\s()|&]")
@@ -498,7 +499,7 @@ def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
         m.remove_reactions([r for r in m.reactions if r.id not in keep], remove_orphans=True)
         for rid, gpr in keep.items():
             r = m.reactions.get_by_id(rid)
-            r.gene_reaction_rule = gpr
+            set_gene_rule(r, gpr)
             if preserve_notes:
                 r.notes = {**r.notes, "homology_source": mid}
             else:

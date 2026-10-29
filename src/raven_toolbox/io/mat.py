@@ -34,6 +34,7 @@ import scipy.sparse
 
 from raven_toolbox.io.metadata import get_model_metadata
 from raven_toolbox.io.yaml import _default_bounds
+from raven_toolbox.utils.gpr import set_gene_rule
 
 # Field order RAVEN's exporter emits. Writing in this order means a model
 # round-tripped through here keeps the same field order as one written by
@@ -621,7 +622,7 @@ def read_matlab_model(path: str | Path, *, varname: str | None = None) -> cobra.
             {metabolites[i]: float(v) for i, v in zip(column.row, column.data, strict=False)}
         )
         if gr_rules[j]:
-            rxn.gene_reaction_rule = gr_rules[j]
+            set_gene_rule(rxn, gr_rules[j])
         if subsystems is not None:
             entry = np.asarray(subsystems).reshape(-1, order="F")
             if j < entry.size:

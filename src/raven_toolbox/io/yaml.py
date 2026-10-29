@@ -59,7 +59,7 @@ from raven_toolbox.io.ec_data import (
     ec_data_from_yaml_sections,
     ec_data_to_yaml_sections,
 )
-from raven_toolbox.utils.gpr import parse_gr_rule
+from raven_toolbox.utils.gpr import set_gene_rule
 
 # A dedicated instance for *writing* only (reading still goes through
 # _cobra_yaml, whose parsing is unaffected by any of this). Mutating
@@ -165,18 +165,6 @@ def _pop_gene_rule(entry) -> str | None:
         return None
     rule = entry.pop("gene_reaction_rule", None)
     return None if rule is None or str(rule).strip() == "" else str(rule)
-
-
-def _set_gene_rule(rxn: cobra.Reaction, rule: str) -> None:
-    """Give ``rxn`` the rule as :func:`~raven_toolbox.utils.parse_gr_rule` reads it. A rule that
-    grammar refuses is handed to cobra as it is."""
-    try:
-        gpr = parse_gr_rule(rule)
-    except ValueError:
-        rxn.gene_reaction_rule = rule
-        return
-    if gpr is not None:
-        rxn.gpr = gpr
 
 
 def read_yaml_model(path: str | Path) -> cobra.Model:
@@ -306,7 +294,7 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
 
     for rxn, rule in zip(model.reactions, rules, strict=False):
         if rule is not None:
-            _set_gene_rule(rxn, rule)
+            set_gene_rule(rxn, rule)
     for met, notes in zip(model.metabolites, met_notes, strict=False):
         met.notes = notes
     for rxn, notes in zip(model.reactions, rxn_notes, strict=False):

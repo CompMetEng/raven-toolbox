@@ -9,7 +9,7 @@ covers a large part of the *behaviour*:
   and reversibility arrows (``<=>``, ``-->``, ``=>``) and creates unknown
   metabolites — but only matching metabolites **by ID**, and it leaves new
   metabolites with ``compartment=None``.
-* assigning ``reaction.gene_reaction_rule`` auto-creates ``Gene`` objects.
+* setting a reaction's GPR auto-creates ``Gene`` objects.
 
 So this port keeps only the parts cobra lacks:
 
@@ -33,8 +33,9 @@ from collections.abc import Mapping, Sequence
 
 import cobra
 from cobra import Metabolite, Reaction
-from cobra.core.gene import GPR, Gene
+from cobra.core.gene import Gene
 
+from raven_toolbox.utils.gpr import rule_to_gpr, set_gene_rule
 from raven_toolbox.utils.parse import parse_name_comp, subsystem_to_str
 
 # Reversibility arrows. ``<=>`` must be tried before ``=>`` (it contains it).
@@ -284,6 +285,7 @@ def add_reactions_from_equations(
         * ``name`` — reaction name.
         * ``bounds`` — ``(lower, upper)`` tuple; overrides the arrow.
         * ``gene_reaction_rule`` — GPR string.
+          Read with :func:`~raven_toolbox.utils.parse_gr_rule`, RAVEN's grammar.
         * ``subsystem`` — subsystem name.
     mets_by
         How bare equation tokens (without ``[comp]``) are matched:
@@ -361,7 +363,7 @@ def add_reactions_from_equations(
         # iteration order of the sets cobra builds from each rule.
         new_genes = sorted(
             {g for spec in reactions if spec.get("gene_reaction_rule")
-             for g in GPR.from_string(spec["gene_reaction_rule"]).genes} - known_genes
+             for g in rule_to_gpr(spec["gene_reaction_rule"]).genes} - known_genes
         )
         for gene_id in new_genes:
             gene = Gene(gene_id)
@@ -374,13 +376,13 @@ def add_reactions_from_equations(
         rule = spec.get("gene_reaction_rule", "")
         if rule:
             if not allow_new_genes:
-                missing = sorted(set(GPR.from_string(rule).genes) - known_genes)
+                missing = sorted(set(rule_to_gpr(rule).genes) - known_genes)
                 if missing:
                     raise ValueError(
                         f"Reaction {rxn.id!r} references genes not in the model: "
                         f"{missing}. Set allow_new_genes=True or add them first."
                     )
-            rxn.gene_reaction_rule = rule
+            set_gene_rule(rxn, rule)
             known_genes.update(gene.id for gene in rxn.genes)
 
     return added

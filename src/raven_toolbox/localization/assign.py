@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import cobra
 
 from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+from raven_toolbox.utils.gpr import set_gene_rule
 
 __all__ = ["AssignmentProposal", "GrowthCondition", "apply_assignment"]
 
@@ -210,7 +211,7 @@ def _add_universal_reaction(model, urxn, resolve):
     # copy, leaving the gap-fill reaction a disconnected island. Keying on (base, compartment) lands on
     # the species already there.
     new.add_metabolites({resolve(m, m.compartment): coeff for m, coeff in urxn.metabolites.items()})
-    new.gene_reaction_rule = urxn.gene_reaction_rule
+    set_gene_rule(new, urxn.gpr)
 
 
 def _move_reaction(rxn, compartment, resolve):
@@ -229,7 +230,7 @@ def _duplicate_reaction(model, rxn, compartment, resolve):
                          lower_bound=rxn.lower_bound, upper_bound=rxn.upper_bound)
     model.add_reactions([dup])
     dup.add_metabolites({resolve(m, compartment): coeff for m, coeff in rxn.metabolites.items()})
-    dup.gene_reaction_rule = rxn.gene_reaction_rule
+    set_gene_rule(dup, rxn.gpr)
 
 
 def _add_transport(model, base_key, compartment, default_compartment, index, resolve, n):

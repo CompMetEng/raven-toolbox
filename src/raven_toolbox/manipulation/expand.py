@@ -15,7 +15,7 @@ import copy
 import cobra
 from cobra.core.gene import GPR
 
-from raven_toolbox.utils.gpr import parse_gr_rule
+from raven_toolbox.utils.gpr import parse_gr_rule, set_gene_rule
 
 __all__ = ["expand_model", "gpr_to_dnf"]
 
@@ -123,7 +123,7 @@ def expand_model(model: cobra.Model) -> list[str]:
             new_rxn.upper_bound = original_rxn.upper_bound
             new_rxn.add_metabolites(dict(original_rxn.metabolites.items()))
             new_rxn.subsystem = original_rxn.subsystem
-            new_rxn.gene_reaction_rule = " and ".join(clause)
+            set_gene_rule(new_rxn, " and ".join(clause))
             # Propagate per-reaction metadata (notably ec-code / annotations)
             # so downstream functions see the same annotations on expanded
             # reactions as on the original. Deep-copy so siblings are independent.

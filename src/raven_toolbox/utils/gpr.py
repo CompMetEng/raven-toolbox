@@ -212,6 +212,30 @@ def parse_gr_rule(rule: str | None) -> GPR | None:
     return GPR(ast.Expression(body=body))
 
 
+def rule_to_gpr(rule: str | None) -> GPR:
+    """The :class:`~cobra.core.gene.GPR` of a rule string as :func:`parse_gr_rule` reads it.
+
+    An empty or ``None`` rule gives an empty GPR. A rule that grammar refuses is read with
+    cobra's ``GPR.from_string`` instead.
+    """
+    try:
+        gpr = parse_gr_rule(rule)
+    except ValueError:
+        return GPR.from_string(rule)
+    return gpr if gpr is not None else GPR()
+
+
+def set_gene_rule(rxn: cobra.Reaction, rule: GPR | str | None) -> None:
+    """Give ``rxn`` a gene rule in RAVEN's grammar.
+
+    A :class:`~cobra.core.gene.GPR` is copied as it is; a string is read with
+    :func:`rule_to_gpr`. Assigning a string to ``rxn.gene_reaction_rule`` would read it
+    with cobra's grammar, which splits a gene id such as ``G1&G2`` into ``G1`` and ``G2``;
+    every function in this package that copies or builds a rule goes through here.
+    """
+    rxn.gpr = rule.copy() if isinstance(rule, GPR) else rule_to_gpr(rule)
+
+
 @dataclass(frozen=True)
 class GPRIssue:
     """A reaction whose GPR is flagged by the linter.

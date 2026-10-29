@@ -11,6 +11,8 @@ from __future__ import annotations
 import cobra
 import pandas as pd
 
+from raven_toolbox.utils.gpr import set_gene_rule
+
 _DOMAINS = {"eukaryotes", "prokaryotes"}
 
 
@@ -93,7 +95,7 @@ def assemble_model_from_ko_genes(
         [r for r in model.reactions if r.id not in keep], remove_orphans=True
     )
     for rid, genes in gpr_map.items():
-        model.reactions.get_by_id(rid).gene_reaction_rule = " or ".join(genes)
+        set_gene_rule(model.reactions.get_by_id(rid), " or ".join(genes))
     if prune_orthology:
         # Restrict each gene-backed reaction's kegg.orthology to the KOs that
         # matched a gene, preserving the reference annotation's order. (The
