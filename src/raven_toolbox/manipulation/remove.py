@@ -80,12 +80,14 @@ def remove_genes(
     * ``"remove"`` — delete them.
     * ``"keep"`` — leave them with an empty GPR and unchanged bounds.
 
-    Besides the requested genes, every gene that no remaining reaction named in its
-    GPR before the removal is deleted too, as RAVEN's ``removeGenes`` does: genes
-    that no reaction uses (orphan genes, also when not requested) and, with
-    ``"remove"``, genes used only by the deleted reactions. A gene whose only
-    reaction is blocked and kept (``"constrain"`` or ``"keep"``), such as the other
-    subunit of a complex that lost one, stays in ``model.genes``.
+    Requested genes that are not in the model are ignored. When none of the requested
+    genes is in the model, the model is not changed and ``[]`` is returned. Otherwise,
+    besides the requested genes, every gene that no remaining reaction named in its GPR
+    before the removal is deleted too, as RAVEN's ``removeGenes`` does: genes that no
+    reaction uses (orphan genes, also when not requested) and, with ``"remove"``, genes
+    used only by the deleted reactions. A gene whose only reaction is blocked and kept
+    (``"constrain"`` or ``"keep"``), such as the other subunit of a complex that lost
+    one, stays in ``model.genes``.
 
     ``remove_orphans`` (only meaningful with ``blocked_reactions="remove"``)
     passes through to cobra: also drop metabolites orphaned by the removal.
