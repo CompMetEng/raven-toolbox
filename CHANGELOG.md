@@ -93,13 +93,9 @@ Milestones in the raven-toolbox port. For function-level status see
 * `init.ftinit` and `init.run_ftinit` with `resolve_ties` warn (`phase2c-minflux`,
   `phase2d-direction`) when the minimal-flux or the direction phase finds no solution, as
   RAVEN does; the fluxes of the phase before it are kept (was: kept without a warning).
-* `init.ftinit` with `resolve_ties`: the direction phase minimises the backward flux of a
-  merged reaction in the orientation of its member with the smallest original id, and a
-  turned-on reaction with zero flux is forced in that orientation, so neither depends on which
-  member names the merged reaction (new `run_ftinit` argument `orientation`).
 * `init.ftinit` with `resolve_ties`: the last step skips the minimal-flux and direction phases,
-  as no step reads its fluxes (new `run_ftinit` argument `pin_fluxes`). The reaction set does
-  not change.
+  as no step reads its fluxes, and reports the fluxes of the id-rank phase. The reaction set
+  does not change.
 
 ## 3.0.0b1 — 2026-09-07
 

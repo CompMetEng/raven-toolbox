@@ -294,50 +294,35 @@ def test_ftinit_resolve_ties_ranks_a_merged_reaction_by_its_smallest_original_id
     assert kept.isdisjoint({"Rm", "Rc"})
 
 
-def _flipped_member_model():
-    """h[c] reaches g[c] through y[c] (Rz, Ra) or through y2[c] (Rp, Rq).
-
-    Rz and Ra are both written as producers of y[c], so the merge runs Ra reversed in the
-    merged reaction Rz. The model is that of RAVEN's tINIT test
-    prepINITModelReturnsReversedRxnsOfTheMerge.
-    """
-    mets = {"hs": ("h", "s"), "hc": ("h", "c"), "gc": ("g", "c"), "y1": ("y", "c"),
-            "y2": ("y2", "c"), "gs": ("g", "s")}
-    rxns = {
-        "EX_h": ({"hs": 1}, -1000, 1000, ""),
-        "Th": ({"hs": -1, "hc": 1}, -1000, 1000, ""),
-        "Rz": ({"hc": -1, "y1": 1}, -1000, 1000, "Gz"),
-        "Ra": ({"gc": -1, "y1": 1}, -1000, 1000, "Ga"),
-        "Rp": ({"hc": -1, "y2": 1}, -1000, 1000, "Gp"),
-        "Rq": ({"y2": -1, "gc": 1}, -1000, 1000, "Gq"),
-        "Tg": ({"gc": -1, "gs": 1}, -1000, 1000, ""),
-        "EX_g": ({"gs": -1}, -1000, 1000, ""),
-    }
-    return _build("flippedMember", mets, rxns, "EX_g")
-
-
-def test_ftinit_orients_a_merged_reaction_as_its_smallest_member_and_pins_fluxes_until_the_last_step(
-        monkeypatch):
-    """ftinit passes orientation -1 for the merged Rz, in which its smallest member Ra runs
-    reversed, and skips the flux phases of resolve_ties in its last step and in no other."""
+def test_ftinit_pins_fluxes_in_every_step_but_the_last(monkeypatch):
+    """ftinit runs the flux phases of resolve_ties in each step whose fluxes a later step
+    reads and skips them in the last step, as RAVEN's tINIT test
+    ftINITPinsFluxesInEveryStepButTheLast checks."""
     import importlib
 
     ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
-    model = _flipped_member_model()
-    prep = prep_init_model(model, ext_comp="s")
-    assert [r for r, rev in zip(prep.orig_rxn_ids, prep.reversed_rxns, strict=True) if rev] == ["Ra"]
-    assert "Rz" in {r.id for r in prep.min_model.reactions}
-    seen = []
-    real = ftinit_mod._solve_step
+    model = _two_merged_paths_model()
+    prep = prep_init_model(model, [make_test_task()], ext_comp="s")
+    step, seen = [-1], []
+    real_step, real_run = ftinit_mod._solve_step, ftinit_mod.run_ftinit
 
-    def spy(*args, **kwargs):
-        seen.append((kwargs["orientation"], kwargs["pin_fluxes"]))
-        return real(*args, **kwargs)
+    def step_spy(*args, **kwargs):
+        step[0] += 1
+        return real_step(*args, **kwargs)
 
-    monkeypatch.setattr(ftinit_mod, "_solve_step", spy)
-    scores = score_reactions_from_genes(model, {"Gz": -1.0, "Ga": -1.0, "Gp": 1.0, "Gq": 1.0})
-    ftinit(prep, rxn_scores=scores, resolve_ties=True, fill_gaps=False)
-    assert seen == [({"Rz": -1}, True), ({"Rz": -1}, False)]
+    def run_spy(*args, **kwargs):
+        seen.append((step[0], kwargs["_pin_fluxes"]))
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(ftinit_mod, "_solve_step", step_spy)
+    monkeypatch.setattr(ftinit_mod, "run_ftinit", run_spy)
+    scores = score_reactions_from_genes(
+        model, {"Gm": -1.0, "Gc": -1.0, "Gn": -1.0, "Gb": -1.0, "GE": 5.0, "G7": 5.0})
+    out = ftinit(prep, rxn_scores=scores, resolve_ties=True, fill_gaps=False)
+    n_steps = len(get_init_steps())
+    assert {s for s, _ in seen} == set(range(n_steps))
+    assert all(pin == (s < n_steps - 1) for s, pin in seen)
+    assert {"Rn", "Rb"} <= {r.id for r in out.reactions}
 
 
 # --------------------------------------------------------------------------- #

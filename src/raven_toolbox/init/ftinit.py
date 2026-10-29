@@ -143,8 +143,7 @@ def run_ftinit(
     prove_abs_gap: float | None = None,
     resolve_ties: bool = False,
     rank_keys: Mapping[str, str] | None = None,
-    orientation: Mapping[str, int] | None = None,
-    pin_fluxes: bool = True,
+    _pin_fluxes: bool = True,
     metabolomics: Mapping[str, Iterable[str]] | None = None,
     prod_weight: float = 0.5,
     seed: int = _EXTRACT_SEED,
@@ -202,16 +201,9 @@ def run_ftinit(
     reaction id of each merge group, so the order does not depend on which member names
     the merged reaction.
 
-    ``orientation`` maps a reaction id to ``1`` or ``-1`` (default ``1``): the sign that
-    turns its flux into the direction of its reference orientation. The direction phase of
-    ``resolve_ties`` minimises the backward flux in that orientation. :func:`ftinit` passes
-    ``-1`` for a merged reaction in which the member with the smallest original id runs
-    reversed, so the preferred direction does not depend on which member names the merged
-    reaction.
-
-    ``pin_fluxes`` (default true): if false, ``resolve_ties`` skips phases 2c and 2d and the
-    reported ``fluxes`` are those of phase 2b. :func:`ftinit` passes false in its last
-    step, whose fluxes no later step reads.
+    ``_pin_fluxes`` (default true) is set by :func:`ftinit`, not by callers: false in its
+    last step, whose fluxes no later step reads. ``resolve_ties`` then skips phases 2c and
+    2d and the reported ``fluxes`` are those of phase 2b.
 
     ``metabolomics`` (already in **this model's** id space — :func:`ftinit` resolves a
     caller-facing metabolite-name list into this once) maps a detected-metabolite label
@@ -539,13 +531,13 @@ def run_ftinit(
         # Like phases 2a/2b, only when there is a removable (negative-score) reaction.
         # Phases 2c and 2d change the fluxes, not the on set; the next ftINIT step reads them.
         held = (_min_abs_flux(opt, prob, indicators, flux_terms, time_limit)
-                if pin_fluxes and any(score < 0 for _, score in indicators.values())
+                if _pin_fluxes and any(score < 0 for _, score in indicators.values())
                 else None)
         if held is not None:
             fluxes = _read_solution()[1]
             abs_expr, total, free_sign = held
             if _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign,
-                                  rank_key, time_limit, orientation):
+                                  rank_key, time_limit):
                 fluxes = _read_solution()[1]
 
     kept = free_or_essential | on
@@ -741,15 +733,14 @@ def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
 
 
 def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_key,
-                       time_limit, orientation=None) -> bool:
+                       time_limit) -> bool:
     """Phase 2d of ``resolve_ties``: fix the directions left open by the minimal total flux.
 
     Phase 2c can leave the direction of a flux free when two directions carry the same total
     flux, for example a pair of reversible reactions that close a loop in either direction.
     This phase keeps the on/off state of phase 2c, holds ``Σ|v|`` at most at its phase-2c
-    value plus ``max(1e-7·Σ|v|, 1e-6)``, and minimises ``Σ w·max(0, -o·v)`` over the reactions
-    whose flux can take either sign, with ``o`` the reaction's ``orientation`` (default 1).
-    The weight is the reaction's id rank from the end:
+    value plus ``max(1e-7·Σ|v|, 1e-6)``, and minimises ``Σ w·max(0, -v)`` over the reactions
+    whose flux can take either sign. The weight is the reaction's id rank from the end:
     sorted by ``rank_key``, the first of ``n`` reactions gets ``n`` and the last ``1``, so a
     reaction with a lower id prefers its forward direction. On Gurobi the phase-2c solution
     is its MIP start, as the tight cap on ``Σ|v|`` leaves the solver's heuristics little
@@ -769,9 +760,8 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     n = len(free_sign)
     weight = {rid: float(n - i) for i, rid in enumerate(sorted(free_sign, key=rank_key))}
     extra, bwd_terms = [prob.Constraint(abs_expr, ub=total + tol, name="_minflux_cap")], []
-    orient = {rid: (orientation or {}).get(rid, 1) for rid in free_sign}
     for rid in free_sign:
-        net = add([mul([Real(orient[rid] * sign), var]) for var, sign in flux_terms[rid]])
+        net = add([mul([Real(sign), var]) for var, sign in flux_terms[rid]])
         b = prob.Variable(f"_bwd_{rid}", lb=0.0)
         extra += [b, prob.Constraint(b + net, lb=0.0, name=f"_bwdc_{rid}")]
         bwd_terms.append(mul([Real(weight[rid]), b]))
@@ -787,7 +777,7 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
             grb.getVarByName(name).Start = val
         for rid in free_sign:
             net = sum(sign * start[var.name] for var, sign in flux_terms[rid])
-            grb.getVarByName(f"_bwd_{rid}").Start = max(0.0, -orient[rid] * net)
+            grb.getVarByName(f"_bwd_{rid}").Start = max(0.0, -net)
     if time_limit is not None:
         opt.configuration.timeout = max(1, int(time_limit))
     opt.optimize()
@@ -889,7 +879,7 @@ def _metabolomics_producers(prep, metabolomics: Iterable[str]) -> dict[str, set[
 def _solve_step(
     min_model, scores, step, *, essential, directions, ess_force, force_on, big_m,
     mip_gap, mip_gap_abs, time_limit, prove_abs_gap=None, resolve_ties=False,
-    rank_keys=None, orientation=None, pin_fluxes=True, metabolomics=None, prod_weight=0.5,
+    rank_keys=None, pin_fluxes=True, metabolomics=None, prod_weight=0.5,
     seed=_EXTRACT_SEED, threads=_EXTRACT_THREADS,
     feas_tol=_EXTRACT_TOL, opt_tol=_EXTRACT_TOL, int_feas_tol=_EXTRACT_TOL,
     presolve=_EXTRACT_PRESOLVE,
@@ -911,7 +901,7 @@ def _solve_step(
             force_on=force_on, force_on_ess=force_on, big_m=big_m,
             mip_gap=mg, mip_gap_abs=mga, time_limit=tl,
             prove_abs_gap=prove, resolve_ties=resolve_ties, rank_keys=rank_keys,
-            orientation=orientation, pin_fluxes=pin_fluxes,
+            _pin_fluxes=pin_fluxes,
             metabolomics=metabolomics, prod_weight=prod_weight,
             seed=seed, threads=threads, feas_tol=feas_tol, opt_tol=opt_tol,
             int_feas_tol=int_feas_tol, presolve=presolve,
@@ -1047,10 +1037,10 @@ def ftinit(
         extraction step it then takes the fluxes from the least-total-flux solution for
         that on set, so the directions and forced magnitudes the next step reads from
         them do not depend on the solver's vertex either; among those, it prefers the
-        forward direction of the lower-ranked reaction, a merged reaction ranked and
-        oriented by the member with the smallest original id. The last step, whose
-        fluxes no step reads, skips these flux phases. A step whose primary solve stops
-        at ``time_limit`` keeps its primary solution without any of these phases.
+        forward direction of the lower-ranked reaction, a merged reaction ranked by the
+        member with the smallest original id. The last step, whose fluxes no step reads,
+        skips these flux phases. A step whose primary solve stops at ``time_limit`` keeps
+        its primary solution without any of these phases.
       * ``prove_abs_gap`` replaces the loose relative-gap escalation with a single solve per
         step proven to this fixed *absolute* gap, so the kept-set objective is optimal at
         any scale — not an arbitrary within-gap incumbent. **Try 1.0**: on Human-GEM/DLD1
@@ -1116,17 +1106,13 @@ def ftinit(
     # the permanent (prep) essentials too, not only reactions turned on by a prior step.
     flux_of: dict[str, float] = {r.id: force_on for r in min_model.reactions}
     # resolve_ties ranks a merged reaction by its group's smallest original id, which does
-    # not depend on which member names the merged reaction. The reference orientation of a
-    # merged reaction is that of the same member: -1 when that member runs reversed in the
-    # merged reaction.
+    # not depend on which member names the merged reaction.
     smallest: dict[int, str] = {}
     for rid, gid in zip(prep.orig_rxn_ids, prep.group_ids, strict=True):
         if gid and (gid not in smallest or rid < smallest[gid]):
             smallest[gid] = rid
     rank_keys = {r.id: smallest[group_of[r.id]] for r in min_model.reactions
                  if group_of.get(r.id, 0)}
-    is_reversed = dict(zip(prep.orig_rxn_ids, prep.reversed_rxns, strict=True))
-    orientation = {rid: -1 for rid, key in rank_keys.items() if is_reversed[key]}
     n_steps = len(steps)
     for i, step in enumerate(steps):
         if verbose:
@@ -1139,9 +1125,7 @@ def ftinit(
         if step.how_to_use_prev == "essential":
             for rid, flux in turned_on.items():
                 essential.add(rid)
-                # A zero flux takes the reference orientation of the reaction.
-                directions[rid] = (1 if flux > 0 else -1 if flux < 0
-                                   else orientation.get(rid, 1))
+                directions[rid] = 1 if flux >= 0 else -1
         ess_force = {rid: min(abs(flux_of.get(rid, force_on)) * 0.99, force_on)
                      for rid in essential}
         res = _solve_step(
@@ -1149,7 +1133,6 @@ def ftinit(
             ess_force=ess_force, force_on=force_on, big_m=big_m,
             mip_gap=mip_gap, mip_gap_abs=mip_gap_abs, time_limit=time_limit,
             prove_abs_gap=prove_abs_gap, resolve_ties=resolve_ties, rank_keys=rank_keys,
-            orientation=orientation,
             # The fluxes of a step set the forced directions of the next one, so the last
             # step skips the flux phases of resolve_ties.
             pin_fluxes=i < n_steps - 1,

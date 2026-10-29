@@ -295,23 +295,15 @@ def test_resolve_ties_lower_ranked_reaction_keeps_its_forward_direction():
     assert solve({"R1": "R9"}) == pytest.approx((-0.1, 0.0), abs=1e-6)
 
 
-def test_resolve_ties_follows_the_orientation_of_a_reaction():
-    """With orientation -1 for R1, its backward flux in that orientation is a forward flux,
-    so R1, which ranks first, runs backward instead of R2."""
-    res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
-                     resolve_ties=True, orientation={"R1": -1})
-    assert (res.fluxes["R1"], res.fluxes["R2"]) == pytest.approx((-0.1, 0.0), abs=1e-6)
-
-
 def test_resolve_ties_without_pin_fluxes_skips_the_flux_phases(monkeypatch):
-    """With pin_fluxes=False, phases 2c and 2d do not run and R1 is still the kept one."""
+    """With _pin_fluxes=False, phases 2c and 2d do not run and R1 is still the kept one."""
     import importlib
 
     ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
     calls = []
     monkeypatch.setattr(ftinit_mod, "_min_abs_flux", lambda *a, **k: calls.append(a))
     res = run_ftinit(_degenerate_model(), {"R1": -1.0, "R2": -1.0}, essential_rxns=["E"],
-                     resolve_ties=True, pin_fluxes=False)
+                     resolve_ties=True, _pin_fluxes=False)
     assert calls == []
     assert "R1" in res.kept_reactions and "R2" not in res.kept_reactions
     run_ftinit(_degenerate_model(), {"R1": -1.0, "R2": -1.0}, essential_rxns=["E"],
