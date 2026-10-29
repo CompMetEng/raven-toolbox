@@ -294,6 +294,52 @@ def test_ftinit_resolve_ties_ranks_a_merged_reaction_by_its_smallest_original_id
     assert kept.isdisjoint({"Rm", "Rc"})
 
 
+def _flipped_member_model():
+    """h[c] reaches g[c] through y[c] (Rz, Ra) or through y2[c] (Rp, Rq).
+
+    Rz and Ra are both written as producers of y[c], so the merge runs Ra reversed in the
+    merged reaction Rz. The model is that of RAVEN's tINIT test
+    prepINITModelReturnsReversedRxnsOfTheMerge.
+    """
+    mets = {"hs": ("h", "s"), "hc": ("h", "c"), "gc": ("g", "c"), "y1": ("y", "c"),
+            "y2": ("y2", "c"), "gs": ("g", "s")}
+    rxns = {
+        "EX_h": ({"hs": 1}, -1000, 1000, ""),
+        "Th": ({"hs": -1, "hc": 1}, -1000, 1000, ""),
+        "Rz": ({"hc": -1, "y1": 1}, -1000, 1000, "Gz"),
+        "Ra": ({"gc": -1, "y1": 1}, -1000, 1000, "Ga"),
+        "Rp": ({"hc": -1, "y2": 1}, -1000, 1000, "Gp"),
+        "Rq": ({"y2": -1, "gc": 1}, -1000, 1000, "Gq"),
+        "Tg": ({"gc": -1, "gs": 1}, -1000, 1000, ""),
+        "EX_g": ({"gs": -1}, -1000, 1000, ""),
+    }
+    return _build("flippedMember", mets, rxns, "EX_g")
+
+
+def test_ftinit_orients_a_merged_reaction_as_its_smallest_member_and_pins_fluxes_until_the_last_step(
+        monkeypatch):
+    """ftinit passes orientation -1 for the merged Rz, in which its smallest member Ra runs
+    reversed, and skips the flux phases of resolve_ties in its last step only."""
+    import importlib
+
+    ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
+    model = _flipped_member_model()
+    prep = prep_init_model(model, ext_comp="s")
+    assert [r for r, rev in zip(prep.orig_rxn_ids, prep.reversed_rxns, strict=True) if rev] == ["Ra"]
+    assert "Rz" in {r.id for r in prep.min_model.reactions}
+    seen = []
+    real = ftinit_mod._solve_step
+
+    def spy(*args, **kwargs):
+        seen.append((kwargs["orientation"], kwargs["pin_fluxes"]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ftinit_mod, "_solve_step", spy)
+    scores = score_reactions_from_genes(model, {"Gz": -1.0, "Ga": -1.0, "Gp": 1.0, "Gq": 1.0})
+    ftinit(prep, rxn_scores=scores, resolve_ties=True, fill_gaps=False)
+    assert seen == [({"Rz": -1}, True), ({"Rz": -1}, False)]
+
+
 # --------------------------------------------------------------------------- #
 # metabolomics (production-bonus for detected metabolites) — full pipeline.
 # Exercises what run_ftinit's own metabolomics tests cannot: metabolite *name*
