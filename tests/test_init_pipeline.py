@@ -10,6 +10,7 @@ from tinit_oracles import (
     TEST_MODEL_FTINIT_WITH_TASK,
     TEST_MODEL_SCORES,
     TEST_MODEL_TASK_ESSENTIAL_MERGED,
+    _build,
     expr_for_rxn_score,
     make_test_model,
     make_test_task,
@@ -249,6 +250,47 @@ def test_ftinit_resolve_ties_matches_oracle_and_is_stable():
     out2 = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05, resolve_ties=True)
     assert {r.id for r in out1.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
     assert {r.id for r in out1.reactions} == {r.id for r in out2.reactions}
+
+
+def _two_merged_paths_model():
+    """a[c] reaches m[c] by path P (Rm, Rc) or path Q (Rn, Rb); each path is one linear merge group.
+
+    Model order and group numbers put P first ({R1, R2} is group 1, P group 2, Q group 3), and
+    the merged reactions are named by their first members Rm and Rn, but the smallest original
+    id of Q (Rb) sorts before that of P (Rc).
+    """
+    mets = {"as": ("a", "s"), "ac": ("a", "c"), "xc": ("x", "c"), "yc": ("y", "c"),
+            "mc": ("m", "c"), "ec": ("e", "c"), "es": ("e", "s")}
+    rxns = {
+        "R1": ({"as": 1}, 0, 1000, ""),
+        "R2": ({"as": -1, "ac": 1}, -1000, 1000, ""),
+        "Rm": ({"ac": -1, "xc": 1}, 0, 1000, "Gm"),
+        "Rc": ({"xc": -1, "mc": 1}, 0, 1000, "Gc"),
+        "Rn": ({"ac": -1, "yc": 1}, 0, 1000, "Gn"),
+        "Rb": ({"yc": -1, "mc": 1}, 0, 1000, "Gb"),
+        "E": ({"mc": -1, "ec": 1}, 0, 1000, "GE"),
+        "R7": ({"ec": -1, "es": 1}, 0, 1000, "G7"),
+        "R8": ({"es": -1}, 0, 1000, ""),
+    }
+    return _build("twoPaths", mets, rxns, "R8")
+
+
+def test_ftinit_resolve_ties_ranks_a_merged_reaction_by_its_smallest_original_id():
+    """The tie between P and Q goes to Q, whose smallest member id Rb sorts first.
+
+    Ranking by the merged reaction's id (Rm, Rn), by model order or by group number would keep P.
+    """
+    model = _two_merged_paths_model()
+    prep = prep_init_model(model, [make_test_task()], ext_comp="s")
+    groups = prep.group_of
+    assert groups["Rm"] == groups["Rc"] < groups["Rn"] == groups["Rb"]
+    assert {"Rm", "Rn"} <= {r.id for r in prep.min_model.reactions}
+    scores = score_reactions_from_genes(
+        model, {"Gm": -1.0, "Gc": -1.0, "Gn": -1.0, "Gb": -1.0, "GE": 5.0, "G7": 5.0})
+    out = ftinit(prep, rxn_scores=scores, resolve_ties=True)
+    kept = {r.id for r in out.reactions}
+    assert {"Rn", "Rb"} <= kept
+    assert kept.isdisjoint({"Rm", "Rc"})
 
 
 # --------------------------------------------------------------------------- #
