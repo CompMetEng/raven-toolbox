@@ -319,7 +319,7 @@ def _flipped_member_model():
 def test_ftinit_orients_a_merged_reaction_as_its_smallest_member_and_pins_fluxes_until_the_last_step(
         monkeypatch):
     """ftinit passes orientation -1 for the merged Rz, in which its smallest member Ra runs
-    reversed, and skips the flux phases of resolve_ties in its last step only."""
+    reversed, and skips the flux phases of resolve_ties in its last step and in no other."""
     import importlib
 
     ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")

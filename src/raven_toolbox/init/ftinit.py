@@ -209,8 +209,8 @@ def run_ftinit(
     reversed, so the preferred direction does not depend on which member names the merged
     reaction.
 
-    ``pin_fluxes`` (default true): if false, ``resolve_ties`` runs phases 2a and 2b only and
-    the reported ``fluxes`` are those of phase 2b. :func:`ftinit` passes false in its last
+    ``pin_fluxes`` (default true): if false, ``resolve_ties`` skips phases 2c and 2d and the
+    reported ``fluxes`` are those of phase 2b. :func:`ftinit` passes false in its last
     step, whose fluxes no later step reads.
 
     ``metabolomics`` (already in **this model's** id space — :func:`ftinit` resolves a
@@ -537,7 +537,7 @@ def run_ftinit(
                                                         primary_obj, time_limit, rank_key):
         on, fluxes = _read_solution()
         # Like phases 2a/2b, only when there is a removable (negative-score) reaction.
-        # Phases 2c and 2d set the fluxes only, which the next ftINIT step reads.
+        # Phases 2c and 2d change the fluxes, not the on set; the next ftINIT step reads them.
         held = (_min_abs_flux(opt, prob, indicators, flux_terms, time_limit)
                 if pin_fluxes and any(score < 0 for _, score in indicators.values())
                 else None)
