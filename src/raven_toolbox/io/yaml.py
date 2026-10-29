@@ -107,27 +107,48 @@ _OmapConstructor.add_constructor("tag:yaml.org,2002:omap", _OmapConstructor.cons
 _read_yaml = YAML(typ="rt")
 _read_yaml.Constructor = _OmapConstructor
 
-# A scalar written as `""text""` (two quotes on each side), the shape older RAVEN
-# and GECKO writers gave to a note that already carried its own quotes. It is not
-# valid YAML. `readYAMLmodel.m` strips one pair of quotes per line and unescapes
-# `\\` and `\"` in what is left, so the value is `"text"`.
-_DOUBLED_QUOTES = re.compile(
-    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)"(?P<body>".*")"\s*$"""
+# A double-quoted scalar that holds a double quote no backslash escapes, such as
+# `""text""` (the shape older RAVEN and GECKO writers gave to a note that already
+# carried its own quotes) or `"a "b" c"`. It is not valid YAML. `readYAMLmodel.m` strips
+# the outer pair of quotes of the line and unescapes `\\` and `\"` in what is left, so the
+# values are `"text"` and `a "b" c`.
+_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)"(?P<body>.*)"\s*$"""
 )
 
 
+def _has_unescaped_quote(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``"`` that no backslash escapes."""
+    i = 0
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+        elif body[i] == '"':
+            return True
+        else:
+            i += 1
+    return False
+
+
 def _fix_doubled_quotes(text: str) -> str:
-    """Rewrite every ``""text""`` scalar as the single-quoted scalar ``'"text"'``."""
+    """Rewrite each double-quoted scalar with an unescaped interior quote as a single-quoted scalar.
+
+    The value is the text between the outer quotes with escaped backslashes and quotes
+    unescaped, as ``readYAMLmodel.m`` reads it; quoted scalars without such a quote are left alone.
+    """
 
     def fix(match: re.Match) -> str:
-        inner = re.sub(r'\\(["\\])', r"\1", match["body"])
-        return f"{match['head']}'{inner.replace(chr(39), chr(39) * 2)}'"
+        body = match["body"]
+        if not _has_unescaped_quote(body):
+            return match[0]
+        value = re.sub(r'\\(["\\])', r"\1", body)
+        return f"{match['head']}'{value.replace(chr(39), chr(39) * 2)}'"
 
-    return "\n".join(_DOUBLED_QUOTES.sub(fix, line) for line in text.split("\n"))
+    return "\n".join(_QUOTED_VALUE.sub(fix, line) for line in text.split("\n"))
 
 
 def _load_yaml_text(text: str):
-    """Parse ``text`` strictly; when that fails, retry with doubled quotes repaired."""
+    """Parse ``text`` strictly; when that fails, retry with quotes inside double-quoted scalars repaired."""
     try:
         return _read_yaml.load(text)
     except YAMLError:
