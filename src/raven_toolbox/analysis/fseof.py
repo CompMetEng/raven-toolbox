@@ -26,7 +26,6 @@ from cobra.exceptions import OptimizationError
 from cobra.flux_analysis import pfba
 from scipy.stats import linregress
 
-
 # pFBA keeps the objective at this fraction of the optimum found at the same level, as
 # RAVEN's solveLP does when it minimises the flux sum (``solution.f*0.999999``). A solver
 # reports its optimum to within its feasibility tolerance, so a second solve that demands

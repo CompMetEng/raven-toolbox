@@ -18,6 +18,7 @@ import cobra
 import numpy as np
 import pytest
 from cobra.io.yaml import yaml as cobra_yaml
+from ruamel.yaml import YAMLError
 from scipy import sparse
 
 from raven_toolbox.io import EcData, read_yaml_model, write_yaml_model
@@ -568,5 +569,5 @@ def test_valid_quoted_scalars_are_read_unchanged_next_to_a_repaired_one(tmp_path
 def test_invalid_yaml_other_than_doubled_quotes_still_raises(tmp_path):
     path = tmp_path / "m.yml"
     path.write_text(_GECKO_FILE.format(note='"ok"', empty="").replace("kcat: 10", "kcat: [10"), encoding="utf-8")
-    with pytest.raises(Exception):
+    with pytest.raises(YAMLError):
         read_yaml_model(path)
