@@ -6,6 +6,9 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* Models read with `io.read_yaml_model` and `io.read_matlab_model` have `model.tolerance` set to 1e-9, the
+  feasibility and optimality tolerance RAVEN's `solveLP` gives the solver (cobrapy's default is 1e-6 for
+  Gurobi and 1e-7 for GLPK). `utils.solver.set_raven_tolerance` applies it to any other model.
 * `manipulation.remove_genes` defaults to `blocked_reactions="constrain"` (was: `"remove"`), as
   RAVEN's `removeGenes` does: a reaction whose rule loses its last enzyme stays, with the rule
   dropped and bounds `(0, 0)`. Pass `blocked_reactions="remove"` to delete such reactions.

@@ -35,6 +35,7 @@ import scipy.sparse
 from raven_toolbox.io.metadata import get_model_metadata
 from raven_toolbox.io.yaml import _default_bounds
 from raven_toolbox.utils.gpr import set_gene_rule
+from raven_toolbox.utils.solver import set_raven_tolerance
 
 # Field order RAVEN's exporter emits. Writing in this order means a model
 # round-tripped through here keeps the same field order as one written by
@@ -498,7 +499,7 @@ def _read_cobra_struct(path: Path) -> cobra.Model:
     model.id = str(model.id)
     model.name = str(model.name or "")
     _listify_annotations(model)
-    return model
+    return set_raven_tolerance(model)
 
 def read_matlab_model(path: str | Path, *, varname: str | None = None) -> cobra.Model:
     """Read a model structure from a MATLAB ``.mat`` file.
@@ -695,4 +696,4 @@ def read_matlab_model(path: str | Path, *, varname: str | None = None) -> cobra.
         notes["metaData"] = metadata
     model.notes = notes
 
-    return model
+    return set_raven_tolerance(model)
