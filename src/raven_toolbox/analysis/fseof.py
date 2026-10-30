@@ -26,6 +26,12 @@ from cobra.exceptions import OptimizationError
 from cobra.flux_analysis import pfba
 from scipy.stats import linregress
 
+# pFBA keeps the objective at this fraction of the optimum found at the same level, as
+# RAVEN's solveLP does when it minimises the flux sum (``solution.f*0.999999``). A solver
+# reports its optimum to within its feasibility tolerance, so a second solve that demands
+# the full value can be infeasible on that solver (HiGHS at the top level of ecYeastGEM).
+_PFBA_FRACTION = 0.999999
+
 
 @dataclass
 class FSEOFResult:
@@ -81,11 +87,13 @@ def fseof(
     correlation_threshold: float = 0.9,
     flux_eps: float = 1e-6,
     min_target: float | None = None,
+    equality: bool = False,
 ) -> FSEOFResult:
     """Run FSEOF for over-production of ``target_rxn``'s product.
 
     Enforces target flux from ``max_fraction/n_steps`` up to ``max_fraction`` of the
-    theoretical maximum in ``n_steps`` steps, maximising growth (``biomass_rxn`` or the
+    theoretical maximum (the target flux of the pFBA solution that maximises it) in
+    ``n_steps`` steps, maximising growth (``biomass_rxn`` or the
     model's current objective) with pFBA at each step. Returns an :class:`FSEOFResult`.
 
     Parameters
@@ -102,9 +110,17 @@ def fseof(
         it is ``knockout`` when the slope is negative and the last absolute flux is at most
         1e-8, ``knockdown`` for a negative slope otherwise.
 
+        Each level is solved in two steps as in RAVEN: the objective is maximised, then the
+        flux sum is minimised with the objective held at 0.999999 of its optimum at that
+        level. A level at which the first step is infeasible ends the scan.
+
+        The top of the scan is ``max_fraction`` of the target flux in the pFBA solution that
+        maximises the target, as in RAVEN's ``FSEOF`` and GECKO's ``ecFSEOF``.
+
         Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
         so the last absolute flux used for the knockout label is that of the last feasible
-        level; ``targets`` is sorted by ``|slope| * |r|`` and not grouped by label; and
+        level; ``targets`` is sorted by ``|slope| * |r|`` (equal scores in model order) and is
+        neither grouped by label nor split into reaction and transport targets; and
         ``flux_eps`` only gates the check of the theoretical maximum.
     min_target:
         Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
@@ -112,6 +128,10 @@ def fseof(
         Defaults to ``None``, which floors the range at
         ``max_fraction of the theoretical maximum / n_steps`` instead. Pass e.g.
         the target reaction's flux at growth-optimum to scan from there.
+    equality:
+        How the enforced flux is imposed. ``False`` (the default) sets it as the lower bound
+        of the target reaction, as RAVEN's ``FSEOF`` does; ``True`` fixes the target flux at
+        the level (lower and upper bound), as GECKO's ``ecFSEOF`` does.
     """
     with model:  # find the theoretical maximum target flux
         model.objective = target_rxn
@@ -119,7 +139,10 @@ def fseof(
     # slim_optimize returns NaN on an infeasible model; np.isfinite catches that too.
     if target_opt is None or not np.isfinite(target_opt) or target_opt <= flux_eps:
         raise ValueError(f"{target_rxn!r} cannot carry positive flux; nothing to scan.")
-    target_max = target_opt * max_fraction
+    with model:  # the maximum is read from the pFBA solution, as RAVEN's solveLP(model, 1) gives it
+        model.objective = target_rxn
+        target_pfba = pfba(model, fraction_of_optimum=_PFBA_FRACTION).fluxes[target_rxn]
+    target_max = float(target_pfba) * max_fraction
     if min_target is None:
         levels = [target_max * (i + 1) / n_steps for i in range(n_steps)]
     else:
@@ -131,9 +154,13 @@ def fseof(
         with model:
             if biomass_rxn is not None:
                 model.objective = biomass_rxn
-            model.reactions.get_by_id(target_rxn).lower_bound = level
+            target = model.reactions.get_by_id(target_rxn)
+            if equality:
+                target.bounds = (level, level)
+            else:
+                target.lower_bound = level
             try:
-                columns[level] = pfba(model).fluxes
+                columns[level] = pfba(model, fraction_of_optimum=_PFBA_FRACTION).fluxes
             except OptimizationError:
                 break  # enforced flux became infeasible: stop scanning
             enforced.append(level)
@@ -187,4 +214,5 @@ def _classify(model, scan, enforced, corr_threshold) -> pd.DataFrame:
         "reaction", "name", "subsystem", "gene_reaction_rule", "genes",
         "target_type", "slope", "correlation", "initial_flux", "final_flux", "score",
     ])
-    return table.sort_values("score", ascending=False, ignore_index=True)
+    # A stable sort keeps reactions with equal scores in model order, as MATLAB's sort does.
+    return table.sort_values("score", ascending=False, ignore_index=True, kind="stable")

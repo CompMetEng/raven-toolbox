@@ -455,6 +455,32 @@ def test_needs_quote_leaves_longer_words_plain(value):
     assert not _needs_quote(value)
 
 
+def test_single_ec_code_and_smiles_are_written_as_lists(tmp_path):
+    # cobra stores a one-identifier annotation as a bare string; RAVEN's writer forces
+    # ec-code and smiles to a list even for one value, and other keys stay scalars.
+    m = cobra.Model("m")
+    a = cobra.Metabolite("a_c", compartment="c", name="a")
+    b = cobra.Metabolite("b_c", compartment="c", name="b")
+    a.annotation = {"smiles": "C1=NC2", "kegg.compound": "C00002"}
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1, b: 1})
+    r.annotation = {"ec-code": "1.1.1.1", "kegg.reaction": "R00001"}
+
+    out = tmp_path / "m.yml"
+    write_yaml_model(m, out)
+    lines = out.read_text().splitlines()
+
+    assert lines[lines.index("      - ec-code:") + 1] == "        - 1.1.1.1"
+    assert lines[lines.index("      - smiles:") + 1] == "        - C1=NC2"
+    assert "      - kegg.compound: C00002" in lines
+    assert "      - kegg.reaction: R00001" in lines
+
+    back = read_yaml_model(out)
+    assert back.reactions.R1.annotation["ec-code"] == ["1.1.1.1"]
+    assert back.metabolites.a_c.annotation["smiles"] == ["C1=NC2"]
+
+
 def _edge_model():
     m = cobra.Model("edge")
     a = cobra.Metabolite("A_c", name="A", compartment="c")
