@@ -28,6 +28,7 @@ import cobra
 from raven_toolbox.localization.assign import (
     AssignmentProposal,
     _base_met,
+    _check_unique_keys,
     apply_assignment,
 )
 from raven_toolbox.localization.curation import _is_impermeant
@@ -117,6 +118,7 @@ def relocate_reactions(
     there any more. The transport repair only touches species of the moved reactions.
     """
     base = base_metabolite if base_metabolite is not None else _base_met
+    _check_unique_keys(model.metabolites, base)
     floor = float(min_growth if min_growth is not None else proposal.min_growth)
     warnings: list[str] = []
 

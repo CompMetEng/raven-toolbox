@@ -9,6 +9,8 @@ import copy
 
 import cobra
 
+from raven_toolbox.utils.gpr import set_gene_rule
+
 
 def convert_to_irreversible(
     model: cobra.Model, rxns: list[str] | None = None
@@ -76,7 +78,7 @@ def convert_to_irreversible(
         rev_rxn.lower_bound = 0.0
         rev_rxn.upper_bound = -original_lb
         rev_rxn.add_metabolites({m: -c for m, c in rxn.metabolites.items()})
-        rev_rxn.gene_reaction_rule = rxn.gene_reaction_rule
+        set_gene_rule(rev_rxn, rxn.gpr)
         rev_rxn.subsystem = rxn.subsystem
         rev_rxn.annotation = copy.deepcopy(rxn.annotation)
         rev_rxn.notes = copy.deepcopy(rxn.notes)

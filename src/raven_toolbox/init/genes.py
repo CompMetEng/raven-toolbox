@@ -16,7 +16,7 @@ from collections.abc import Mapping
 import cobra
 from cobra.manipulation import remove_genes
 
-from raven_toolbox.utils.gpr import resolve_aggregators
+from raven_toolbox.utils.gpr import resolve_aggregators, set_gene_rule
 
 
 def _prune(node, scores, iso, cplx, ties: list) -> tuple[str | None, float | None]:
@@ -100,7 +100,7 @@ def remove_low_score_genes(
         if ties and tied_reactions is not None:
             tied_reactions.append(rxn.id)
         if pruned is not None:
-            rxn.gene_reaction_rule = pruned
+            set_gene_rule(rxn, pruned)
 
     used = {g.id for rxn in out.reactions for g in rxn.genes}
     removed = sorted(g.id for g in out.genes if g.id not in used)

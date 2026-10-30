@@ -20,19 +20,49 @@ Built on raven-toolbox + cobra.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 import cobra
+
+from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+from raven_toolbox.utils.gpr import set_gene_rule
 
 __all__ = ["AssignmentProposal", "GrowthCondition", "apply_assignment"]
 
 
 # --------------------------------------------------------------------------- helpers
 def _base_met(m: cobra.Metabolite) -> str:
+    """The default compartment-agnostic key of a metabolite.
+
+    The base id that :func:`~raven_toolbox.manipulation.merge_compartments` stored in
+    ``notes["merged_base_id"]``, if there is one; otherwise the id without the trailing
+    ``_<compartment>`` suffix of the metabolite's own compartment.
+    """
+    stored = (m.notes or {}).get(MERGED_BASE_ID_NOTE)
+    if isinstance(stored, str) and stored:
+        return stored
     if m.compartment and m.id.endswith(f"_{m.compartment}"):
         return m.id[: -(len(m.compartment) + 1)]
     return m.id
+
+
+def _check_unique_keys(metabolites: Iterable[cobra.Metabolite],
+                       base: Callable[[cobra.Metabolite], str]) -> None:
+    """Raise :class:`ValueError` when two metabolites in one compartment have the same key, which
+    would make them one species."""
+    seen: dict[tuple[str, str], str] = {}
+    clashes: list[str] = []
+    for m in metabolites:
+        key = (base(m), m.compartment)
+        if key in seen and seen[key] != m.id:
+            clashes.append(f"{seen[key]} and {m.id} (key {key[0]!r} in {key[1]!r})")
+        else:
+            seen.setdefault(key, m.id)
+    if clashes:
+        raise ValueError("metabolites with the same key in one compartment: "
+                         + "; ".join(clashes[:5])
+                         + "; pass a base_metabolite that tells them apart")
 
 
 def _rxn_compartment(rxn: cobra.Reaction) -> str | None:
@@ -122,10 +152,14 @@ def apply_assignment(
     ``default_compartment`` is the hub compartment star-topology transports route through. Pass the
     same ``base_metabolite`` and ``universal`` used in :func:`assign_compartments` so the same
     compartment-agnostic keying is used (existing per-compartment metabolites are reused rather than
-    duplicated) and the chosen gap-fill reactions are added.
+    duplicated) and the chosen gap-fill reactions are added. The default key is the base id that
+    :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged metabolite, otherwise
+    the id without the suffix of the metabolite's own compartment. :class:`ValueError` when two
+    metabolites in one compartment of ``model`` have the same key.
     """
     out = model.copy()
     base = base_metabolite if base_metabolite is not None else _base_met
+    _check_unique_keys(out.metabolites, base)
 
     # (base key, compartment) -> existing metabolite, so a reaction moved into a compartment
     # reuses the species already there instead of creating a parallel duplicate.
@@ -138,10 +172,13 @@ def apply_assignment(
         met = index.get(key)
         if met is None:
             new_id = f"{template.id}__{compartment}"
-            met = (out.metabolites.get_by_id(new_id) if new_id in out.metabolites
-                   else cobra.Metabolite(new_id, name=template.name, compartment=compartment,
-                                         formula=template.formula, charge=template.charge))
-            if new_id not in out.metabolites:
+            if new_id in out.metabolites:
+                met = out.metabolites.get_by_id(new_id)
+            else:
+                met = cobra.Metabolite(new_id, name=template.name, compartment=compartment,
+                                       formula=template.formula, charge=template.charge)
+                if MERGED_BASE_ID_NOTE in (template.notes or {}):
+                    met.notes[MERGED_BASE_ID_NOTE] = template.notes[MERGED_BASE_ID_NOTE]
                 out.add_metabolites([met])
             index[key] = met
         return met
@@ -174,7 +211,7 @@ def _add_universal_reaction(model, urxn, resolve):
     # copy, leaving the gap-fill reaction a disconnected island. Keying on (base, compartment) lands on
     # the species already there.
     new.add_metabolites({resolve(m, m.compartment): coeff for m, coeff in urxn.metabolites.items()})
-    new.gene_reaction_rule = urxn.gene_reaction_rule
+    set_gene_rule(new, urxn.gpr)
 
 
 def _move_reaction(rxn, compartment, resolve):
@@ -193,7 +230,7 @@ def _duplicate_reaction(model, rxn, compartment, resolve):
                          lower_bound=rxn.lower_bound, upper_bound=rxn.upper_bound)
     model.add_reactions([dup])
     dup.add_metabolites({resolve(m, compartment): coeff for m, coeff in rxn.metabolites.items()})
-    dup.gene_reaction_rule = rxn.gene_reaction_rule
+    set_gene_rule(dup, rxn.gpr)
 
 
 def _add_transport(model, base_key, compartment, default_compartment, index, resolve, n):

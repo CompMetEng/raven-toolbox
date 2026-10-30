@@ -431,3 +431,142 @@ def test_growth_conditions_are_certified_per_medium():
     assert res.certified
     assert res.growths["__primary__"] >= 1.0
     assert res.growths["onB"] >= 1.0
+
+
+def _merged_two_compartment_draft():
+    """A draft merged by merge_compartments: A has copies A_c and A_m, so the merged A keeps the id
+    A_c in compartment s."""
+    from raven_toolbox.manipulation import merge_compartments
+
+    m = cobra.Model("draft")
+    a_c = cobra.Metabolite("A_c", name="A", compartment="c")
+    a_m = cobra.Metabolite("A_m", name="A", compartment="m")
+    x_c = cobra.Metabolite("X_c", name="X", compartment="c")
+    r1 = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    r2 = cobra.Reaction("R2", lower_bound=0, upper_bound=1000)
+    ex = cobra.Reaction("EX_X", lower_bound=-10, upper_bound=1000)
+    m.add_reactions([r1, r2, ex])
+    r1.add_metabolites({x_c: -1, a_c: 1})
+    r2.add_metabolites({a_m: -1, x_c: 1})
+    ex.add_metabolites({x_c: -1})
+    merged, _, _ = merge_compartments(m)
+    assert merged.metabolites.A_c.compartment == "s"
+    return merged
+
+
+def test_apply_assignment_matches_a_merged_metabolite_to_the_universal_copy():
+    """The merged A_c (in s) and the universal A_m share the key A, so the gap-fill reaction lands
+    on the A that R1 makes in m instead of on a second copy."""
+    merged = _merged_two_compartment_draft()
+    universal = cobra.Model("u")
+    u1 = cobra.Reaction("U1", lower_bound=0, upper_bound=1000)
+    universal.add_reactions([u1])
+    u1.add_metabolites({cobra.Metabolite("A_m", name="A", compartment="m"): -1,
+                        cobra.Metabolite("Y_m", name="Y", compartment="m"): 1})
+    proposal = AssignmentProposal(placements={"R1": ["m"]}, added_reactions=["U1"])
+    out = apply_assignment(merged, proposal, universal=universal)
+    a_in_m = [x for x in out.metabolites if x.name == "A" and x.compartment == "m"]
+    assert len(a_in_m) == 1
+    assert a_in_m[0] in out.reactions.R1.metabolites
+    assert a_in_m[0] in out.reactions.U1.metabolites
+
+
+def _draft_merged_into_c():
+    """A draft merged into c by merge_compartments: the intermediate I had copies I_g and I_x only,
+    so the merged I keeps the id I_g in c."""
+    from raven_toolbox.manipulation import merge_compartments
+
+    o = cobra.Model("orig")
+    a = cobra.Metabolite("A_c", name="A", compartment="c")
+    b = cobra.Metabolite("B_c", name="B", compartment="c")
+    ig = cobra.Metabolite("I_g", name="I", compartment="g")
+    ix = cobra.Metabolite("I_x", name="I", compartment="x")
+    ex = cobra.Reaction("EX_A", lower_bound=-10, upper_bound=1000)
+    r1 = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r2 = cobra.Reaction("r2", lower_bound=0, upper_bound=1000)
+    t = cobra.Reaction("tI", lower_bound=-1000, upper_bound=1000)
+    bio = cobra.Reaction("bio", lower_bound=0, upper_bound=1000)
+    o.add_reactions([ex, r1, r2, t, bio])
+    ex.add_metabolites({a: -1})
+    r1.add_metabolites({a: -1, ig: 1})
+    r2.add_metabolites({ix: -1, b: 1})
+    t.add_metabolites({ig: -1, ix: 1})
+    bio.add_metabolites({b: -1})
+    r1.gene_reaction_rule = "g1"
+    r2.gene_reaction_rule = "g2"
+    o.objective = "bio"
+    draft, _, _ = merge_compartments(o, merged_id="c", merged_name="cytosol")
+    assert draft.metabolites.I_g.compartment == "c"
+    scores = LocalizationScores(pd.DataFrame(
+        {"c": [0.1, 0.1], "m": [0.9, 0.0], "p": [0.0, 0.9], "g": [0.0, 0.0], "x": [0.0, 0.0]},
+        index=["g1", "g2"]))
+    return draft, scores
+
+
+def test_default_key_of_a_merged_metabolite_is_the_same_in_every_localization_function():
+    """assign_compartments and apply_assignment both key the merged I_g as I, so the model built
+    from the proposal has every transport the proposal lists and grows."""
+    from raven_toolbox.localization import curation_priority, relocate_reactions
+
+    draft, scores = _draft_merged_into_c()
+    res = assign_compartments(draft, scores, ["r1", "r2"])
+    assert res.certified
+    assert {b for b, _ in res.added_transports} == {"A", "I", "B"}
+    out = apply_assignment(draft, res)
+    assert len([r for r in out.reactions if r.id.startswith("tr_")]) == len(res.added_transports)
+    assert out.slim_optimize(error_value=0.0) > 1e-6
+    moved = relocate_reactions(draft, res, {"r2": "m"})
+    assert {b for b, _ in moved.transports_added + moved.transports_removed} <= {"A", "I", "B"}
+    curation_priority(draft, res, scores, check_essential=False)
+
+
+def test_name_keyed_merge_keeps_distinct_species_distinct_in_apply_assignment():
+    """X_c (name X) and X_m (name X mito) are two species; after a name-keyed merge both are in s
+    and apply_assignment makes a copy of each in m."""
+    from raven_toolbox.manipulation import merge_compartments
+
+    m = cobra.Model("m")
+    xc = cobra.Metabolite("X_c", name="X", compartment="c")
+    xm = cobra.Metabolite("X_m", name="X mito", compartment="m")
+    yc = cobra.Metabolite("Y_c", name="Y", compartment="c")
+    ra = cobra.Reaction("Ra", lower_bound=0, upper_bound=1000)
+    rb = cobra.Reaction("Rb", lower_bound=0, upper_bound=1000)
+    m.add_reactions([ra, rb])
+    ra.add_metabolites({yc: -1, xc: 1})
+    rb.add_metabolites({xm: -1, yc: 1})
+    merged, _, _ = merge_compartments(m, base_metabolite=lambda x: x.name)
+    out = apply_assignment(merged, AssignmentProposal(placements={"Ra": ["m"], "Rb": ["m"]}))
+    in_m = sorted(x.name for x in out.metabolites if x.compartment == "m")
+    assert in_m == ["X", "X mito", "Y"]
+
+
+def test_id_that_ends_in_another_compartment_id_keeps_its_own_key():
+    """vitamin_a in c and vitamin_c in e stay two species when the universal model has a
+    compartment a: only the suffix of a metabolite's own compartment is stripped."""
+    m = cobra.Model("m")
+    va = cobra.Metabolite("vitamin_a", name="retinol", compartment="c")
+    vc = cobra.Metabolite("vitamin_c", name="ascorbate", compartment="e")
+    z = cobra.Metabolite("Z_c", name="Z", compartment="c")
+    rv = cobra.Reaction("Rv", lower_bound=0, upper_bound=1000)
+    rw = cobra.Reaction("Rw", lower_bound=0, upper_bound=1000)
+    m.add_reactions([rv, rw])
+    rv.add_metabolites({va: -1, z: 1})
+    rw.add_metabolites({vc: -1, z: 1})
+    u = cobra.Model("u")
+    u.add_metabolites([cobra.Metabolite("Q_a", name="Q", compartment="a")])
+    out = apply_assignment(m, AssignmentProposal(placements={"Rv": ["m"], "Rw": ["m"]}), universal=u)
+    assert sorted(x.name for x in out.metabolites if x.compartment == "m") == ["Z", "ascorbate", "retinol"]
+
+
+def test_two_metabolites_with_one_key_in_a_compartment_raise():
+    m = cobra.Model("m")
+    h1 = cobra.Metabolite("h_c", name="H+", compartment="c")
+    h2 = cobra.Metabolite("h", name="proton", compartment="c")
+    r = cobra.Reaction("R", lower_bound=0, upper_bound=1000)
+    m.add_reactions([r])
+    r.add_metabolites({h1: -1, h2: 1})
+    with pytest.raises(ValueError, match="same key"):
+        apply_assignment(m, AssignmentProposal(placements={"R": ["m"]}))
+    scores = LocalizationScores(pd.DataFrame({"c": [0.1], "m": [0.9]}, index=["g1"]))
+    with pytest.raises(ValueError, match="same key"):
+        assign_compartments(m, scores, ["R"], biomass_reaction="R")

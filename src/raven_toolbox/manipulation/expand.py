@@ -15,10 +15,12 @@ import copy
 import cobra
 from cobra.core.gene import GPR
 
+from raven_toolbox.utils.gpr import parse_gr_rule, set_gene_rule
+
 __all__ = ["expand_model", "gpr_to_dnf"]
 
 
-def gpr_to_dnf(gpr: GPR) -> list[list[str]]:
+def gpr_to_dnf(gpr: GPR | str | None) -> list[list[str]]:
     """Convert a GPR to disjunctive normal form (list of AND-clauses).
 
     An empty GPR yields an empty list. A single clause (no OR anywhere)
@@ -27,7 +29,21 @@ def gpr_to_dnf(gpr: GPR) -> list[list[str]]:
 
     Handles distributivity: ``g1 and (g2 or g3)`` becomes
     ``[[g1, g2], [g1, g3]]``.
+
+    Parameters
+    ----------
+    gpr
+        A cobra :class:`~cobra.core.gene.GPR`, a grRule string or ``None``. A string is
+        read with :func:`raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN's
+        ``parseGrRule``, as RAVEN's ``grRuleToDNF`` reads it.
+
+    Raises
+    ------
+    ValueError
+        If a rule string is malformed in that grammar (RAVEN raises ``RAVEN:badGrRule``).
     """
+    if isinstance(gpr, str):
+        gpr = parse_gr_rule(gpr)
     if gpr is None or gpr.body is None:
         return []
     return _node_to_dnf(gpr.body)
@@ -107,7 +123,7 @@ def expand_model(model: cobra.Model) -> list[str]:
             new_rxn.upper_bound = original_rxn.upper_bound
             new_rxn.add_metabolites(dict(original_rxn.metabolites.items()))
             new_rxn.subsystem = original_rxn.subsystem
-            new_rxn.gene_reaction_rule = " and ".join(clause)
+            set_gene_rule(new_rxn, " and ".join(clause))
             # Propagate per-reaction metadata (notably ec-code / annotations)
             # so downstream functions see the same annotations on expanded
             # reactions as on the original. Deep-copy so siblings are independent.

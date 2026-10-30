@@ -1,5 +1,6 @@
 """Tests for expand_model (RAVEN expandModel.m) — splitting isozymes into reactions."""
 import cobra
+import pytest
 
 from raven_toolbox.manipulation import expand_model
 from raven_toolbox.manipulation.expand import gpr_to_dnf
@@ -297,3 +298,22 @@ def test_first_copy_keeps_the_original_position_and_other_copies_are_appended():
         "r1_EXP_1", "r2", "r3_EXP_1", "r4", "r1_EXP_2", "r3_EXP_2", "r3_EXP_3",
     ]
     assert model.reactions.index("r4") == 3
+
+
+@pytest.mark.parametrize(
+    "rule, expected",
+    [
+        ("G1 && (G2 || G3)", [["G1", "G2"], ["G1", "G3"]]),
+        ("G1 Or G2", [["G1"], ["G2"]]),
+        ("G1&G2 or G3", [["G1&G2"], ["G3"]]),
+        ("", []),
+    ],
+)
+def test_dnf_from_string_uses_the_parsegrrule_grammar(rule, expected):
+    assert gpr_to_dnf(rule) == expected
+
+
+@pytest.mark.parametrize("rule", ["G1 and", "(G1 or G2", "G1 G2", "()", "G1 or or G2"])
+def test_dnf_from_string_raises_on_a_malformed_rule(rule):
+    with pytest.raises(ValueError, match="grRule"):
+        gpr_to_dnf(rule)

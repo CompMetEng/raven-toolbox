@@ -18,6 +18,7 @@ import cobra
 from cobra import Metabolite, Reaction
 
 from raven_toolbox.manipulation.add import _new_met_id
+from raven_toolbox.utils.gpr import set_gene_rule
 
 
 def _name_comp(met: Metabolite) -> str:
@@ -72,7 +73,7 @@ def add_reactions_from_model(
     if genes is False:
         rules = [""] * len(source_rxns)
     elif genes is True:
-        rules = [r.gene_reaction_rule for r in source_rxns]
+        rules = [r.gpr for r in source_rxns]
     elif isinstance(genes, str):
         rules = [genes] * len(source_rxns)
     else:
@@ -135,7 +136,7 @@ def add_reactions_from_model(
             {draft_by_name[_name_comp(met)]: coef for met, coef in srx.metabolites.items()}
         )
         if rule:
-            rxn.gene_reaction_rule = rule
+            set_gene_rule(rxn, rule)
         rxn.annotation = copy.deepcopy(srx.annotation)
         notes = copy.deepcopy(srx.notes)
         if note is not None:

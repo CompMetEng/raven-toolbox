@@ -174,3 +174,46 @@ def test_prune_orthology_keeps_only_matched_kos():
     # Default (organism path) keeps the full reference KO list.
     full, _ = assemble_model_from_ko_genes(ref, ko_reaction, ko_to_genes)
     assert full.reactions.get_by_id("R1").annotation["kegg.orthology"] == ["K1", "K2", "K3"]
+
+
+def _fake_hmmsearch(monkeypatch, calls):
+    """Make hmmsearch a stub that records its command; the process may run on 7 of 16 CPUs."""
+    import os
+    import subprocess
+
+    import raven_toolbox.reconstruction.kegg.query as query
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(7)), raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(query, "resolve_binary", lambda name, binary=None: name)
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        open(cmd[cmd.index("--tblout") + 1], "w").close()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(query.subprocess, "run", fake_run)
+    return query
+
+
+def test_hmmsearch_threads_default_to_every_available_cpu(tmp_path, monkeypatch):
+    """As RAVEN's getKEGGModelForOrganism, which passes feature('numcores')'s assigned count."""
+    calls: list = []
+    query = _fake_hmmsearch(monkeypatch, calls)
+    library = tmp_path / "lib.hmm"
+    library.write_text("HMMER3/f\n")
+    query.run_hmmsearch("org.faa", library)
+    assert calls[0][calls[0].index("--cpu") + 1] == "7"
+    query.run_hmmsearch("org.faa", library, threads=3)
+    assert calls[1][calls[1].index("--cpu") + 1] == "3"
+
+
+def test_kegg_model_from_sequences_passes_the_default_threads_on(tmp_path, monkeypatch, reference_and_tables):
+    calls: list = []
+    query = _fake_hmmsearch(monkeypatch, calls)
+    model_ref, tables = reference_and_tables
+    library = tmp_path / "lib.hmm"
+    library.write_text("HMMER3/f\n")
+    query.get_kegg_model_from_sequences("org.faa", model_ref, tables["ko_reaction"], library,
+                                        rxn_flags=tables["rxn_flags"])
+    assert calls[0][calls[0].index("--cpu") + 1] == "7"

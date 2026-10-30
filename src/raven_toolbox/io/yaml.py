@@ -44,6 +44,7 @@ import gzip
 import re
 import warnings
 from collections import OrderedDict
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
@@ -60,6 +61,7 @@ from raven_toolbox.io.ec_data import (
     ec_data_from_yaml_sections,
     ec_data_to_yaml_sections,
 )
+from raven_toolbox.utils.gpr import set_gene_rule
 
 # A dedicated instance for *writing* only (reading uses _read_yaml below).
 # Mutating cobra's own YAML instance would change its width for
@@ -248,6 +250,9 @@ def _capture_entry_fields(entries, fields):
 
     Returns a list of ``{notes_key: value}`` dicts aligned with ``entries`` (so
     cobra never sees these keys), to be attached to the built objects afterwards.
+    A ``notes`` mapping, which :func:`write_yaml_model` writes for notes that have no
+    RAVEN field, is spread back into the notes dict, with its ``note`` entry as the
+    free-text note.
     """
     captured = []
     for entry in entries:
@@ -255,8 +260,18 @@ def _capture_entry_fields(entries, fields):
         for yaml_key, notes_key in fields:
             if yaml_key in entry:
                 notes[notes_key] = entry.pop(yaml_key)
+        if isinstance(notes.get("note"), Mapping):
+            notes.update(notes.pop("note"))
         captured.append(notes)
     return captured
+
+
+def _pop_gene_rule(entry) -> str | None:
+    """Remove and return the gene rule of a reaction entry (``None`` when it has none)."""
+    if not isinstance(entry, dict):
+        return None
+    rule = entry.pop("gene_reaction_rule", None)
+    return None if rule is None or str(rule).strip() == "" else str(rule)
 
 
 def read_yaml_model(path: str | Path) -> cobra.Model:
@@ -378,8 +393,15 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     rxn_notes = _capture_entry_fields(raw.get("reactions", []), _RXN_FIELDS)
     gene_notes = _capture_entry_fields(raw.get("genes", []), _GENE_FIELDS)
 
+    # Gene rules are read with RAVEN's grammar (parse_gr_rule), in which G1&G2 is one gene id;
+    # cobra's model_from_dict would read it as G1 and G2.
+    rules = [_pop_gene_rule(entry) for entry in raw.get("reactions", []) or ()]
+
     model = model_from_dict(raw)
 
+    for rxn, rule in zip(model.reactions, rules, strict=False):
+        if rule is not None:
+            set_gene_rule(rxn, rule)
     for met, notes in zip(model.metabolites, met_notes, strict=False):
         met.notes = notes
     for rxn, notes in zip(model.reactions, rxn_notes, strict=False):

@@ -12,7 +12,9 @@ from pathlib import Path
 import cobra
 import numpy as np
 import pandas as pd
+from cobra.core.gene import GPR
 
+from raven_toolbox.utils.gpr import parse_gr_rule, rule_tokens
 from raven_toolbox.utils.ids import next_ids
 from raven_toolbox.utils.parse import subsystem_to_str
 
@@ -177,6 +179,10 @@ def batch_curate(
     called without permission to add genes and stops with an error of its own. The rule of an
     existing reaction may name a gene the model does not have. A gene id that ``genes_df``
     lists more than once raises :class:`ValueError`, whether the model has the gene or not.
+    The reaction gets the rule as this grammar reads it, so ``G1&G2`` is one gene, and it stays
+    one gene through :func:`~raven_toolbox.io.write_yaml_model` and
+    :func:`~raven_toolbox.io.read_yaml_model` and through cobra's SBML files. cobra's JSON
+    reader reads the rule with cobra's own grammar and splits ``G1&G2`` into ``G1`` and ``G2``.
 
     A reaction table with a header and no row is empty: when both reaction tables are empty
     nothing happens, and a coefficient row without a reaction row (or the reverse) raises
@@ -434,75 +440,14 @@ def _row_has_content(row, columns=None) -> bool:
     return any(_has_value(v) for v in values)
 
 
-_RULE_TOKEN = re.compile(r"\(|\)|[^\s()]+")
-_AND_WORDS = frozenset({"and", "&", "&&"})
-_OR_WORDS = frozenset({"or", "|", "||"})
-#: Spellings of the operators that cobra reads as they are.
-_COBRA_OPERATORS = frozenset({"and", "AND", "&", "or", "OR", "|"})
-
-
-def _rule_tokens(rule: str) -> list[tuple[str, str]]:
-    """Split a gene rule into ``(kind, text)`` pairs; kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
-
-    The operators are ``and``/``or`` in any case and the symbols ``&``, ``&&``, ``|`` and ``||``,
-    as RAVEN's ``parseGrRule`` reads them; every other word is a gene id.
-    """
-    tokens = []
-    for match in _RULE_TOKEN.finditer(rule):
-        word = match.group()
-        low = word.lower()
-        if word in ("(", ")"):
-            tokens.append((word, word))
-        elif low in _AND_WORDS:
-            tokens.append(("and", word))
-        elif low in _OR_WORDS:
-            tokens.append(("or", word))
-        else:
-            tokens.append(("gene", word))
-    return tokens
-
-
 def _rule_genes(rule: str) -> list[str]:
-    """Gene ids of a gene rule; :class:`ValueError` when the rule is not well formed.
+    """Gene ids of a gene rule, in order; :class:`ValueError` when the rule is not well formed.
 
-    The grammar is that of RAVEN's ``parseGrRule``: ``expr := term (or term)*``,
-    ``term := factor (and factor)*``, ``factor := gene | ( expr )``.
+    The rule is read with :func:`~raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN's
+    ``parseGrRule``.
     """
-    tokens = _rule_tokens(rule)
-    genes: list[str] = []
-
-    def factor(pos: int) -> int:
-        if pos >= len(tokens):
-            raise ValueError("the rule ends after an operator")
-        kind, text = tokens[pos]
-        if kind == "(":
-            pos = expr(pos + 1)
-            if pos >= len(tokens) or tokens[pos][0] != ")":
-                raise ValueError("unbalanced parentheses")
-            return pos + 1
-        if kind == "gene":
-            genes.append(text)
-            return pos + 1
-        raise ValueError(f'expected a gene but found "{text}"')
-
-    def term(pos: int) -> int:
-        pos = factor(pos)
-        while pos < len(tokens) and tokens[pos][0] == "and":
-            pos = factor(pos + 1)
-        return pos
-
-    def expr(pos: int) -> int:
-        pos = term(pos)
-        while pos < len(tokens) and tokens[pos][0] == "or":
-            pos = term(pos + 1)
-        return pos
-
-    if not tokens:
-        return genes
-    end = expr(0)
-    if end < len(tokens):
-        raise ValueError(f'unexpected "{tokens[end][1]}"')
-    return genes
+    parse_gr_rule(rule)
+    return [text for kind, text in rule_tokens(rule) if kind == "gene"]
 
 
 def _row_rule_genes(row: pd.Series) -> list[str]:
@@ -518,28 +463,12 @@ def _row_rule_genes(row: pd.Series) -> list[str]:
         ) from None
 
 
-def _stored_gene_rule(rule) -> str:
-    """The rule as cobra reads it: operator spellings cobra does not know (``And``, ``&&``,
-    ``||``) are written as ``and``/``or``; everything else is kept as it is."""
-    text = str(rule)
-    pieces: list[str] = []
-    last = 0
-    for match in _RULE_TOKEN.finditer(text):
-        word = match.group()
-        low = word.lower()
-        if word in _COBRA_OPERATORS or word in ("(", ")"):
-            continue
-        if low in _AND_WORDS:
-            replacement = "and"
-        elif low in _OR_WORDS:
-            replacement = "or"
-        else:
-            continue
-        pieces.append(text[last:match.start()])
-        pieces.append(replacement)
-        last = match.end()
-    pieces.append(text[last:])
-    return "".join(pieces)
+def _stored_gpr(rule) -> GPR:
+    """The rule as :func:`~raven_toolbox.utils.parse_gr_rule` reads it, so the reaction gets the
+    genes that were validated: ``G1&G2`` stays one gene id, as in RAVEN, where cobra reading the
+    string would split it."""
+    parsed = parse_gr_rule(str(rule))
+    return parsed if parsed is not None else GPR()
 
 
 def _check_gene_rules(rxns_df: pd.DataFrame) -> None:
@@ -909,7 +838,7 @@ def _update_reaction(
     if _is_written(row, "rxnNames", overwrite_with_empty):
         rxn.name = _text(row["rxnNames"])
     if _has_value(row.get("grRules")):
-        rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
+        rxn.gpr = _stored_gpr(row["grRules"])
     if _has_value(row.get("lb")) or _has_value(row.get("ub")):
         # Both bounds are set together, so that a pair that is valid as a whole is accepted
         # whatever the stored bounds are.
@@ -965,7 +894,7 @@ def _build_new_reactions(
         )
         rxn.add_metabolites(stoich)
         if _has_value(row.get("grRules")):
-            rxn.gene_reaction_rule = _stored_gene_rule(row["grRules"])
+            rxn.gpr = _stored_gpr(row["grRules"])
         if _has_value(row.get("subSystems")):
             rxn.subsystem = subsystem_to_str(row["subSystems"])
         if _has_value(row.get("eccodes")):

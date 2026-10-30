@@ -23,6 +23,8 @@ from collections.abc import Iterable
 import cobra
 from cobra import Gene, Metabolite, Model, Reaction
 
+from raven_toolbox.utils.gpr import set_gene_rule
+
 
 def _unique_id(existing, base: str, suffix: str) -> str:
     """Return base, or base_suffix (then base_suffix_2, ...) if it collides."""
@@ -154,7 +156,7 @@ def merge_models(
                 {ensure_metabolite(m, origin): coef for m, coef in rxn.metabolites.items()}
             )
             if rxn.gene_reaction_rule:
-                new_rxn.gene_reaction_rule = rxn.gene_reaction_rule
+                set_gene_rule(new_rxn, rxn.gpr)
             new_rxn.annotation = copy.deepcopy(rxn.annotation)
             new_rxn.notes = copy.deepcopy(rxn.notes)
             if track_origin:

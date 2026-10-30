@@ -532,3 +532,42 @@ def test_only_the_stored_default_bound_is_written(tmp_path):
     text = out.read_text()
     assert "defaultLB" in text
     assert "defaultUB" not in text
+
+
+@pytest.mark.parametrize("rule, genes, text", [
+    ("G1&G2 or G3", ["G1&G2", "G3"], "G1&G2 or G3"),
+    ("(G1 and G2) or G3", ["G1", "G2", "G3"], "(G1 and G2) or G3"),
+    ("G1 && G2", ["G1", "G2"], "G1 and G2"),
+])
+def test_read_yaml_model_reads_gene_rules_as_parse_gr_rule(tmp_path, rule, genes, text):
+    """RAVEN's parseGrRule reads G1&G2 as one gene id and && as and."""
+    m = cobra.Model("t")
+    a = cobra.Metabolite("a_c", compartment="c")
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1})
+    write_yaml_model(m, tmp_path / "m.yml")
+    data = (tmp_path / "m.yml").read_text().replace(
+        "- id: R1\n", f"- id: R1\n    - gene_reaction_rule: {rule}\n")
+    (tmp_path / "m.yml").write_text(data)
+    back = read_yaml_model(tmp_path / "m.yml")
+    assert sorted(g.id for g in back.reactions.R1.genes) == genes
+    assert back.reactions.R1.gene_reaction_rule == text
+
+
+def test_read_yaml_model_hands_a_rule_parse_gr_rule_refuses_to_cobra(tmp_path):
+    """Two genes without an operator are a malformed rule for parse_gr_rule; the file is still
+    read, with cobra's reading of that rule."""
+    m = cobra.Model("t")
+    a = cobra.Metabolite("a_c", compartment="c")
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1})
+    r.gene_reaction_rule = "G1 or G2"
+    write_yaml_model(m, tmp_path / "m.yml")
+    data = (tmp_path / "m.yml").read_text().replace("G1 or G2", "G1 G2 or G3")
+    (tmp_path / "m.yml").write_text(data)
+    expected = cobra.Reaction("x")
+    expected.gene_reaction_rule = "G1 G2 or G3"
+    back = read_yaml_model(tmp_path / "m.yml")
+    assert back.reactions.R1.gene_reaction_rule == expected.gene_reaction_rule

@@ -19,6 +19,7 @@ import cobra
 from cobra import Reaction
 
 from raven_toolbox.manipulation.add import _build_met_index, _stoichiometry
+from raven_toolbox.utils.gpr import set_gene_rule
 
 __all__ = ["change_reaction_equations", "change_gene_reaction_rules"]
 
@@ -90,10 +91,11 @@ def change_gene_reaction_rules(
     replace: bool = True,
 ) -> list[Reaction]:
     """Set or append gene-reaction rules on existing reactions.
-    cobra already does the heavy lifting on assignment to
-    ``reaction.gene_reaction_rule``: it auto-creates any new ``Gene`` objects and
-    normalises the rule. So the value here is batching plus RAVEN's ``replace``
-    option to **append** rather than overwrite.
+
+    Rules are read with :func:`~raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN's
+    ``parseGrRule`` (``G1&G2`` is one gene id); a rule that grammar refuses is read with
+    cobra's parser. New genes are created in the model. ``replace=False`` appends the rule
+    as an isozyme, as RAVEN's ``changeGrRules`` with ``replace`` false does.
 
     Parameters
     ----------
@@ -122,7 +124,7 @@ def change_gene_reaction_rules(
         else:
             new_rule = f"({rxn.gene_reaction_rule}) or ({rule})"
 
-        rxn.gene_reaction_rule = new_rule  # cobra creates genes + normalises
+        set_gene_rule(rxn, new_rule)
         changed.append(rxn)
 
     return changed

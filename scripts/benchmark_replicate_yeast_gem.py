@@ -122,10 +122,10 @@ def build_draft(yeast: cobra.Model) -> tuple[cobra.Model, str]:
     """Flatten curated yeast-GEM to one compartment via the real `merge_compartments`, and return the
     reaction to use as the biomass/growth objective on the flattened draft.
 
-    `drop_single_metabolite_reactions=False` is essential here: exchange reactions are
-    single-metabolite, so the default would delete every nutrient uptake and the flattened draft
-    couldn't grow (it keeps the collapsed one-metabolite transports too, but those are negligible —
-    the only material effect is preserving the medium). With them kept, yeast-GEM's objective
+    `drop_single_metabolite_reactions=False` (the default, passed explicitly) is essential here:
+    exchange reactions are single-metabolite, so `True` would delete every nutrient uptake and the
+    flattened draft couldn't grow (it keeps the collapsed one-metabolite transports too, but those
+    are negligible; the only material effect is preserving the medium). With them kept, yeast-GEM's objective
     ``r_2111`` "growth" (a ``biomass ->`` drain) survives directly. The `add_boundary` branch is a
     defensive fallback for models whose objective still doesn't survive: re-add an equivalent demand
     sink on the merged biomass metabolite so its producer isn't mass-balance-blocked."""

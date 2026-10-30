@@ -31,6 +31,7 @@ from raven_toolbox.tasks.check import (
     apply_task_constraints,
     task_name_maps,
 )
+from raven_toolbox.utils.gpr import set_gene_rule
 
 _FILL_TIME_LIMIT = 300.0  # RAVEN ftINITFillGapsMILP TimeLimit (per task)
 _FILL_SEED = 26           # RAVEN ftINITFillGapsMILP Seed
@@ -115,7 +116,7 @@ def _add_reference_reactions(
     target.add_reactions([new for new, _ in built])
     for new, src in built:
         new.add_metabolites({target.metabolites.get_by_id(m.id): c for m, c in src.metabolites.items()})
-        new.gene_reaction_rule = src.gene_reaction_rule
+        set_gene_rule(new, src.gpr)
 
 
 def _set_fill_solver(model: cobra.Model, time_limit: float | None, seed: int) -> None:

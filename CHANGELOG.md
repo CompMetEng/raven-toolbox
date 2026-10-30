@@ -6,6 +6,70 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `manipulation.remove_genes` defaults to `blocked_reactions="constrain"` (was: `"remove"`), as
+  RAVEN's `removeGenes` does: a reaction whose rule loses its last enzyme stays, with the rule
+  dropped and bounds `(0, 0)`. Pass `blocked_reactions="remove"` to delete such reactions.
+* `manipulation.remove_genes` also removes every gene that no remaining reaction named in its
+  rule before the removal, also when not requested (was: only the requested genes), as RAVEN's
+  `removeGenes` does, when at least one of the requested genes is in the model; when none is,
+  the model is not changed. A gene kept only by a constrained reaction stays.
+* `init.merge_linear` numbers the merged groups 1, 2, ... in the order of the first reaction
+  of each group in the original model, as RAVEN's `mergeLinear` does, so `group_ids` no
+  longer depends on the merge order.
+* `manipulation.merge_compartments` gives a merged metabolite the id of the copy already in
+  the merged compartment, if any, otherwise the id that sorts first (`ACCOA_c` for `ACCOA_c`
+  and `ACCOA_m`), as RAVEN's `mergeCompartments` does. It rewrote the first member's
+  compartment suffix to the merged compartment (`ACCOA_s`). The merged metabolite also keeps
+  the annotation of that copy (was: dropped), and `drop_single_metabolite_reactions` defaults to
+  `False`, as RAVEN's `deleteRxnsWithOneMet` (was: `True`).
+* `manipulation.merge_compartments` stores the base id of each merged metabolite in
+  `notes["merged_base_id"]` (`ACCOA` for the kept `ACCOA_c`; the own id when two merged
+  metabolites would get the same base id). The default metabolite key of
+  `localization.assign_compartments`, `apply_assignment`, `relocate_reactions` and
+  `curation_priority` is that stored base id, otherwise the id without the suffix of the
+  metabolite's own compartment, so the merged `ACCOA_c` in `s` and a universal `ACCOA_m` share
+  the key `ACCOA`. The four functions raise `ValueError` when two metabolites in one
+  compartment have the same key (was: one of them stood for both).
+* `manipulation.merge_compartments` documents where `notes["merged_base_id"]` survives: YAML
+  written and read by raven-toolbox, `copy()`, cobra JSON and SBML. RAVEN's `readYAMLmodel`
+  shows it in `metNotes` (`merged_base_id: ACCOA note: free text note`) and no RAVEN function
+  uses it. A round trip through RAVEN YAML or a .mat file loses it, and the localization
+  functions then key a merged `ACCOA_c` in `s` as `ACCOA_c`, without an error.
+* `io.read_yaml_model` puts the notes that `write_yaml_model` writes as a `notes` mapping (notes
+  without a RAVEN field) back into `notes` (was: nested under `notes["note"]`).
+* `reconstruction.homology.run_blast`, `run_diamond` and `run_supporth`, and
+  `reconstruction.kegg.run_hmmsearch`, `get_kegg_model_from_sequences`, `build_ko_hmm` and
+  `build_hmm_library`, use every CPU the process may run on when `threads` is not given, as
+  RAVEN's `getBlast`, `getDiamond`, `runSuppOrth` and `getKEGGModelForOrganism` do (was: the
+  machine's CPU count minus one).
+* `gapfilling.analyse_topology` takes RAVEN's `gapFillTopological` defaults. Seeds: the
+  metabolites of every reaction with only substrates and `lower_bound < 0` or only products
+  and `upper_bound > 0`, whatever its number of metabolites (was: one-metabolite reactions with
+  `lower_bound < 0`); a `UserWarning` when there is none (was: a message only when `verbose`).
+  Targets: the metabolites of the first objective reaction, substrates and products (was: every
+  metabolite of the model); `ValueError` when the model has no objective.
+* New: `utils.parse_gr_rule` reads a grRule in the grammar of RAVEN's `parseGrRule`
+  (`and`/`or` in any case, `&`, `&&`, `|`, `||`, operators as whole words). `manipulation.gpr_to_dnf`
+  now also takes a rule string and reads it with this parser, as RAVEN's `grRuleToDNF` does;
+  `utils.is_dnf` reads a string with it too, and both raise `ValueError` with the message of
+  RAVEN's `RAVEN:badGrRule` for a malformed rule. `G1 && G2`, `G1 || G2` and `G1 Or G2` are
+  read as rules, `G1&G2` is one gene id. Whitespace is what MATLAB's `isspace` counts, so a
+  no-break space (U+00A0), U+0085, U+2007 and U+202F are part of a word.
+* `curation.batch_curate` (and `batch_curate_from_tsv`) stores a gene rule as `parse_gr_rule`
+  reads it, so the reaction gets the genes that were checked: `G1&G2 or G3` has the genes
+  `G1&G2` and `G3`, as in RAVEN's `curateModelFromTables` (was: `G1`, `G2` and `G3`).
+* `io.read_yaml_model` reads gene rules with `parse_gr_rule`, so `G1&G2` written by
+  `write_yaml_model` is read back as one gene (was: `G1` and `G2`, cobra's reading). A rule that
+  `parse_gr_rule` refuses is read by cobra as before.
+* Functions that copy or build a gene rule keep RAVEN's reading of it, so `G1&G2` stays one
+  gene (was: the rule was copied as a string and cobra split `G1&G2` into `G1` and `G2`):
+  `manipulation.merge_compartments`, `copy_to_compartment`, `convert_to_irreversible`,
+  `merge_models`, `add_reactions_from_model`, `expand_model`, `change_gene_reaction_rules`,
+  `add_reactions_from_equations`, `localization.apply_assignment`, `init.fill_tasks`,
+  `init.remove_low_score_genes`, `reconstruction.homology.get_model_from_homology`,
+  `reconstruction.kegg.assemble_model_from_ko_genes` and `io.read_matlab_model`. A rule string
+  is read with `parse_gr_rule`; one that `parse_gr_rule` refuses is read by cobra. cobra's JSON
+  reader (`cobra.io.load_json_model`) still splits `G1&G2`; cobra's SBML reader keeps it.
 * `analysis.fseof` (and so `geckopy.ec_fseof`) solves each level with pFBA that holds the objective at 0.999999 of its optimum at that level, as RAVEN's `solveLP` does, where it held the full value. On the scipy solver (HiGHS) the optimum is only accurate to the solver's feasibility tolerance, so the second step was infeasible at the top level of ecYeastGEM and the scan returned 9 of 10 levels; it now returns all 10, as on Gurobi and GLPK. A level at which the biomass maximisation is infeasible still ends the scan.
 * `analysis.fseof` takes the top of the scan as `max_fraction` of the target flux in the pFBA solution that maximises the target, as RAVEN's `FSEOF` and GECKO's `ecFSEOF` do, where it took the plain maximum (about 1e-6 relative difference).
 * `analysis.fseof` lists targets of equal score in model order (a stable sort), as MATLAB's `sort` does, where their order was arbitrary.
@@ -23,6 +87,25 @@ Milestones in the raven-toolbox port. For function-level status see
   counts the reaction as essential only if that solve is not feasible either, as RAVEN's
   `solveLP` does. Gurobi could report a feasible knock-out as infeasible when started from
   the previous knock-out's basis, which added reactions to the essential set.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` take each step's fluxes from the
+  least-total-flux solution for the tie-broken on set, so the direction and magnitude at
+  which the next step forces a reaction no longer depend on the solver's vertex.
+  That phase stops at a relative or absolute gap of 1e-6 and has the full `time_limit`, as
+  in RAVEN.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties`: among the least-total-flux
+  solutions, each step takes its fluxes from the one with the least id-rank-weighted backward
+  flux, so the direction of a flux that carries the same total either way no longer depends
+  on the solver. The id-rank phases rank a merged reaction by the smallest original reaction
+  id in its group (new `run_ftinit` argument `rank_keys`), so they no longer depend on which
+  member names it.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` raise a `UserWarning` naming the
+  phase (`phase2c-minflux`, `phase2d-direction`) when the minimal-flux or the direction phase
+  finds no solution, as RAVEN does, and keep the fluxes of the phase before it. A phase that
+  stops at the time limit is adopted with a `UserWarning` that its fluxes are an unproven
+  incumbent.
+* `init.ftinit` with `resolve_ties`: the last step skips the minimal-flux and direction phases,
+  as no step reads its fluxes, and reports the fluxes of the id-rank phase. The reaction set
+  does not change.
 
 ## 3.0.0b1 — 2026-09-07
 
