@@ -49,8 +49,10 @@ from pathlib import Path
 
 import cobra
 from cobra.io.dict import model_from_dict, model_to_dict
-from cobra.io.yaml import yaml as _cobra_yaml  # ruamel round-trip YAML (handles !!omap)
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from raven_toolbox.io.ec_data import (
@@ -59,11 +61,10 @@ from raven_toolbox.io.ec_data import (
     ec_data_to_yaml_sections,
 )
 
-# A dedicated instance for *writing* only (reading still goes through
-# _cobra_yaml, whose parsing is unaffected by any of this). Mutating
-# _cobra_yaml's own width would also change cobra.io.save_yaml_model for
-# the rest of the process, so this module gets its own ruamel round-trip
-# instance instead. `width` is set far past any real line length so
+# A dedicated instance for *writing* only (reading uses _read_yaml below).
+# Mutating cobra's own YAML instance would change its width for
+# cobra.io.save_yaml_model in the rest of the process, so this module gets its own
+# ruamel round-trip instance instead. `width` is set far past any real line length so
 # ruamel never folds a long scalar onto a continuation line, matching
 # writeYAMLmodel.m. `indent` is pinned explicitly (to the values ruamel
 # already used implicitly, verified byte-identical) rather than left for
@@ -81,6 +82,112 @@ from raven_toolbox.io.ec_data import (
 _write_yaml = YAML(typ="rt")
 _write_yaml.width = 1_000_000
 _write_yaml.indent(mapping=2, sequence=2, offset=0)
+
+
+class _OmapConstructor(RoundTripConstructor):
+    """Round-trip constructor that reads a content-less ``!!omap`` as an empty map.
+
+    GECKO and RAVEN write an ec reaction without enzymes as ``- enzymes: !!omap``
+    with nothing under the tag. YAML parses that as a null scalar carrying the omap
+    tag, which ruamel's own constructor rejects; RAVEN's ``readYAMLmodel.m`` reads
+    it as an empty enzyme list.
+    """
+
+    def construct_yaml_omap(self, node):
+        if isinstance(node, ScalarNode) and not node.value:
+            yield OrderedDict()
+            return
+        yield from super().construct_yaml_omap(node)
+
+
+_OmapConstructor.add_constructor("tag:yaml.org,2002:omap", _OmapConstructor.construct_yaml_omap)
+
+# A dedicated instance for *reading*, so the constructor above does not change
+# cobra.io.load_yaml_model for the rest of the process.
+_read_yaml = YAML(typ="rt")
+_read_yaml.Constructor = _OmapConstructor
+
+# A double-quoted scalar that holds a double quote no backslash escapes, such as
+# `""text""` (the shape older RAVEN and GECKO writers gave to a note that already
+# carried its own quotes) or `"a "b" c"`. It is not valid YAML. `readYAMLmodel.m` strips
+# the outer pair of quotes of the line and unescapes `\\` and `\"` in what is left, so the
+# values are `"text"` and `a "b" c`.
+_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)"(?P<body>.*)"\s*$"""
+)
+
+
+# A single-quoted scalar that holds an apostrophe no second apostrophe pairs with, such as
+# `'it's'`. It is not valid YAML. `readYAMLmodel.m` strips the outer pair of quotes of the line
+# and turns each `''` in what is left into `'`, so the value is `it's`.
+_SINGLE_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)'(?P<body>.*)'\s*$"""
+)
+
+
+def _has_lone_apostrophe(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``'`` that is not half of a ``''``."""
+    i = 0
+    while i < len(body):
+        if body[i] != "'":
+            i += 1
+        elif body[i : i + 2] == "''":
+            i += 2
+        else:
+            return True
+    return False
+
+
+def _has_unescaped_quote(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``"`` that no backslash escapes."""
+    i = 0
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+        elif body[i] == '"':
+            return True
+        else:
+            i += 1
+    return False
+
+
+def _fix_doubled_quotes(text: str) -> str:
+    """Rewrite each quoted scalar with an unpaired interior quote as a valid single-quoted scalar.
+
+    A double-quoted scalar with an unescaped ``"`` takes the text between the outer quotes with
+    escaped backslashes and quotes unescaped as its value. A single-quoted scalar with an
+    apostrophe that no second apostrophe pairs with takes the text between the outer quotes
+    with each ``''`` read as ``'``. Both are the values ``readYAMLmodel.m`` reads; quoted
+    scalars without such a quote are left alone.
+    """
+
+    def fix(match: re.Match) -> str:
+        body = match["body"]
+        if not _has_unescaped_quote(body):
+            return match[0]
+        value = re.sub(r'\\(["\\])', r"\1", body)
+        return f"{match['head']}'{value.replace(chr(39), chr(39) * 2)}'"
+
+    def fix_single(match: re.Match) -> str:
+        body = match["body"]
+        if not _has_lone_apostrophe(body):
+            return match[0]
+        return f"{match['head']}'{body.replace(chr(39) * 2, chr(39)).replace(chr(39), chr(39) * 2)}'"
+
+    return "\n".join(
+        _SINGLE_QUOTED_VALUE.sub(fix_single, _QUOTED_VALUE.sub(fix, line)) for line in text.split("\n")
+    )
+
+
+def _load_yaml_text(text: str):
+    """Parse ``text`` strictly; when that fails, retry with unpaired quotes inside quoted scalars repaired."""
+    try:
+        return _read_yaml.load(text)
+    except YAMLError:
+        repaired = _fix_doubled_quotes(text)
+        if repaired == text:
+            raise
+        return _read_yaml.load(repaired)
 
 
 def _open_text(path: str | Path, mode: str):
@@ -166,7 +273,7 @@ def read_yaml_model(path: str | Path) -> cobra.Model:
     latter is merged into one mapping before parsing.
     """
     with _open_text(path, "r") as handle:
-        raw = _to_plain(_cobra_yaml.load(handle))
+        raw = _to_plain(_load_yaml_text(handle.read()))
 
     if isinstance(raw, list):
         # Very old RAVEN files: a sequence of one-key mappings instead of

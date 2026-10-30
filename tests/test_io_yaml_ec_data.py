@@ -18,6 +18,7 @@ import cobra
 import numpy as np
 import pytest
 from cobra.io.yaml import yaml as cobra_yaml
+from ruamel.yaml import YAMLError
 from scipy import sparse
 
 from raven_toolbox.io import EcData, read_yaml_model, write_yaml_model
@@ -432,3 +433,141 @@ def test_validate_catches_coupling_matrix_shape_drift():
 def test_empty_gecko_light_flag_propagates():
     assert EcData.empty(1, 1, gecko_light=True).gecko_light is True
     assert EcData.empty(1, 1).gecko_light is False
+
+
+# --------------------------------------------------------------------------- #
+# Files as GECKO and RAVEN write them
+# --------------------------------------------------------------------------- #
+
+_GECKO_FILE = """\
+---
+!!omap
+- metabolites:
+  - !!omap
+    - id: "a"
+    - name: "A"
+    - compartment: "c"
+- reactions:
+  - !!omap
+    - id: "R1"
+    - lower_bound: 0
+    - upper_bound: 1000
+    - metabolites: !!omap
+      - a: -1
+- genes: []
+- compartments: !!omap
+  - c: "cytoplasm"
+- ec-rxns:
+  - !!omap
+    - id: "std"
+    - kcat: 10
+    - source: "custom"
+    - notes: {note}
+    - enzymes: !!omap{empty}
+  - !!omap
+    - id: "enz"
+    - kcat: 5
+    - enzymes: !!omap
+      - P1: 1
+- ec-enzymes:
+  - !!omap
+    - genes: "G1"
+    - enzymes: "P1"
+    - mw: 30000
+    - sequence: "MAGIC"
+"""
+
+
+@pytest.mark.parametrize("empty", ["", " []"])
+def test_load_reaction_with_empty_enzymes_omap(tmp_path, empty):
+    # GECKO and RAVEN write `- enzymes: !!omap` with nothing under it for an ec
+    # reaction without enzymes; raven-toolbox writes `!!omap []`. Both read as no enzymes.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='"ok"', empty=empty), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.rxns == ["std", "enz"]
+    assert model.ec.enzymes == ["P1"]
+    assert model.ec.rxn_enz_mat.toarray().tolist() == [[0.0], [1.0]]
+
+
+def test_load_notes_in_doubled_quotes_keep_one_pair(tmp_path):
+    # An older writer put quotes around a note that carried its own, giving `""text""`,
+    # which is not valid YAML. readYAMLmodel.m strips one pair and keeps the other.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='""Putative: lowest kcat.""', empty=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == '"Putative: lowest kcat."'
+    assert model.ec.rxns == ["std", "enz"]
+
+
+def test_doubled_quotes_unescape_like_matlab_and_keep_apostrophes(tmp_path):
+    path = tmp_path / "m.yml"
+    note = '""it\'s a \\\\ and \\"inner\\" one""'
+    path.write_text(_GECKO_FILE.format(note=note, empty=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == '"it\'s a \\ and "inner" one"'
+
+
+@pytest.mark.parametrize(
+    "note, expected",
+    [
+        ('"a "b" c"', 'a "b" c'),
+        ('"say "hi""', 'say "hi"'),
+        ('"a \\"b\\" and "c" end"', 'a "b" and "c" end'),
+        ('"x \\\\ "y" it\'s"', 'x \\ "y" it\'s'),
+        ('"trailing "q""', 'trailing "q"'),
+    ],
+)
+def test_interior_unescaped_quote_is_kept_like_matlab(tmp_path, note, expected):
+    # readYAMLmodel.m strips the outer pair of quotes and keeps every quote inside.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note=note, empty=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == expected
+    assert model.ec.rxns == ["std", "enz"]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("'it's'", "it's"),
+        ("'a 'b' c'", "a 'b' c"),
+        ("'it's ''x'' z'", "it's 'x' z"),
+        ("'say \"hi\" it's'", 'say "hi" it\'s'),
+    ],
+)
+def test_interior_apostrophe_in_single_quoted_value_is_kept_like_matlab(tmp_path, value, expected):
+    # readYAMLmodel.m strips the outer pair of quotes and turns each '' into ', keeping a lone '.
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note='"ok"', empty="").replace('- name: "A"', f"- name: {value}")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == expected
+    assert model.ec.rxns == ["std", "enz"]
+
+
+def test_valid_single_quoted_values_are_read_unchanged(tmp_path):
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note="'a ''b'' c'", empty="").replace('- name: "A"', "- name: 'it''s'")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == "it's"
+    assert model.ec.notes[0] == "a 'b' c"
+
+
+def test_valid_quoted_scalars_are_read_unchanged_next_to_a_repaired_one(tmp_path):
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note='"a "b" c"', empty="").replace(
+        '- source: "custom"', '- source: "cu\\\\st\\"om"'
+    ).replace("- id: \"enz\"", "- id: \"enz\"\n    - notes: \"fine\\n\"")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes == ['a "b" c', "fine\n"]
+    assert model.ec.source[0] == 'cu\\st"om'
+
+
+def test_invalid_yaml_other_than_doubled_quotes_still_raises(tmp_path):
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='"ok"', empty="").replace("kcat: 10", "kcat: [10"), encoding="utf-8")
+    with pytest.raises(YAMLError):
+        read_yaml_model(path)

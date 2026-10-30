@@ -171,3 +171,94 @@ def test_knockout_threshold_is_1e_minus_8():
     table = _classify(m, scan, enforced, corr_threshold=0.5).set_index("reaction")
     assert table.loc["r_down", "target_type"] == "knockdown"
     assert table.loc["r_out", "target_type"] == "knockout"
+
+
+def test_pfba_holds_objective_at_matlab_fraction(model, monkeypatch):
+    # RAVEN's solveLP minimises the flux sum with the objective fixed at 0.999999 of its optimum,
+    # so a solver whose optimum overshoots by its tolerance still has a feasible second step.
+    import importlib
+
+    module = importlib.import_module("raven_toolbox.analysis.fseof")
+
+    fractions = []
+    real = module.pfba
+
+    def spy(m, **kwargs):
+        fractions.append(kwargs.get("fraction_of_optimum"))
+        return real(m, **kwargs)
+
+    monkeypatch.setattr(module, "pfba", spy)
+    res = fseof(model, "EX_P", n_steps=4)
+    assert len(fractions) >= len(res.enforced) >= 2
+    assert set(fractions) == {0.999999}
+
+
+def test_level_with_infeasible_maximisation_ends_the_scan(model):
+    # The theoretical maximum of EX_P is 10; levels above it cannot be enforced and are not
+    # reported, however the second pFBA step is tolerated.
+    res = fseof(model, "EX_P", n_steps=4, max_fraction=2.0)
+    assert res.enforced == pytest.approx([5.0, 10.0])
+
+
+def test_equality_fixes_the_target_flux_at_each_level(model):
+    res = fseof(model, "EX_P", n_steps=4, equality=True)
+    assert res.scan.loc["EX_P"].to_numpy() == pytest.approx(res.enforced)
+    # the default lower bound lets a level exceed the enforced flux when that suits growth;
+    # here the product branch is the only sink of the shared intermediate at the top level.
+    lower = fseof(model, "EX_P", n_steps=4)
+    assert (lower.scan.loc["EX_P"].to_numpy() >= lower.enforced).all()
+
+
+def test_equality_differs_from_lower_bound_when_the_target_is_coupled_to_growth():
+    # S -> B + P is the only route to biomass, so growth alone exports 10 of P; a lower bound
+    # below that leaves the flux at 10, while an equality holds it at the level.
+    m = cobra.Model("m")
+    S, P, B = (cobra.Metabolite(x, compartment="c") for x in ("S", "P", "B"))
+    m.add_metabolites([S, P, B])
+    sup = cobra.Reaction("sup", lower_bound=0, upper_bound=10)
+    sup.add_metabolites({S: 1})
+    v1 = cobra.Reaction("v1", lower_bound=0, upper_bound=1000)
+    v1.add_metabolites({S: -1, B: 1, P: 1})
+    ex_p = cobra.Reaction("EX_P", lower_bound=0, upper_bound=1000)
+    ex_p.add_metabolites({P: -1})
+    ex_b = cobra.Reaction("EX_B", lower_bound=0, upper_bound=1000)
+    ex_b.add_metabolites({B: -1})
+    m.add_reactions([sup, v1, ex_p, ex_b])
+    m.objective = "EX_B"
+    lower = fseof(m, "EX_P", n_steps=4, min_target=2.0)
+    fixed = fseof(m, "EX_P", n_steps=4, min_target=2.0, equality=True)
+    assert lower.scan.loc["EX_P"].to_numpy() == pytest.approx(10.0)
+    assert fixed.scan.loc["EX_P"].to_numpy() == pytest.approx(fixed.enforced)
+
+
+def test_top_level_is_a_fraction_of_the_pfba_maximum(model):
+    # pFBA holds the target at 0.999999 of its maximum while it minimises the flux sum,
+    # so the top level is 0.9 of that flux and not of the plain maximum.
+    from cobra.flux_analysis import pfba
+
+    with model:
+        model.objective = "EX_P"
+        plain = model.slim_optimize()
+        in_pfba = pfba(model, fraction_of_optimum=0.999999).fluxes["EX_P"]
+    assert in_pfba < plain
+    res = fseof(model, "EX_P", n_steps=4)
+    assert res.enforced[-1] == pytest.approx(0.9 * in_pfba, rel=1e-8)
+    assert res.enforced[-1] != pytest.approx(0.9 * plain, rel=1e-8)
+
+
+def test_equal_scores_keep_model_order():
+    # Reactions of three score classes are interleaved in the model; within a class the
+    # scores tie exactly, and the table lists each class in model order, highest score first.
+    import numpy as np
+    import pandas as pd
+
+    from raven_toolbox.analysis.fseof import _classify
+
+    m = cobra.Model("m")
+    ids = [f"r{i:03d}" for i in range(600)]
+    m.add_reactions([cobra.Reaction(rid) for rid in ids])
+    enforced = np.array([1.0, 2.0, 3.0, 4.0])
+    scan = pd.DataFrame([enforced * (1 + i % 3) for i in range(600)], index=ids, columns=enforced)
+    table = _classify(m, scan, enforced, 0.9)
+    expected = [ids[i] for c in (2, 1, 0) for i in range(600) if i % 3 == c]
+    assert list(table["reaction"]) == expected
