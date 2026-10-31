@@ -1,10 +1,10 @@
 """Export a model to the RAVEN Microsoft Excel format.
 
-Writes the five-sheet RAVEN xlsx layout — RXNS, METS, COMPS, GENES, MODEL — pulling
-RAVEN-specific values back out of cobra's ``annotation`` / ``notes`` (where the
-raven_toolbox YAML reader stashes them). For enzyme-constrained (GECKO) models that
-carry a populated ``model.ec`` substructure, two further sheets are added, ENZYMES
-and ENZRXNS, holding the ec data. Excel *import* is intentionally not provided.
+Writes the five-sheet RAVEN xlsx layout (RXNS, METS, COMPS, GENES, MODEL) and reads the
+RAVEN-specific values from cobra's ``annotation`` and ``notes``, where the
+raven_toolbox YAML reader stores them. For enzyme-constrained (GECKO) models that
+carry a populated ``model.ec`` substructure, two further sheets, ENZYMES
+and ENZRXNS, hold the ec data. The module has no Excel import.
 
 Requires the optional ``openpyxl`` dependency (``pip install raven_toolbox[excel]``).
 """
@@ -19,7 +19,7 @@ from raven_toolbox.utils.parse import subsystem_to_str
 
 
 def _miriam_string(annotation: dict, exclude: tuple[str, ...] = ()) -> str:
-    """RAVEN MIRIAM column: ``namespace/id;namespace/id2;...`` (sorted)."""
+    """RAVEN MIRIAM column: ``namespace/id;namespace/id2;...``, sorted by namespace."""
     parts: list[str] = []
     for namespace in sorted(annotation):
         if namespace in exclude:
@@ -86,13 +86,12 @@ def _rxn_bound_cells(
 ) -> tuple[float | None, float | None]:
     """(LOWER BOUND, UPPER BOUND) cell values for the RXNS sheet.
 
-    Blank (``None``) when a bound matches the model's own declared default,
-    matching ``exportToExcelFormat`` exactly rather than always writing the
-    literal number: a reversible reaction (``lb < 0``) hides its lower bound
-    only when it equals the declared default; an irreversible one hides it
-    whenever it is exactly 0, regardless of the declared default. Neither rule
-    applies when the model declares no default at all (both bounds are then
-    always shown literally, matching exportToExcelFormat's own fallback).
+    A bound is blank (``None``) when it matches the model's declared default, as in
+    ``exportToExcelFormat``. A reversible reaction (``lb < 0``) has a blank lower bound
+    when it equals the declared default; an irreversible one has a blank lower bound
+    when it is 0, whatever the declared default. When the model declares no default,
+    both bounds are written as numbers, as in exportToExcelFormat. The upper bound is
+    blank when it equals the declared default.
     """
     lb, ub = rxn.lower_bound, rxn.upper_bound
     if default_lb is None:
@@ -106,14 +105,14 @@ def _rxn_bound_cells(
 
 
 def _fmt_count(value: float) -> str:
-    """Subunit count as an integer string when integral, else as-is."""
+    """Subunit count as an integer string when integral, otherwise formatted with ``g``."""
     value = float(value)
     return str(int(value)) if value.is_integer() else f"{value:g}"
 
 
 def _enzyme_pairs(ec, coupling, i: int) -> str | None:
     """ENZRXNS 'ENZYMES' column: ``enzyme:count;...`` subunit stoichiometry for
-    ec-reaction ``i``, read from the ``rxn_enz_mat`` coupling row. Blank when
+    ec-reaction ``i``, read from the ``rxn_enz_mat`` coupling row. ``None`` (blank) when
     the reaction has no associated enzymes."""
     if i >= coupling.shape[0]:
         return None
@@ -136,8 +135,9 @@ def export_to_excel(
     Parameters
     ----------
     sort_ids
-        If True, write reactions/metabolites/genes sorted alphabetically by ID
-        (the model itself is not modified). The ec sheets are not reordered.
+        If True, write reactions, metabolites and genes sorted alphabetically by ID
+        (the model itself is not modified); compartments are sorted by abbreviation. The ec
+        sheets keep the order of the ec data.
     """
     try:
         from openpyxl import Workbook

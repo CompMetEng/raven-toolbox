@@ -1,26 +1,27 @@
 """Linear reaction merging for ftINIT.
 
-ftINIT shrinks the MILP losslessly by **contracting linear reaction chains**: a
+ftINIT shrinks the MILP losslessly by contracting linear reaction chains: a
 metabolite that appears in exactly two reactions (one net producer, one net consumer)
 links them into a single combined reaction. Iterating this collapses unbranched
-pathways — on Human-GEM ~12k → ~8k reactions, a ~⅓ smaller MILP — without changing
-the feasible flux space. Reversible reactions may merge too (unlike
-``simplifyModel``'s merge), which is why ftINIT ships its own.
+pathways; on Human-GEM the number of reactions falls from ~12k to ~8k, a ~1/3 smaller
+MILP, and the feasible flux space is unchanged. ftINIT has its own merge because
+reversible reactions may merge too, unlike in ``simplifyModel``.
 
-:func:`merge_linear` returns the reduced model plus the bookkeeping needed to map
-scores and results back to the original reactions:
+:func:`merge_linear` returns the reduced model plus the lists that map scores and
+results back to the original reactions:
 
-* ``group_ids`` — one integer per original reaction; ``0`` = not merged, equal
+* ``group_ids``: one integer per original reaction; ``0`` = not merged, equal
   non-zero integers = merged into the same combined reaction (which keeps one
   member's id). The groups are numbered 1, 2, ... in the order of their first
   reaction in the original model, as RAVEN's ``mergeLinear`` numbers them.
-* ``reversed_rxns`` — which originals were flipped (their stored direction negated)
-  when oriented for merging; needed to map fluxes/directions back.
+* ``reversed_rxns``: which originals were flipped (their stored direction negated)
+  when oriented for merging; the flags map fluxes and directions back.
 
 :func:`group_rxn_scores` then sums the original per-reaction scores over each group,
-with RAVEN's zero-handling (see its docstring): genuine 0 → 0.01, ignore-masked → 0,
-a group cancelling to 0 with non-zero members → 0.01 — all so the MILP never sees an
-exactly-zero score (whose on/off would be arbitrary).
+with RAVEN's zero-handling (see its docstring): a score of 0 becomes 0.01, an
+ignore-masked reaction gets 0, and a group that cancels to 0 with non-zero members
+gets 0.01. A scored reaction thus never has an exactly zero score, whose on/off state
+would be arbitrary.
 """
 from __future__ import annotations
 
@@ -197,10 +198,11 @@ def group_rxn_scores(
 ) -> dict[str, float]:
     """Sum original reaction scores over merged groups (RAVEN ``groupRxnScores``).
 
-    ``orig_scores`` maps original reaction id → score; ``to_zero`` are reactions to
-    drop from the problem (the ``toIgnore`` masks) — their score becomes 0. Genuine
-    zeros and groups cancelling to zero become 0.01 so the MILP never sees an exactly
-    zero score. Returns ``{reduced_reaction_id: score}``.
+    ``orig_scores`` maps original reaction id to score (a missing id has score 0);
+    ``to_zero`` are reactions to drop from the problem (the ``toIgnore`` masks), and
+    their score becomes 0. A score of 0 and a group that cancels to 0 become 0.01, so
+    that only ignore-masked reactions have a score of exactly 0 in the MILP. Returns
+    ``{reduced_reaction_id: score}``.
     """
     zero = set(to_zero)
     group_of = dict(zip(orig_rxn_ids, group_ids, strict=True))

@@ -1,18 +1,13 @@
 """Merge several models into one.
 
-cobra's ``Model.merge`` is pairwise and matches everything strictly by id; this
-merges **N** models and unifies metabolites by **name[compartment]** (so the same
-compound under different ids in two models becomes one), while adding **all**
-reactions without de-duplication
-(a reaction whose ID already exists is renamed ``id_<sourceid>``). Genes are
-unified by ID. Like RAVEN, every metabolite and gene of every model is kept, also
-when no reaction uses it; the objective of every model is carried over; when two
-models name the same compartment differently the first model's name is kept; new
-metabolites and genes are added in the order of their source model. Provenance (which source model each object came from) is recorded
-in ``notes['origin']``.
-
-The bulk of RAVEN's function is struct field-padding and manual S-matrix
-assembly, none of which is needed on ``cobra.Model``.
+cobra's ``Model.merge`` is pairwise and matches everything by id. ``merge_models`` merges N models
+and unifies metabolites by name and compartment (the same compound under different ids in two
+models becomes one metabolite). All reactions are added without de-duplication; a reaction whose ID
+already exists is renamed ``id_<sourceid>``. Genes are unified by ID. As in RAVEN, every metabolite
+and gene of every model is kept, also when no reaction uses it. The objective of every model is
+carried over. When two models name the same compartment differently, the name of the first model is
+kept. New metabolites and genes are added in the order of their source model. The source model of
+each object is recorded in ``notes['origin']``.
 """
 from __future__ import annotations
 
@@ -27,7 +22,7 @@ from raven_toolbox.utils.gpr import set_gene_rule
 
 
 def _unique_id(existing, base: str, suffix: str) -> str:
-    """Return base, or base_suffix (then base_suffix_2, ...) if it collides."""
+    """Return ``base``, or ``base_suffix`` (then ``base_suffix_2``, ...) if ``base`` is taken."""
     if base not in existing:
         return base
     candidate = f"{base}_{suffix}"
@@ -52,18 +47,19 @@ def merge_models(
         The models to merge (two or more). A single model is returned as a copy.
     match_by
         How metabolites are unified across models: ``"name"`` (default) treats
-        metabolites with the same *name and compartment* as identical (IDs
-        ignored); ``"id"`` matches by metabolite ID.
+        metabolites with the same name and compartment as identical (IDs
+        are ignored); ``"id"`` matches by metabolite ID. When matched metabolites have
+        different formulas or charges, a warning is issued and the first metabolite is kept.
     track_origin
-        If True (default), record the source model's ``id`` in each reaction's,
-        metabolite's, and gene's ``notes['origin']``.
+        If True (default), record the ``id`` of the source model in the ``notes['origin']`` of
+        each reaction, metabolite and gene.
 
     Returns
     -------
     cobra.Model
-        A new merged model (``id="MERGED"``). Reactions are **not** de-duplicated
-        — matching RAVEN, every reaction from every model is kept, with ID
-        collisions renamed ``id_<sourceid>``.
+        A new merged model (``id="MERGED"``). Reactions are not de-duplicated:
+        as in RAVEN, every reaction from every model is kept, and a colliding ID is
+        renamed ``id_<sourceid>``. The objective direction is that of the first model.
     """
     models = list(models)
     if not models:

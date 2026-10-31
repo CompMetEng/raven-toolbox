@@ -1,5 +1,5 @@
-"""RAVEN-specific I/O: YAML (cobra + Metabolic Atlas / Human-GEM extensions, plus
-the GECKO ec-model substructure), Excel export, and the Standard-GEM
+"""RAVEN-specific I/O: YAML (cobra with the Metabolic Atlas and Human-GEM extensions and the
+GECKO ec-model substructure), MATLAB, Excel export, model metadata and the Standard-GEM
 ``model/<fmt>/…`` git layout.
 """
 from raven_toolbox.io.ec_data import EcData

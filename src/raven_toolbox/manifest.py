@@ -1,8 +1,8 @@
 """Load a toolbox-assets manifest into the runtime resolver registries.
 
-A *manifest* is the single, language-agnostic source of truth for every downloadable
-artefact (KEGG tables / HMMs, …) and external-binary bundle (BLAST / DIAMOND / HMMER).
-It lives in the data repository (and/or a Zenodo record); raven-toolbox and MATLAB RAVEN
+A manifest is the language-agnostic source of truth for every downloadable
+artefact (KEGG tables, HMMs, …) and external-binary bundle (BLAST, DIAMOND, HMMER).
+It is stored in the data repository, in a Zenodo record, or in both; raven-toolbox and MATLAB RAVEN
 both read the same JSON and verify each file's SHA256 after download. See
 ``data/manifest.schema.json`` for the format and ``data/manifest.example.json`` for a
 worked example.
@@ -47,7 +47,7 @@ def _read(source: str | os.PathLike) -> str:
 
 
 def load_manifest(source: str | os.PathLike | None = None) -> dict:
-    """Read and validate a manifest from ``source`` (path/URL) or ``$RAVEN_PYTHON_MANIFEST``."""
+    """Read and validate a manifest from ``source`` (path or URL) or ``$RAVEN_PYTHON_MANIFEST``."""
     source = source or os.environ.get(ENV_MANIFEST)
     if not source:
         raise ValueError(
@@ -95,14 +95,14 @@ def to_binary_registry(manifest: dict) -> dict:
 def load_into_registries(
     source: str | os.PathLike | None = None, *, replace: bool = False
 ) -> dict:
-    """Load a manifest and merge it into the live data/binary registries.
+    """Load a manifest and merge it into the live data and binary registries.
 
     Parameters
     ----------
     source
         Manifest path or URL; defaults to ``$RAVEN_PYTHON_MANIFEST``.
     replace
-        If True, clear the existing registries first; otherwise merge (manifest wins).
+        If True, clear the existing registries first; otherwise merge; on a conflict the manifest entry replaces the registry entry.
 
     Returns
     -------

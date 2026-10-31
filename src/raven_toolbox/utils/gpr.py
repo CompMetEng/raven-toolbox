@@ -1,18 +1,14 @@
 """GPR (gene-protein-reaction rule) linting.
 
-Flag GPRs that are *not* in disjunctive normal form ("OR of AND-complexes"), via cobra's
-GPR AST. GPR syntax *normalisation* is already done by cobra on assignment, so it isn't
-re-implemented here.
+Parsing of grRule strings in the grammar of RAVEN's ``parseGrRule``, assignment of rules to
+reactions, the score-aggregation modes for GPRs, and a linter for GPRs that are not in
+disjunctive normal form (DNF). The linter works on cobra's GPR AST. Syntax normalisation of
+GPRs is done by cobra on assignment and is not repeated here.
 
-Part (2) has no cobrapy equivalent and is ported here, reworked onto cobra's
-GPR AST instead of RAVEN's brittle substring search. The relevant property is
-**disjunctive normal form (DNF)**: an OR of AND-clauses of single genes, e.g.
-``(G1 and G2) or G3``. Rules where an AND contains an OR — e.g.
-``(G1 or G2) and (G3 or G4)`` — are *valid* for cobra but ambiguous for the
-isoenzyme/complex reasoning used across RAVEN/GECKO, and ``expand_model``
-(see :mod:`raven_toolbox.manipulation.expand`) only does something for DNF rules.
-:func:`find_non_dnf_grrules` surfaces them as structured data rather than, as
-RAVEN did, only printing a warning.
+A GPR is in DNF when it is an OR of AND-clauses of single genes, for example ``(G1 and G2) or G3``.
+A rule in which an AND contains an OR, for example ``(G1 or G2) and (G3 or G4)``, is valid for cobra
+but ambiguous for the isoenzyme and complex reasoning used across RAVEN and GECKO.
+:func:`find_non_dnf_grrules` returns such rules as structured data.
 """
 from __future__ import annotations
 
@@ -55,7 +51,7 @@ def resolve_aggregators(
 
 
 def _contains_or(node: ast.AST | None) -> bool:
-    """True if ``node``'s subtree contains an OR operator anywhere."""
+    """True if the subtree of ``node`` contains an OR operator."""
     if isinstance(node, ast.BoolOp):
         if isinstance(node.op, ast.Or):
             return True
@@ -66,8 +62,8 @@ def _contains_or(node: ast.AST | None) -> bool:
 def _is_dnf_node(node: ast.AST | None) -> bool:
     """True if the AST rooted at ``node`` is in disjunctive normal form.
 
-    DNF here means no AND operator has an OR anywhere beneath it, i.e. the
-    rule is a single gene, a pure AND-complex, or an OR of those.
+    DNF here means no AND operator has an OR beneath it, that is, the rule is a single gene,
+    an AND-complex of genes, or an OR of those.
     """
     if node is None or isinstance(node, ast.Name):
         return True
@@ -87,7 +83,7 @@ def is_dnf(gpr: GPR | str | None) -> bool:
     ----------
     gpr
         A cobra :class:`~cobra.core.gene.GPR`, a grRule string, or ``None``.
-        A string is read with :func:`parse_gr_rule`. An empty/``None`` rule is trivially DNF.
+        A string is read with :func:`parse_gr_rule`. An empty or ``None`` rule is in DNF.
 
     Raises
     ------
@@ -118,7 +114,9 @@ _OR_WORDS = frozenset({"or", "|", "||"})
 
 
 def rule_tokens(rule: str) -> list[tuple[str, str]]:
-    """Split a gene rule into ``(kind, text)`` pairs; kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
+    """Split a gene rule into ``(kind, text)`` pairs.
+
+    The kind is ``(``, ``)``, ``and``, ``or`` or ``gene``.
 
     A word is everything up to whitespace or a bracket, whitespace being the characters for which
     MATLAB's ``isspace`` is true (not U+00A0, U+0085, U+2007 or U+202F). The operators are
@@ -215,8 +213,8 @@ def parse_gr_rule(rule: str | None) -> GPR | None:
 def rule_to_gpr(rule: str | None) -> GPR:
     """The :class:`~cobra.core.gene.GPR` of a rule string as :func:`parse_gr_rule` reads it.
 
-    An empty or ``None`` rule gives an empty GPR. A rule that grammar refuses is read with
-    cobra's ``GPR.from_string`` instead.
+    An empty or ``None`` rule gives an empty GPR. A rule that :func:`parse_gr_rule` rejects
+    is read with cobra's ``GPR.from_string``.
     """
     try:
         gpr = parse_gr_rule(rule)
@@ -229,9 +227,17 @@ def set_gene_rule(rxn: cobra.Reaction, rule: GPR | str | None) -> None:
     """Give ``rxn`` a gene rule in RAVEN's grammar.
 
     A :class:`~cobra.core.gene.GPR` is copied as it is; a string is read with
-    :func:`rule_to_gpr`. Assigning a string to ``rxn.gene_reaction_rule`` would read it
-    with cobra's grammar, which splits a gene id such as ``G1&G2`` into ``G1`` and ``G2``;
-    every function in this package that copies or builds a rule goes through here.
+    :func:`rule_to_gpr`. Assigning a string to ``rxn.gene_reaction_rule`` reads it with
+    cobra's grammar, which splits a gene id such as ``G1&G2`` into ``G1`` and ``G2``.
+
+    Callers include the functions of ``raven_toolbox.manipulation`` (add, change,
+    compartments, expand, irreversible, merge, transfer), ``raven_toolbox.localization.assign``,
+    ``raven_toolbox.io.yaml``, ``raven_toolbox.io.mat``, ``raven_toolbox.init.genes``,
+    ``raven_toolbox.init.taskfill``, ``raven_toolbox.reconstruction.homology.homology`` and
+    ``raven_toolbox.reconstruction.kegg.assemble``. The duplicate
+    merge and ``group_linear_reactions`` in ``raven_toolbox.manipulation.simplify`` assign
+    ``gene_reaction_rule`` directly, and ``raven_toolbox.curation.batch`` assigns ``gpr``
+    directly.
     """
     rxn.gpr = rule.copy() if isinstance(rule, GPR) else rule_to_gpr(rule)
 
@@ -247,7 +253,7 @@ class GPRIssue:
     gpr
         The (already cobra-normalised) grRule string.
     reason
-        Human-readable explanation of why it was flagged.
+        Human-readable explanation of why the reaction was flagged.
     """
 
     reaction_id: str
@@ -266,13 +272,13 @@ _NON_DNF_REASON = (
 def find_non_dnf_grrules(model: cobra.Model) -> list[GPRIssue]:
     """Find reactions whose GPR is not in disjunctive normal form ("OR of AND-complexes").
 
-    Uses cobra's GPR AST. Reactions with no GPR are skipped.
+    The check runs on cobra's GPR AST. Reactions with no GPR are skipped.
 
     Returns
     -------
     list of GPRIssue
         One entry per flagged reaction, in model reaction order. Empty if all
-        GPRs are simple OR-of-AND-complexes.
+        GPRs are in DNF.
     """
     issues: list[GPRIssue] = []
     for rxn in model.reactions:

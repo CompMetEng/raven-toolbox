@@ -1,8 +1,8 @@
 """KEGG-based draft reconstruction (getKEGGModelForOrganism and friends).
 
-Maintainer build steps: 3b.1 download (:mod:`.download`), 3b.2 dump parsing
-(:mod:`.parse`), 3b.3 HMM libraries (:mod:`.hmm`, :mod:`.taxonomy`). Runtime:
-3b.4 model for a KEGG species (:mod:`.organism`).
+Maintainer build steps: download (:mod:`.download`), dump parsing (:mod:`.parse`) and
+HMM libraries (:mod:`.hmm`, :mod:`.taxonomy`). Runtime: model for a KEGG species
+(:mod:`.organism`) and de-novo query (:mod:`.query`).
 """
 from raven_toolbox.reconstruction.kegg.download import (
     download_kegg_dump,

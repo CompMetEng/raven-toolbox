@@ -1,46 +1,47 @@
-"""Curation-priority scoring: which compartment assignments / transports to review by hand.
+"""Curation-priority scoring: which compartment assignments and transports to review by hand.
 
-:func:`curation_priority` attaches a 0-1 "please-check-me" score to every reaction placement and every
+:func:`curation_priority` attaches a 0-1 review score to every reaction placement and every
 added transport in an :class:`~raven_toolbox.localization.AssignmentProposal`, so a curator can sort
-thousands of calls and review only the highest-value few percent. It is a post-processor — no new solve
-except an optional gated essentiality FBA — combining several cheap signals that each flag a *distinct*
-way a placement can be wrong. See the `curation-priority signals study
-<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/curation_priority_signals.md>`_ on raven-gecko-parity for the full catalogue;
-this ships the recommended first composite:
+thousands of calls and review the highest-scoring few percent. It is a post-processor with no new
+placement solve (the optional essentiality FBA is the only solve). It combines the signals below,
+each of which flags one way in which a placement can be wrong. The `curation-priority signals study
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/curation_priority_signals.md>`_
+on raven-gecko-parity has the full catalogue; this module implements the following composite:
 
-* **override** — the reaction was placed *against* its gene's top DeepLoc compartment, and that top
-  compartment is not among the reaction's placements (functionality overrode confident evidence — the
-  method's headline risk). Graded by ``score(top) - score(assigned)``, robust to organelle
-  sub-compartment splits (e.g. mito matrix vs membrane) that a naive top1-top2 margin would mask;
-* **sandwich** — the reaction's substrates are imported *into* its compartment and its products
-  exported *out*, so it may belong in the neighbouring compartment (the seed motif). Graded by
-  ``min(fraction of substrates imported, fraction of products exported)`` so a pure pass-through scores
-  high and an incidental single shared transport scores low;
-* **no_evidence** — no scored gene; compartment chosen by connectivity alone;
-* **neighbour_outlier** — most of the reaction's metabolic neighbours sit in a *different* compartment
-  (needs >=3 neighbours; ramped from a bare majority so a 51 % split is not treated like a 100 % one);
-* **gapfill** — a reaction pulled from the universal model (inherently uncertain);
-* **impermeant** (transports) — a transport of a species cells cannot freely move across a membrane:
-  CoA-thioesters, acyl-ACP, tRNA-bound cargo, and free dinucleotide/flavin cofactors (NAD(P)(H),
-  FAD/FMN) that in reality require a shuttle;
-* **essential** (gated) — removing the reaction drops the *materialised* model's growth to near zero,
-  *amplifying* an already-uncertain call.
+* **override**: the reaction was placed against its gene's top DeepLoc compartment, and that top
+  compartment is not among the reaction's placements (functionality overrode confident evidence).
+  Graded by ``score(top) - score(assigned)``, which holds for organelle sub-compartment splits
+  (for example matrix versus membrane of the mitochondrion) that a top1-top2 margin would mask;
+* **sandwich**: the reaction's substrates are imported into its compartment and its products
+  exported out, so it may belong in the neighbouring compartment. Graded by
+  ``min(fraction of substrates imported, fraction of products exported)``, so a pure pass-through
+  scores high and a single shared transport scores low;
+* **no_evidence**: none of the genes has a score; the compartment is chosen by connectivity alone;
+* **neighbour_outlier**: most of the reaction's metabolic neighbours are in a different compartment
+  (needs at least 3 neighbours; ramped from a bare majority, so a 51 % split scores below a 100 %
+  one);
+* **gapfill**: a reaction taken from the universal model;
+* **impermeant** (transports): a transport of a species that cells cannot move freely across a
+  membrane: CoA-thioesters, acyl-ACP, tRNA-bound cargo, and free dinucleotide and flavin cofactors
+  (NAD(P)(H), FAD, FMN) that require a shuttle;
+* **essential** (gated): removing the reaction drops the growth of the materialised model to
+  below 1 % of its growth, which amplifies an already-uncertain call.
 
-Signals combine by **noisy-OR** so corroboration ranks a doubly-flagged call above either alone, with
-essentiality as a multiplicative high-stakes gate. Currency metabolites (ATP/NAD(P)H/H+/H2O/CoA/Pi/...)
-are excluded from the topology signals — without that the sandwich signal fires on nearly everything.
-Currency/cofactor matching normalises the metabolite base key (strips an ``M_`` prefix and a bracketed
-``[compartment]`` tag) so the exclusion also holds on id-keyed models, not only clean-name ones.
+Signals combine by **noisy-OR**, so a call with two flags ranks above a call with either flag alone,
+and essentiality multiplies the priority of a flagged placement by 1.6 (up to a maximum of 1).
+Currency metabolites (ATP, NAD(P)H, H+, H2O, CoA, Pi, ...) are excluded from the topology signals,
+because the sandwich signal would otherwise fire on every reaction whose substrates and products
+include a transported currency metabolite.
+Currency and cofactor matching normalises the metabolite base key (removes an ``M_`` prefix and a
+bracketed ``[compartment]`` tag), so the exclusion also holds on models keyed by id.
 
-The two **topology** signals (sandwich, neighbour_outlier) are additionally multiplied by evidence
-*weakness* ``1 - support(assigned)``: in this assignment method, importing substrates and exporting
-products is the *normal* consequence of moving a reaction into an organelle, so those motifs describe
-most placements and carry information only when the placement is *also* evidentially unsupported. This
-gate is what makes the ranking selective (on genome-scale yeast it takes the flagged set from ~70 % of
-reactions to ~20 %, with a clean separable top few percent) — surfacing placements that are both
-structurally anomalous and unsupported by localisation evidence, which is the actual signature of a
-questionable call. ``override`` is already evidence-based; ``no_evidence``/``gapfill``/``impermeant``
-are independent of it.
+The two **topology** signals (sandwich, neighbour_outlier) are also multiplied by the evidence
+weakness ``1 - support(assigned)``. In this assignment method, importing substrates and exporting
+products is the normal consequence of moving a reaction into an organelle, so those motifs describe
+most placements and carry information only when the placement also lacks evidence. On genome-scale
+yeast this gate reduces the flagged set from ~70 % of reactions to ~20 %. The signals ``override``,
+``no_evidence``, ``gapfill`` and ``impermeant`` are independent of the gate (``override`` is based
+on evidence already).
 """
 from __future__ import annotations
 
@@ -88,9 +89,9 @@ _ACTION_KEYS = frozenset(_WEIGHTS)
 
 
 def _norm_key(k: str) -> str:
-    """Normalise a metabolite base key for currency/cofactor matching: lowercase, strip a leading
-    ``M_`` (SBML-retained ids) and any bracketed ``[compartment]`` tag, so ``M_atp_c`` and ``atp[c]``
-    both reduce to ``atp``."""
+    """Normalise a metabolite base key for currency and cofactor matching: lowercase, remove a
+    leading ``M_`` (SBML-retained ids) and any bracketed ``[compartment]`` tag, so ``M_atp_c`` and
+    ``atp[c]`` both reduce to ``atp``."""
     k = str(k).strip().lower()
     if k.startswith("m_"):
         k = k[2:]
@@ -140,38 +141,43 @@ def curation_priority(
 ):
     """Rank reaction placements and added transports by how likely each needs manual curation.
 
-    Parameters mirror :func:`assign_compartments` where they overlap (``model`` is the draft
-    that was placed; pass the same ``base_metabolite``/``universal``). Returns a
-    :class:`pandas.DataFrame` sorted by ``priority`` (descending), one row per *(reaction, compartment)*
-    placement and per flagged added transport, with columns ``target`` (id), ``type``
-    (``"placement"``/``"gapfill"``/``"transport"``), ``compartment``, ``priority`` (0-1), ``flags`` (the
-    firing signal names, strongest first), ``action`` (the concrete thing to check), ``n_affected`` and
-    ``affected``. Dual-localised reactions yield one row per compartment. Surface the top few percent.
+    Parameters mirror :func:`assign_compartments` where they overlap (``model`` is the draft that
+    was placed; ``base_metabolite`` and ``universal`` are the same as in that call). Returns a
+    :class:`pandas.DataFrame` sorted by ``priority`` (descending), one row per (reaction,
+    compartment) placement and per flagged added transport, with columns ``target`` (id), ``type``
+    (``"placement"``, ``"gapfill"`` or ``"transport"``), ``compartment``, ``priority`` (0-1),
+    ``flags`` (the names of the signals that fired, strongest first), ``action`` (a text
+    that names the check for the strongest signal, for example to re-place the reaction in the
+    neighbouring compartment),
+    ``n_affected`` and ``affected``. A dual-localised reaction yields one row per
+    compartment.
 
-    ``n_affected``/``affected`` give the **one-hop coupling** of each row — the other placed reactions
-    that curating this one would touch, because they share a non-currency metabolite with it at the same
-    compartment (for a placement) or depend on the transported species at either end of the bridge (for
-    a transport). ``n_affected`` is the full count (sort by it to find high-impact curations that
-    warrant care or a batched review); ``affected`` lists up to a dozen ids, the ones also flagged in
-    this table first. The coupling is not transitive — each coupled reaction has its own blast radius.
+    ``n_affected`` and ``affected`` give the **one-hop coupling** of each row: the other placed
+    reactions that curating this one touches, because they share a non-currency metabolite with it
+    at the same compartment (for a placement) or depend on the transported species at either end of
+    the bridge (for a transport). ``n_affected`` is the full count; ``affected`` lists up to 12 ids,
+    the ones also flagged in this table first, followed by ``+N`` for the remainder. The coupling is
+    not transitive: each coupled reaction has its own coupled reactions.
 
-    ``check_essential`` runs a single-reaction-deletion essentiality check (an FBA per candidate) on the
-    already-flagged placements only (base priority ``>= essential_candidate_threshold``) and multiplies
-    their score by ``1 + 0.6`` when removing them drops the *materialised* model's growth to near zero.
-    Essentiality is measured against the applied model's own achievable growth, not the assignment's
-    heuristic growth floor, and is skipped entirely if the materialised model cannot beat that floor
-    (where the test could not discriminate) — pass ``min_growth`` to override the floor used for this
-    comparison (default: the proposal's own floor). Set ``check_essential=False`` to skip the only
-    non-cheap signal.
+    ``check_essential`` runs a single-reaction-deletion essentiality check (an FBA per candidate) on
+    the already-flagged placements (base priority ``>= essential_candidate_threshold``) and
+    multiplies their score by 1.6 when removing a placement drops the growth of the
+    materialised model to below 1 % of its growth. Essentiality is measured against the achievable
+    growth of the applied model, not the heuristic growth floor of the assignment. The check is
+    skipped if the floor is 0 or if the materialised model does not exceed that floor (a comparison
+    with the floor would then flag every candidate).
+    ``min_growth`` overrides the floor used for this comparison (default: the floor of the
+    proposal). ``check_essential=False`` skips this signal, the only one that needs FBA.
 
-    ``currency_metabolites`` extends the built-in currency/cofactor set (ATP, NAD(P)H, H+, H2O, CoA, Pi,
-    ...) that is excluded from the topology signals — pass ids or names for any organism-specific pool
-    that should also count as freely available.
+    ``currency_metabolites`` extends the built-in currency and cofactor set (ATP, NAD(P)H, H+, H2O,
+    CoA, Pi, ...) that is excluded from the topology signals. It takes ids or names of
+    organism-specific pools that count as freely available.
 
-    A reaction whose ``localization`` confidence has been marked ``curated`` (via
-    :func:`~raven_toolbox.confidence.mark_curated`, e.g. after a curator settled its placement) is
-    dropped from the queue, closing the score -> review -> curate loop so a settled reaction stops
-    resurfacing. Pass ``include_curated=True`` to score it anyway.
+    A reaction whose ``localization`` confidence is marked ``curated`` (via
+    :func:`~raven_toolbox.confidence.mark_curated`, for example after a curator settled its
+    placement) is
+    dropped from the result, so a settled reaction does not reappear. ``include_curated=True``
+    scores it anyway.
     """
     import pandas as pd
 
@@ -361,13 +367,14 @@ def curation_priority(
 
 
 def _essential_set(model, proposal, base, default_compartment, universal, floor, candidates):
-    """Placements whose removal drops the *materialised* model's growth to near zero (single-deletion).
+    """Placements whose removal drops the growth of the materialised model below 1 % of its growth
+    (single deletion).
 
-    Essentiality is measured against the applied model's own achievable growth (``base_g``), not the
-    assignment's heuristic ``min_growth`` floor: the floor can be higher than the materialised model can
-    actually reach (the documented growth-floor gap), in which case comparing knockout growth to it
-    would flag every candidate and collapse the ranking. If the materialised model cannot beat the
-    floor, essentiality cannot discriminate, so return empty.
+    Essentiality is measured against the achievable growth of the applied model (``base_g``), not
+    the ``min_growth`` floor of the assignment. The floor can exceed the growth that the
+    materialised model reaches, and a comparison of the knockout growth with it would flag every
+    candidate. If the materialised model does not exceed the floor, essentiality cannot discriminate
+    and the function returns an empty set.
     """
     from raven_toolbox.localization.assign import apply_assignment
     if not candidates:

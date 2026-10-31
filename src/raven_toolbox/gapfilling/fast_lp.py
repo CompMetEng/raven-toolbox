@@ -1,24 +1,24 @@
 """LP-based gap-filling: fastGapFill and swiftGapFill.
 
 For each blocked draft reaction, solves a single LP that identifies the
-minimum-L1-flux (fastLP) or maximum-non-core-flux (swiftLP) extension of
-the merged draft+template model that activates the blocked reaction. The
+minimum-L1-flux (fastLP) or maximum-template-flux (swiftLP) extension of
+the merged draft and template model that activates the blocked reaction. The
 union of all template reactions activated across all LP solves is returned.
 
 * **fastLP** minimises the sum of |template fluxes| while forcing the
   blocked reaction to carry >= epsilon flux (FASTCORE, Vlassis 2014).
-* **swiftLP** maximises the sum of template fluxes in a single LP solve
-  per blocked reaction (SWIFTCORE, Tefagh & Boyd 2020). Because the
-  maximisation objective is degenerate, results can differ between runs
+* **swiftLP** maximises the sum of the fluxes of the irreversible template
+  reactions in a single LP solve per blocked reaction (SWIFTCORE, Tefagh & Boyd 2020).
+  The maximisation objective is degenerate, so results can differ between runs
   or solvers.
 
 Unlike :func:`~raven_toolbox.gapfilling.fill.connect_blocked_reactions`,
-this is LP-only (no MILP), so it scales better to large models. However,
-the returned template set is a union over individual LP solutions and may
-be larger than strictly necessary.
+this function solves LPs only and no MILP. The returned template set is a union
+over individual LP solutions and can contain more reactions than a minimal set.
 
-Metabolite identifiers in *templates* must match those in *model* (matched
-by reaction id via :func:`~raven_toolbox.manipulation.transfer.add_reactions_from_model`).
+Template metabolites are matched to the draft by ``name[compartment]`` (via
+:func:`~raven_toolbox.manipulation.transfer.add_reactions_from_model`), so templates with a
+different identifier namespace than the model are supported.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from raven_toolbox.manipulation.transfer import add_reactions_from_model
 
 @dataclass
 class FastLPResult:
-    """Outcome of an LP-based gap-fill.
+    """Result of an LP-based gap-fill.
 
     Parameters
     ----------
@@ -44,16 +44,17 @@ class FastLPResult:
         Template reaction IDs selected by the LP solver (union across all
         per-blocked-reaction LP solves).
     newly_connected:
-        Draft reaction IDs that were blocked in the draft and appear in the
-        returned *model* (not guaranteed to carry flux until verified by FVA).
+        Draft reaction IDs that were blocked in the draft and can carry a flux above
+        ``epsilon`` when all template reactions are added. The reactions in
+        ``added_reactions`` alone are not checked for this flux.
     cannot_connect:
         Blocked draft reaction IDs that remain blocked even with the full
         template database added.
     candidates_per_reaction:
         Per blocked-reaction template reaction candidates (as returned by
-        each individual LP solve). Useful for greedy post-processing.
+        each individual LP solve).
     model:
-        Draft model with *added_reactions* incorporated.
+        Draft model with ``added_reactions`` incorporated.
     """
 
     added_reactions: list[str] = field(default_factory=list)
@@ -94,9 +95,9 @@ def _solve_fastlp(
     """Run one FASTCORE LP for a blocked reaction.
 
     Minimises the L1 norm (sum of |flux|) over template reactions while
-    forcing *blocked_rid* to carry >= *epsilon* flux. For irreversible
-    template reactions the L1 norm is simply the flux value. For reversible
-    template reactions, auxiliary variables are added to linearise |v|.
+    forcing ``blocked_rid`` to carry >= ``epsilon`` flux. For irreversible
+    template reactions the L1 norm is the flux value. For reversible
+    template reactions, auxiliary variables linearise |v|.
 
     Returns the list of template reaction ids with |flux| > epsilon/2.
     """
@@ -154,9 +155,9 @@ def _solve_swiftlp(
     """Run one SWIFTCORE LP for a blocked reaction.
 
     Maximises the sum of template reaction fluxes (for irreversible
-    templates) while forcing *blocked_rid* to carry >= *epsilon* flux.
-    The LP is degenerate (many optimal solutions), so results are
-    stochastic across solvers and runs.
+    templates) while forcing ``blocked_rid`` to carry >= ``epsilon`` flux.
+    The LP is degenerate (many optimal solutions), so results can differ
+    between solvers and runs.
 
     Returns the list of template reaction ids with flux > epsilon/2.
     """
@@ -203,8 +204,8 @@ def _init_worker(
     epsilon: float,
     variant: Literal["fast", "swift"],
 ) -> None:
-    """Pool initializer: stash this worker's own model copy (deserialised by
-    ``ProcessPool``, not by us) and everything else needed to solve one
+    """Pool initialiser: store the model copy of this worker (deserialised by
+    ``ProcessPool``) and everything else needed to solve one
     blocked reaction's LP."""
     global _WORKER_MODEL, _WORKER_TEMPLATE_IDS, _WORKER_EPSILON, _WORKER_VARIANT
     _WORKER_MODEL = working
@@ -235,8 +236,8 @@ def fill_gaps_fast_lp(
     """LP-based gap-filling (fastGapFill / swiftGapFill).
 
     For each blocked draft reaction, runs a single LP that activates that
-    reaction using a minimal (or maximal) set of template reactions. The
-    union of all activated template reactions is returned.
+    reaction using a minimal (``"fast"``) or maximal (``"swift"``) set of template
+    reactions. The union of all activated template reactions is returned.
 
     Parameters
     ----------
@@ -247,19 +248,19 @@ def fill_gaps_fast_lp(
     epsilon:
         Minimum flux threshold for a reaction to be considered active.
     variant:
-        ``"fast"`` — FASTCORE L1-norm LP (minimises L1 norm of template fluxes).
-        ``"swift"`` — SWIFTCORE single LP (maximises template flux sum; faster
-        but stochastic).
+        ``"fast"``: FASTCORE L1-norm LP (minimises the L1 norm of template fluxes).
+        ``"swift"``: SWIFTCORE single LP (maximises the sum of the fluxes of the
+        irreversible template reactions; results can differ between runs).
     verbose:
         Print progress messages.
     n_proc:
         Worker processes for solving each blocked reaction's LP in parallel.
-        Defaults to ``cobra.Configuration().processes``; set to 1 to solve
-        serially in this process. Each blocked reaction's LP only depends on
-        the merged draft+template model (reverted after each solve via
-        ``with working as m:``), never on another blocked reaction's result,
-        so this parallelises via ``cobra.util.ProcessPool`` — the same pool
-        ``ec_fva``/``flux_variability_analysis`` use.
+        Defaults to ``cobra.Configuration().processes``; 1 solves
+        serially in this process. Each blocked reaction's LP depends only on
+        the merged draft and template model (reverted after each solve via
+        ``with working as m:``) and never on the result of another blocked reaction.
+        The LPs run in ``cobra.util.ProcessPool``, which cobra's
+        ``flux_variability_analysis`` also uses.
 
     Returns
     -------

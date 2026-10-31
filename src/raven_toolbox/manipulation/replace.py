@@ -1,11 +1,9 @@
-"""Merge a metabolite into another already in the model — port of RAVEN's
-``replaceMets``.
+"""Merge a metabolite into another metabolite of the model (RAVEN's ``replaceMets``).
 
-Useful when a model has ended up with two records for the same real-world
-compound under different names or ids (RAVEN's own example: ``"oxygen"`` and
-``"o2"``). Reassigns stoichiometry from the old metabolite to the
-replacement, copies the replacement's identity/annotation onto it, and
-cleans up any reactions that became duplicates as a result.
+The function applies to a model with two records for the same compound under different names or
+ids (RAVEN's example: ``"oxygen"`` and ``"o2"``). It moves the stoichiometry of the old
+metabolite to the replacement, copies the identity and annotation of the replacement onto the old
+metabolite, and removes reactions that become duplicates.
 """
 from __future__ import annotations
 
@@ -19,13 +17,13 @@ _NOTES_FIELDS = ("inchis", "deltaG", "metFrom")
 
 
 def _copy_identity(dst: cobra.Metabolite, src: cobra.Metabolite) -> None:
-    """Copy name/formula/charge/annotation/notes from src onto dst.
+    """Copy name, formula, charge, annotation and notes from ``src`` onto ``dst``.
 
-    Matches replaceMets.m's unconditional copy of metNames/metFormulas/
-    metMiriams/metCharges/metDeltaG/inchis/metSmiles from the replacement
-    onto the to-be-replaced metabolite (annotation covers MIRIAM xrefs and
-    smiles; notes covers RAVEN's own inchis/deltaG/metFrom fields — see
-    raven_toolbox.io.yaml's field mapping).
+    The copy is unconditional, as the copy of metNames, metFormulas, metMiriams, metCharges,
+    metDeltaG, inchis and metSmiles from the replacement onto the to-be-replaced metabolite in
+    replaceMets.m. The annotation holds the MIRIAM cross-references and the smiles; the notes
+    hold the RAVEN fields inchis, deltaG and metFrom (see the field mapping of
+    ``raven_toolbox.io.yaml``).
     """
     dst.name = src.name
     dst.formula = src.formula
@@ -63,34 +61,26 @@ def replace_metabolite(
         Name (or id, with ``identifiers=True``) of the metabolite to replace.
     replacement:
         Name (or id) of the metabolite to replace it with. Its identity
-        (name, formula, charge, annotation, and RAVEN's inchi/deltaG/metFrom
-        notes) is copied onto every replaced metabolite.
+        (name, formula, charge, annotation, and the RAVEN notes inchis, deltaG and metFrom)
+        is copied onto every replaced metabolite when matching by name.
     identifiers:
-        If True, ``metabolite``/``replacement`` are metabolite ids rather
-        than names (default False). Ids are unique, so this is always a
-        direct 1:1 merge, and the survivor (``replacement``) keeps its own
-        existing identity unchanged — ``replaceMets.m`` copies the
-        replacement's identity onto the *old* metabolite's row before
-        deleting that row, which has no observable effect (it never
-        survives to be seen), so this doesn't replicate that dead step.
-        Names are not unique: every metabolite named ``metabolite`` is
-        renamed to ``replacement``'s name, and then *any* metabolite in the
-        model sharing a (name, compartment) with a renamed one is merged
-        into it too — not just the ones being explicitly replaced, matching
-        ``replaceMets.m`` exactly (its own docstring example: a model with
-        both "oxygen" and "o2" as names). Here the identity copy *is*
-        observable (a renamed metabolite that turns out not to collide with
-        anything survives with the replacement's copied identity), so it is
-        applied.
+        If True, ``metabolite`` and ``replacement`` are metabolite ids; by default they are
+        names. Ids are unique, so the old metabolite is merged into the replacement, which
+        keeps its own name, formula, charge, annotation and notes. Names are not unique: every
+        metabolite named ``metabolite`` receives the identity of the first metabolite named
+        ``replacement``, and then every group of metabolites in the model that share a name and
+        compartment with a replacement is merged into the first metabolite of the group (model
+        order), including metabolites that were not named ``metabolite``. This follows
+        ``replaceMets.m``, whose example is a model with both "oxygen" and "o2" as names.
     verbose:
         Print the ids of reactions touching the to-be-replaced metabolite(s).
 
     Returns
     -------
     list[str]
-        Ids of duplicate reactions removed as a result of the merge (only
-        reactions touching the replacement are checked — pre-existing
-        duplicates elsewhere in the model are left alone).
+        Ids of duplicate reactions removed as a result of the merge. Only
+        reactions that contain a surviving replacement metabolite are checked; duplicates
+        elsewhere in the model are not changed.
 
     Raises
     ------

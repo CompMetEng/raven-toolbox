@@ -4,7 +4,8 @@ The inputs are the ones RAVEN's ``ftINIT`` takes: an optional :class:`~raven_too
 (categorical protein levels) and an optional :class:`TranscrData` (expression levels per gene
 and tissue or cell type), a tissue and optionally a cell type. Protein levels are mapped to
 numbers with a level table, expression to ``5·ln(level/threshold)``; both are then combined per
-gene (HPA wins) or per reaction (``data_precedence="reaction"``) and walked through each GPR
+gene (an HPA score replaces an expression score of the same gene) or per reaction
+(``data_precedence="reaction"``) and walked through each GPR
 by :func:`~raven_toolbox.init.score.score_reactions_from_genes`.
 """
 from __future__ import annotations

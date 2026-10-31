@@ -1,14 +1,15 @@
-"""Build a draft model from template models + homology hits.
+"""Build a draft model from template models and homology hits.
 
-Key behaviour:
+Behaviour:
 
-* ``strictness`` controls the hit-filtering policy (bidirectional matching,
-  best-hits-only, or both);
-* GPR rewriting works on cobra's AST, not regex;
-* explicit ``complex_policy`` decides what happens to AND-subunits that lack an
-  ortholog (drop, keep, drop-the-reaction);
-* best-hit selection is bitscore-based;
-* the ortholog map is a DataFrame; provenance is structured.
+* ``strictness`` selects the hit-filtering policy (bidirectional matching,
+  best hits only, or both);
+* GPR rewriting operates on the abstract syntax tree of cobra's GPR;
+* ``complex_policy`` selects what happens to AND-linked subunits that lack an
+  ortholog (``"flag"``, ``"keep"`` or ``"drop"``);
+* best-hit selection uses the bitscore;
+* the ortholog map is returned as a dict in ``HomologyResult.gene_map``, and the
+  ``notes`` of each transferred reaction contain ``homology_source``.
 """
 from __future__ import annotations
 
@@ -39,10 +40,10 @@ class HomologyResult:
     gene_map
         ``{model_id: {template_gene: [new_gene, ...]}}`` ortholog mapping used.
     candidates
-        Reactions that just missed the identity threshold, with the best hit
-        supporting each, sorted strongest first. ``None`` unless
-        ``review_identity`` was given. These are *not* in ``model``: they are the
-        near misses, for a curator to accept or reject deliberately.
+        Reactions that transfer at the identity threshold ``review_identity`` but
+        not at ``min_identity``, with the best hit supporting each, sorted by
+        identity, strongest first. ``None`` unless ``review_identity`` was given.
+        These reactions are not in ``model``.
     """
 
     model: cobra.Model
@@ -71,8 +72,8 @@ def _rewrite_node(node, ortho: dict):
     Returns a gene id, an ``_Unmapped`` for a template gene without an ortholog, or
     ``(operator, [children])`` for a group. Groups are flattened and free of duplicates,
     so several template genes that map to the same ortholog do not repeat it. An isozyme
-    group is as good as its mapped members: unmapped members are left out when at least one
-    member is mapped, and when none is the last of them stands for the whole group, so a
+    group is represented by its mapped members: unmapped members are left out when at least one
+    member is mapped, and when none is mapped the last of them stands for the whole group, so a
     complex keeps one unmapped subunit where all of its isozymes lack an ortholog.
     """
     if isinstance(node, ast.Name):
@@ -170,7 +171,7 @@ def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str, removed: frozense
 
 
 def _strictness_to_flags(strictness: int) -> tuple[bool, bool]:
-    """Map strictness 1/2/3 onto (bidirectional, best_hits_only)."""
+    """Map strictness 1, 2 or 3 onto (bidirectional, best_hits_only)."""
     if strictness == 1:
         return True, False
     if strictness == 2:
@@ -279,24 +280,24 @@ def get_model_from_homology(
 ) -> HomologyResult:
     """Build a draft model for ``model_for`` by transferring reactions from templates.
 
-    Other parameters that materially change the result:
+    Parameters that change the result:
 
-    * ``strictness`` (default 1) picks the hit-filtering policy:
+    * ``strictness`` (default 1) selects the hit-filtering policy:
 
-      - 1: bidirectional — a template gene and a new-organism gene must have
-        an accepted hit in both directions, rather than in just one.
-      - 2: one-directional — trust a hit found in a single direction, picked
-        by ``map_direction``.
-      - 3: bidirectional and best-hits-only — before matching, each gene keeps
+      - 1: bidirectional. A template gene and a new-organism gene must have
+        an accepted hit in both directions.
+      - 2: one-directional. A hit found in a single direction is accepted; the
+        direction is selected by ``map_direction``.
+      - 3: bidirectional and best hits only. Before matching, each gene keeps
         only its best hits (by bitscore) in each direction, all of them when
         several tie, then the bidirectional rule is applied.
 
-    * ``map_direction`` picks which one-directional search to trust when
+    * ``map_direction`` selects the direction of the one-directional search when
       ``strictness`` is 2: ``"new_to_old"`` (default, hits found
       searching from ``model_for``) or ``"old_to_new"``.
     * ``complex_policy`` decides what happens to an AND-linked subunit with no
       ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
-      gene (``OLD_<model>_<gene>``) for later curator review, ``"keep"`` drops just that
+      gene (``OLD_<model>_<gene>``) for later curator review, ``"keep"`` removes that
       subunit, ``"drop"`` drops the whole reaction. An isozyme group counts as a subunit
       without an ortholog only when none of its members has one, and then one placeholder
       stands for it. ``"drop"`` removes the reaction whenever a placeholder would remain,
@@ -305,49 +306,56 @@ def get_model_from_homology(
       gene appears in the given ``models`` before mapping orthologs, so a gene
       the templates lack cannot be a best hit. It raises ``ValueError`` when no
       hit of a search direction between ``model_for`` and a template passes
-      the cutoffs and this filter.
+      the cutoffs and this filter. As in RAVEN, it changes the mapping only with
+      ``strictness`` 3: with 1 and 2 a template gene that no template contains is dropped in
+      any case, and only the ``ValueError`` differs.
     * ``keep_gene_free`` (default False) also transfers the template reactions that have no
       GPR (spontaneous, transport, exchange, artificial). By default they are dropped, as in
-      RAVEN, because nothing supports them in the new organism. Set it when the template is
-      a curated reference whose gene-free reactions belong in every derived model.
+      RAVEN, because no gene supports them in the new organism. True transfers them,
+      which suits a curated reference template whose gene-free reactions belong in every
+      derived model.
     * ``preserve_notes`` (default False) keeps each transferred reaction's own ``notes``
       (references, confidence score, free text) and only adds ``homology_source``. By default
       they are replaced by a note that the reaction was included by this function.
     * ``preferred_order`` breaks ties when more than one template maps the
-      same new-organism gene: the earlier template in the list wins that gene, and a
+      same new-organism gene: the gene is mapped to the earlier template in the list, and a
       gene of a later template that maps to any gene an earlier template already maps
       is removed from that template altogether, with its other mappings. A reaction of
       the later template that cannot work without the removed gene is not transferred.
       Templates are merged in the order they were given in ``models``, whatever the
-      preferred order is (default: the order of ``models``).
+      preferred order is, and a template that ``preferred_order`` leaves out contributes
+      nothing (default: the order of ``models``). RAVEN's ``preferredOrder`` decides which
+      template receives a gene in the same way and merges the models in the order of ``models``.
 
     Organism ids in ``hits`` are case-sensitive. An id that matches
     ``model_for`` or a template id only when case is ignored raises
-    ``ValueError``; hits involving other organisms are ignored.
+    ``ValueError``; hits involving other organisms are ignored. RAVEN raises an error for
+    hits from an organism that no template has as ``model.id``, and matches the template ids
+    case-insensitively.
 
-    Defaults for the three filters come from a `calibration against KEGG orthology
+    A hit passes when its e-value is below ``max_evalue`` and its alignment length and
+    identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
+
+    Defaults for the three filters come from a `calibration against KEGG annotations and OMA assignments
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
     on raven-docs, scored with precision weighted above recall (a wrongly transferred
     reaction is harder to undo than a missing one):
 
-    * ``min_identity`` 40 is the binding filter and the measured optimum.
-    * ``min_align_len`` 100 replaces RAVEN's 200, which discarded real orthologs
-      for no gain in precision. Anything at or below 150 measured the same; 200
-      cost 1-2 points on every organism tested.
-    A hit passes when its e-value is below ``max_evalue`` and its alignment length and
-    identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
+    * ``min_identity`` 40 lies in the 35 to 45 range that the two reference sources favour;
+      35 scores higher for two organisms (``yli`` 0.868 against 0.860, ``ani`` 0.814 against
+      0.804). It is the filter that limits the result.
+    * ``min_align_len`` 100, as RAVEN's ``minLen``. Values at or below 150 measured the
+      same; on each of the four organisms tested, the score against KEGG annotations (wrong
+      matches counted double) was 0.010 to 0.020 lower at 200 than at 100.
+    * ``max_evalue`` makes no difference between 1e-4 and 1e-50, because the other two
+      filters exclude every hit that it would exclude; 1e-30 is the RAVEN value.
 
-    * ``max_evalue`` makes no difference anywhere between 1e-4 and 1e-50 -- the
-      other two filters have already excluded whatever it would exclude -- so
-      1e-30 is kept for continuity with RAVEN rather than for any measured effect.
-
-    ``review_identity`` (e.g. 25) collects what those thresholds turn away. Any
-    reaction that *would* have transferred at the looser identity is reported in
-    ``HomologyResult.candidates`` with its strongest supporting hit, and is not
-    added to the model. The two error types are not symmetric -- a missing
-    reaction can be gap-filled, a wrong one is hard to find and harder to remove
-    -- so the filters stay strict, but the evidence for the near misses is handed
-    to the curator instead of being discarded silently.
+    ``review_identity`` (for example 25) collects the reactions that the thresholds
+    reject. Any reaction that transfers at this lower identity but not at ``min_identity``
+    is reported in ``HomologyResult.candidates`` with its strongest supporting hit and is
+    not added to the model. A missing reaction can be gap-filled, whereas a wrongly
+    transferred reaction is hard to find and remove, so the filters stay strict. It must be
+    below ``min_identity``, otherwise ``ValueError`` is raised.
     """
     if isinstance(models, cobra.Model):
         models = [models]
@@ -475,7 +483,7 @@ def get_model_from_homology(
 
 def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
               keep_gene_free=False, preserve_notes=False, removed=None) -> cobra.Model:
-    """Assemble the draft: per-template reactions whose GPRs survive rewriting.
+    """Assemble the draft from the reactions of each template whose GPRs survive rewriting.
 
     The templates are merged in the order of ``model_ids`` (the order they were given),
     whatever the preferred order is; reaction ids shared between templates are resolved
@@ -525,15 +533,13 @@ def _candidate_evidence(
     reaction_ids, model_by_id, order, ortho, hits, *,
     max_evalue, min_align_len, min_identity,
 ) -> pd.DataFrame:
-    """One row per candidate reaction, carrying the hit that held it back.
+    """One row per candidate reaction, with the hit that limits its identity.
 
-    The reported identity is the *limiting* one. A bidirectional match has to
-    clear the threshold in both directions, so a pair whose forward hit is 44 %
-    and reverse hit 30 % is rejected on the 30 -- and reporting the 44 would
-    leave a curator wondering why a comfortable match was turned away.
+    The reported identity is the lower of the two directions. A bidirectional match has
+    to reach the threshold in both directions, so a pair with a forward hit of 44 % and a
+    reverse hit of 30 % is rejected on the 30 %, and the 30 % is reported.
 
-    Sorted strongest first, so the most defensible candidates are read first: the
-    point is a list somebody will actually skim, not an exhaustive dump.
+    Rows are sorted by identity, highest first.
     """
     usable = hits[
         (hits.evalue < max_evalue)

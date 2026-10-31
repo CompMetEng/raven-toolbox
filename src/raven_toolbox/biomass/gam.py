@@ -21,8 +21,8 @@ def set_gam(
     """Set GAM (and optionally NGAM) on a model in place.
 
     Scales every metabolite participating in the biomass pseudoreaction
-    whose ``name`` is in ``cofactor_met_names`` (e.g. ATP, ADP, H2O,
-    H+, phosphate) to exactly ``±value``, preserving the sign of its current
+    whose ``name`` is in ``cofactor_met_names`` (for example ATP, ADP, H2O,
+    H+, phosphate) to ``±value``, keeping the sign of its current
     coefficient.
 
     If both ``ngam_rxn`` and ``ngam_value`` are given, the NGAM
@@ -40,8 +40,8 @@ def set_gam(
         Reaction id of the biomass pseudoreaction whose stoichiometry
         carries the GAM coefficients.
     cofactor_met_names
-        Iterable of metabolite *names* (not ids) — every metabolite in
-        the biomass pseudoreaction whose name is in this set will be
+        Iterable of metabolite names (not ids). Every metabolite in
+        the biomass pseudoreaction whose name is in this set is
         rescaled. yeast-GEM uses ``{"ATP", "ADP", "H2O", "H+", "phosphate"}``.
     ngam_rxn, ngam_value
         Optional NGAM update. If both are provided, the reaction's
@@ -51,7 +51,7 @@ def set_gam(
     Returns
     -------
     cobra.Model
-        The (mutated) model, for chaining.
+        The modified model (the input object).
 
     Raises
     ------

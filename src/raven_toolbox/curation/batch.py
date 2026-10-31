@@ -67,7 +67,7 @@ _COEFF_ALIASES = {
 
 @dataclass
 class CurationResult:
-    """Record of what :func:`batch_curate` added / updated.
+    """Record of what :func:`batch_curate` added and updated.
 
     Each list holds the cobra ids of the affected entities, in the
     order they were processed.
@@ -101,7 +101,7 @@ def batch_curate(
     rxn_id_prefix: str = "R_",
     overwrite_with_empty: bool = True,
 ) -> CurationResult:
-    """Add or update metabolites / reactions / genes from data tables.
+    """Add or update metabolites, reactions and genes from data tables.
 
     Each table is optional. ``rxns_df`` and ``rxns_coeffs_df`` must be
     provided together (one describes the per-reaction attributes, the
@@ -115,9 +115,9 @@ def batch_curate(
         Tables matching the schema described in
         :mod:`raven_toolbox.curation`.
     met_id_prefix, rxn_id_prefix
-        Prefixes for freshly-generated metabolite / reaction ids
-        (e.g. ``s_`` and ``r_`` for yeast-GEM, ``M_`` and ``R_`` for
-        the cobrapy / BiGG default). New entity ids are formed by
+        Prefixes for new metabolite and reaction ids
+        (for example ``s_`` and ``r_`` for yeast-GEM, ``M_`` and ``R_`` for
+        the cobrapy and BiGG default). New entity ids are formed by
         finding the largest existing zero-padded suffix matching the
         prefix and incrementing from there.
     overwrite_with_empty
@@ -147,31 +147,40 @@ def batch_curate(
     A charge must be a finite whole number (``2``, ``-3``, ``2.0`` and ``2e0`` are accepted,
     ``0.5``, ``2.5`` and ``Inf`` raise :class:`ValueError`; nothing is rounded). A ``rev`` cell
     must be 0, 1, ``true`` or ``false`` (any other number raises, although the value is not
-    otherwise used). A ``rxnIdx`` cell must be a finite whole number of at least 1; each index
-    may be used by one row of the reaction table (the coefficient table repeats it, one row per
-    metabolite), otherwise :class:`ValueError` names the index and the data rows. The two
-    reaction tables are matched on the index and the name, and the index is compared by value
-    (``1``, ``1.0`` and ``1e0`` are the same). A coefficient must be a finite number other than
-    zero; two rows of one reaction for the same metabolite add their coefficients. A row of a
-    reaction table without any content is ignored (in the coefficient table the content is the
-    index, reaction name, metabolite name and compartment); a row with content needs a
-    ``rxnIdx`` when the table has that column, and a coefficient row needs a coefficient. A
-    metabolite row needs a compartment. A reaction of one table without a row in the other
-    raises :class:`ValueError`. An empty MIRIAM column removes no annotation.
+    otherwise used). A ``rxnIdx`` cell must be a finite whole number of at least 1; an index
+    appears in at most one row of the reaction table (the coefficient table repeats it, one row
+    per metabolite). As in RAVEN, the two reaction tables are matched on index and name, and an
+    index used by two rows of ``rxns_df`` raises :class:`ValueError`, which names the index and
+    the data rows. The index is compared by value (``1``, ``1.0`` and ``1e0`` are the same).
+    A coefficient must be a finite number other than zero; two rows of one reaction for the
+    same metabolite add their coefficients. A row of a reaction table without any content is
+    ignored (in the coefficient table the content is the index, reaction name, metabolite name
+    and compartment); a row with content needs a ``rxnIdx`` when the table has that column,
+    and a coefficient row needs a coefficient. A metabolite row needs a compartment. A
+    reaction of one table without a row in the other raises :class:`ValueError`.
+    An empty MIRIAM column removes no annotation.
 
     A lower bound above the upper bound (also against the stored bound of an existing
     reaction, since both bounds are set together) raises :class:`ValueError`. RAVEN's
     ``curateModelFromTables`` writes such bounds as given and ``solveLP`` rejects the model when
     it is run ("Invalid set of bounds for reaction(s): ..."); a cobra reaction cannot hold them.
 
-    Every check above, the required columns, the metabolites of the coefficient rows, the bounds
-    (several rows that update one reaction are checked one after the other), a gene listed twice
-    in ``genes_df`` and the gene rules run before the model is touched, so a table that fails
-    leaves the model unchanged. What is not checked beforehand is an error that cobra itself
-    raises while the tables are applied.
+    The following checks run before the model is touched, so a table that fails leaves the
+    model unchanged:
+
+    * the required columns;
+    * the metabolites of the coefficient rows;
+    * the bounds (several rows that update one reaction are checked one after the other);
+    * a gene listed twice in ``genes_df``;
+    * the gene rules;
+    * the numeric cells, the charges, the ``rev`` cells and the ``rxnIdx`` cells described
+      above.
+
+    Errors that cobra raises while the tables are applied are not checked beforehand, and the
+    model may then be partly changed.
 
     A ``grRules`` cell must be a well-formed gene rule, in the grammar of RAVEN's
-    ``parseGrRule``: genes joined by ``and``/``or`` in any case or by ``&``, ``&&``, ``|`` and
+    ``parseGrRule``: genes joined by ``and`` or ``or`` in any case or by ``&``, ``&&``, ``|`` and
     ``||``, with balanced parentheses. A rule with an operator that lacks an operand, empty
     parentheses or two genes without an operator between them raises :class:`ValueError`, as it
     raises ``RAVEN:badInput`` there. The rule of a new reaction that names a gene which neither
@@ -186,13 +195,12 @@ def batch_curate(
 
     A reaction table with a header and no row is empty: when both reaction tables are empty
     nothing happens, and a coefficient row without a reaction row (or the reverse) raises
-    :class:`ValueError`. RAVEN matches the stoichiometry by ``rxnIdx`` alone, Python by the
-    index and the name: for the rows ``1 A`` and ``1 B`` with coefficient rows of ``A`` and ``B``
-    RAVEN adds two reactions that both take all coefficients of index 1.
+    :class:`ValueError`.
 
     Returns
     -------
-    A :class:`CurationResult` summarising the changes.
+    CurationResult
+        A summary of the changes.
     """
     if not isinstance(overwrite_with_empty, (bool, np.bool_)):
         raise TypeError(
@@ -451,7 +459,7 @@ def _rule_genes(rule: str) -> list[str]:
 
 
 def _row_rule_genes(row: pd.Series) -> list[str]:
-    """Gene ids of the ``grRules`` cell of a reaction row; :class:`ValueError` when it is malformed."""
+    """Gene ids of the ``grRules`` cell of a reaction row; raises ``ValueError`` if malformed."""
     rule = row.get("grRules")
     if not _has_value(rule):
         return []
@@ -644,8 +652,9 @@ def _update_gene(
 class _ReactionPlan:
     """What the reaction tables do to the model: existing reactions to update and new ones to add.
 
-    ``new`` pairs a table row with its stoichiometry as ``{(metabolite name, compartment): coefficient}``;
-    the metabolites are looked up when the reaction is built, after the metabolite table is applied.
+    ``new`` pairs a table row with its stoichiometry as
+    ``{(metabolite name, compartment): coefficient}``; the metabolites are looked up when the
+    reaction is built, after the metabolite table is applied.
     """
 
     updates: list[tuple[cobra.Reaction, pd.Series]]
@@ -1051,7 +1060,7 @@ def _check_boolean_rev(number: float, text: str, field: str, label: str) -> None
 
 
 def _check_rxn_index(number: float, text: str, field: str, label: str) -> None:
-    """A reaction index is a finite whole number of at least 1; an empty or NaN cell is not given."""
+    """A reaction index is a finite whole number of at least 1; an empty or NaN cell is absent."""
     if not math.isnan(number) and (not math.isfinite(number) or number != math.floor(number)
                                    or number < 1):
         raise ValueError(

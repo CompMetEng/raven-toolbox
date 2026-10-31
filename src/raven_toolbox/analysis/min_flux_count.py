@@ -1,37 +1,33 @@
-"""Minimum-cardinality flux distribution — port of RAVEN's ``getMinNrFluxes``.
+"""Minimum-cardinality flux distribution: port of RAVEN's ``getMinNrFluxes``.
 
 Finds a flux distribution satisfying the model's steady state and bounds that
-activates as *few* reactions as possible (optionally weighted per reaction),
-via a big-M MILP. This is a different, harder problem than pFBA
-(:func:`cobra.flux_analysis.pfba`), which minimizes the *sum* of flux
-magnitudes rather than the *count* of nonzero fluxes — cobrapy has no
+activates as few reactions as possible (optionally weighted per reaction),
+via a big-M MILP. This is a different problem from pFBA
+(:func:`cobra.flux_analysis.pfba`), which minimises the sum of flux
+magnitudes and not the count of nonzero fluxes. cobrapy has no
 built-in equivalent.
 
-Two disclosed simplifications relative to ``getMinNrFluxes.m``, neither of
-which changes the MILP actually being solved (see the source read that
-motivated them: MATLAB's own MILP never references ``model.c``, the
-objective — only its own *preliminary* scale-estimating solve does):
+Two differences from ``getMinNrFluxes.m``:
 
-- **No irreversible-splitting.** MATLAB's COBRA-toolbox solvers require an
-  irreversible model, so a reversible reaction becomes two split reactions,
-  each with its own binary indicator. cobrapy/optlang have no such
-  requirement, so a reversible reaction here gets one indicator ``y`` and
-  two constraints (``v <= M*y`` and ``v >= -M*y``), bounding ``|v|`` directly.
-  At a cardinality-optimal solution the two are equivalent: MATLAB's MILP
-  would never pay for two indicators on one reaction when zeroing the
-  smaller direction and keeping the net flux is strictly cheaper.
-- **Big-M from the model's own bounds, not a preliminary pFBA solve.**
-  ``getMinNrFluxes.m`` first solves the model's *existing* objective to
-  optimality, pins it, and minimizes the sum of fluxes subject to that pin —
-  purely to estimate a safe big-M scale and a MILP warm start. That
-  preliminary solve can fail (and therefore report "no feasible solution")
-  even when the actual cardinality MILP below it — which never references
-  the objective at all — is perfectly feasible on its own. This port
-  estimates big-M directly from the reactions' own finite bounds instead
-  (``5 * the largest finite |bound|``, floored at 1000, matching MATLAB's
-  own floor), so it cannot fail for a reason unrelated to whether a minimal
-  solution actually exists. No MILP warm start is set; a warm start only
-  speeds up a solve that would otherwise still reach the same optimum.
+- **No irreversible splitting.** The default ``'irrev'`` formulation of
+  ``getMinNrFluxes.m`` converts a reversible reaction into two irreversible reactions,
+  each with its own binary indicator. cobrapy and optlang need no irreversible model,
+  so a reversible reaction here gets one indicator ``y`` and two constraints
+  (``v <= M*y`` and ``v >= -M*y``) that bound ``|v|`` directly. At a
+  cardinality-optimal solution the two formulations are equivalent: the MATLAB MILP
+  would never pay for two indicators on one reaction when zeroing the smaller direction
+  and keeping the net flux is strictly cheaper.
+- **Big-M from the model's own bounds.** ``getMinNrFluxes.m`` first solves the model's
+  existing objective to optimality, pins it, and minimises the sum of fluxes subject to
+  that pin, to estimate the big-M scale and a MILP warm start. That preliminary solve
+  can fail (and then report "no feasible solution") even when the cardinality MILP,
+  which does not reference the objective, is feasible. This port estimates big-M from
+  the reactions' finite bounds (``5 * the largest finite |bound|``, at least 1000, the
+  same lower limit as in MATLAB), so the estimate does not depend on a solve. No MILP
+  warm start is set; a warm start only speeds up a solve that reaches the same optimum.
+
+The MILP of ``getMinNrFluxes.m`` does not reference ``model.c``, the objective; only its
+preliminary scale-estimating solve does.
 """
 from __future__ import annotations
 
@@ -59,7 +55,7 @@ class MinNrFluxesResult:
     active:
         Ids from ``to_minimize`` whose indicator was on in the solution.
     status:
-        Solver status string (e.g. ``"optimal"``, ``"infeasible"``).
+        Solver status string (for example ``"optimal"``, ``"infeasible"``).
     """
 
     fluxes: pd.Series
@@ -81,20 +77,18 @@ def get_min_nr_fluxes(
     model:
         Model to solve on, subject to its own steady-state constraints and
         reaction bounds as given (the model's ``objective`` plays no role;
-        constrain it yourself first — e.g. pin it near its optimum — if a
-        minimal solution *among optimal ones* is wanted).
+        a minimal solution among optimal ones requires constraining the objective
+        beforehand, for example pinning it near its optimum).
     to_minimize:
         Reaction ids to give a binary "is this active" indicator. Defaults
         to every reaction in the model.
     scores:
         Per-reaction weights, same length and order as ``to_minimize``.
-        Negative scores discourage that reaction from being active (more
-        negative = more discouraged); non-negative entries are clamped up to
-        the largest (least negative) negative score present, matching
-        MATLAB's "positive scores are not possible" rule — or to 0 if
-        ``scores`` has no negative entries at all, as RAVEN's
-        ``getMinNrFluxes`` does. Defaults to an implicit -1 for every
-        reaction (plain unweighted cardinality minimization).
+        Negative scores discourage that reaction from being active (the more
+        negative, the stronger); entries of 0 or above are replaced by
+        the largest (least negative) negative score present, or by 0 if
+        ``scores`` has no negative entries, as RAVEN's ``getMinNrFluxes`` does.
+        Defaults to an implicit -1 for every reaction (unweighted cardinality minimisation).
     big_m:
         Override the big-M constant. Defaults to an estimate from the
         model's own bounds (see module docstring).

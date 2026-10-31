@@ -1,31 +1,29 @@
-"""Compartment assignment: flux-free score placement + materialised-FBA certification.
+"""Compartment assignment: flux-free score placement and materialised-FBA certification.
 
 :func:`assign_compartments` places reactions into subcellular compartments from soft
-``gene x compartment`` localisation scores while keeping the result functional — and it does so
-**without ever putting a flux model inside the placement optimisation**. A legacy approach that
-coupled placement to a fused flux model could, at genome scale, certify a placement the materialised
-model cannot actually grow (its tolerance-rounded gating binaries leak flux); keeping the flux model
-out of the optimisation entirely removes that failure mode at the source:
+``gene x compartment`` localisation scores and keeps the result functional. The placement
+optimisation contains no flux model: with no flux variable and no growth constraint, a
+tolerance-rounded gating binary has no flux to leak, so the placement cannot be certified by a
+flux that the materialised model does not carry. The method has four steps:
 
-1. a **flux-free placement master** (maximise localisation score, mono-localisation) — sound *by
-   construction*: with no flux variable and no growth constraint, a tolerance-rounded binary has
-   nothing to leak into, so the leak is unrepresentable by construction;
-2. a **structural confinement repair** — reactions sharing a non-transportable metabolite are
-   co-located (or pinned to a fixed reaction's compartment), and transportable pools a placement
-   splits get star-topology transports;
-3. **materialised-FBA certification** — the placement is confirmed functional by a real ``cobra`` FBA
-   on the model :func:`apply_assignment` actually builds, over the primary medium and every
-   :class:`GrowthCondition`. The certificate *is* the acceptance test, so the two can never disagree;
-4. **feedback on real failure** — optional gap-fill from a ``universal`` model, then (for a genuine
-   placement gap) a tightening of placement, re-solving until certified or the round budget is hit.
+1. a **flux-free placement master** that maximises the localisation score with mono-localisation;
+2. a **structural confinement repair**: reactions sharing a non-transportable metabolite are
+   co-located (or pinned to a fixed reaction's compartment), and transportable pools that a
+   placement splits get star-topology transports;
+3. **materialised-FBA certification**: a ``cobra`` FBA on the model that :func:`apply_assignment`
+   builds, over the primary medium and every :class:`GrowthCondition`, confirms the placement is
+   functional. The certificate is the acceptance test;
+4. **feedback on failure**: optional gap-fill from a ``universal`` model, then (for a placement
+   gap) a tightening of the placement, and a new solve until the placement is certified or the
+   round budget is used.
 
-The returned :class:`AssignmentProposal` is marked ``certified=True`` **iff** the materialised model
-reaches the growth floor on every medium; otherwise it is returned ``certified=False`` with the
-failing media in :attr:`AssignmentProposal.growths`. There is no optimistic certificate — a placement
-that cannot grow is never reported as if it could.
+The returned :class:`AssignmentProposal` has ``certified=True`` if and only if the materialised
+model reaches the growth floor on every medium. Otherwise ``certified=False``, and the biomass flux
+of each medium is in :attr:`AssignmentProposal.growths`.
 
 See the `compartment-assignment redesign
-<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/localization_redesign.md>`_ on raven-gecko-parity for the design rationale.
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/localization_redesign.md>`_
+on raven-gecko-parity for the design rationale.
 """
 from __future__ import annotations
 
@@ -56,7 +54,8 @@ _PRIMARY = "__primary__"
 # --------------------------------------------------------------------------- shared scope
 @dataclass
 class _Scope:
-    """Movable/pinned split, gene coupling and metabolite keying shared by both entry points."""
+    """Movable and pinned reactions, gene coupling and metabolite keying used by
+    :func:`assign_compartments`."""
 
     biomass_reaction: str
     min_growth: float
@@ -75,9 +74,8 @@ class _Scope:
 
 def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_metabolite,
                    biomass_reaction, min_growth) -> _Scope:
-    """Resolve the biomass reaction, growth floor, movable/pinned split, genes and metabolite keying.
-
-    Factored out of :func:`assign_compartments` as the shared scope-setup front matter.
+    """Resolve the biomass reaction, growth floor, split into movable and pinned reactions, genes
+    and metabolite keying.
     """
     if biomass_reaction is None:
         obj = linear_reaction_coefficients(model)
@@ -130,16 +128,14 @@ def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_
 
 # --------------------------------------------------------------------------- master
 def _pin_deterministic(prob, opt) -> None:
-    """Pin solver parameters so a degenerate placement objective is resolved the
-    same way every run and across solvers/machines. On a benchmark of the yeast
-    master (identical model, one parameter varied at a time) exactly three
-    settings changed which co-optimal placement Gurobi returned -- thread count,
-    seed, and presolve level -- while the MIP gap only mattered once loosened
-    past ~1e-2 (which also loses optimality) and every tolerance was irrelevant.
-    So: single thread and fixed seed remove thread/seed nondeterminism, a fixed
-    presolve level (2, matching the MATLAB port's optimizeProb default) removes
-    the presolve divergence, and a zero MIP gap forces the exact optimum. Only
-    Gurobi exposes these by the names used here; other backends keep defaults."""
+    """Pin solver parameters so a degenerate placement objective gives the same solution on every
+    run and on every machine. In a benchmark of the yeast master (identical model, one parameter
+    varied at a time), three settings changed which co-optimal placement Gurobi returned: thread
+    count, seed and presolve level. The MIP gap changed the result only when loosened above ~1e-2,
+    which also gives non-optimal solutions, and no tolerance changed it. The function sets one
+    thread, a fixed seed, presolve level 2 (the optimizeProb default of the MATLAB port), a MIP gap
+    of 0 (exact optimum) and an integrality tolerance of 1e-9. Only the Gurobi backend is
+    configured; other backends keep their defaults."""
     if "gurobi" not in getattr(prob, "__name__", ""):
         return
     try:
@@ -174,15 +170,15 @@ def _solve_placement_master(
     """Flux-free score-maximising placement MILP (mono-localisation).
 
     Returns ``(status, placements, gene_compartments)``. ``forced`` pins ``x[r, c] = 1`` (align a
-    reaction to a fixed compartment); ``colocation_groups`` tie sets of movable reactions to a shared
-    compartment (``x[a, c] = x[b, c]``), letting the score objective pick which one. No flux and no
-    growth floor at all in the master — the placement can never harvest a compartment's score through
-    leaked flux.
+    reaction to a fixed compartment); ``colocation_groups`` tie sets of movable reactions to a
+    shared compartment (``x[a, c] = x[b, c]``), and the score objective picks which one. The master
+    has no flux variable and no growth floor.
 
-    Solved in two lexicographic passes: the primary objective places genes by score (and penalises
-    spread), which leaves the per-reaction placement ``x`` a free co-optimum; the second pass then fixes
-    the gene layout and places each reaction in the compartment its own enzymes score highest for, so the
-    reaction placement is deterministic and evidence-aligned rather than an arbitrary co-optimal vertex.
+    The problem is solved in two lexicographic passes. The primary objective places genes by score
+    and penalises spread, which leaves the per-reaction placement ``x`` a free co-optimum. The
+    second pass fixes the gene layout and, for each reaction, maximises the summed score of the
+    reaction's genes for the compartment chosen in ``x``, plus a prior of 1e-3 for
+    ``default_compartment``. The reaction placement is then deterministic.
     """
     model.solver  # noqa: B018 — initialise the solver so model.problem is usable
     prob = model.problem
@@ -286,7 +282,8 @@ def _solve_placement_master(
 
 # --------------------------------------------------------------------------- repair
 def _placed_compartment(rid: str, placements: dict[str, list[str]], pinned_comp: dict[str, str]):
-    """The single compartment a reaction occupies (mono placement or a pinned single-compartment)."""
+    """The single compartment a reaction occupies (mono placement or a pinned
+    single-compartment)."""
     if rid in placements:
         cs = placements[rid]
         return cs[0] if len(cs) == 1 else None
@@ -301,18 +298,18 @@ def _touch_map(reactions, base):
 def _diagnose_confinement(
     movable, pinned_comp, placements, touches, transp, compartments, protected=frozenset(),
 ):
-    """Find non-transportable metabolites a placement strands across compartments.
+    """Find non-transportable metabolites that a placement splits across compartments.
 
     Returns ``(forced, groups, relaxed)``: ``forced`` pins movable reactions to a pinned reaction's
     compartment; ``groups`` co-locate all-movable reaction sets sharing a confined metabolite;
-    ``relaxed`` lists confined metabolites that must be transported anyway. A confined metabolite
-    touched in one compartment is fine and produces nothing.
+    ``relaxed`` lists confined metabolites that must be transported. A confined metabolite
+    touched in one compartment only is not listed.
 
-    ``protected`` are reactions already pinned by the growth-failure feedback (:func:`_diagnose_growth_gap`);
-    confinement must **not** overwrite their placement — doing so lets the two diagnosers oscillate a
-    reaction between two compartments and burn the round budget. When a confined metabolite is shared
-    with a protected reaction, it is *relaxed* (transported) instead, which lets the protected
-    placement stand while still reconnecting the pool.
+    ``protected`` are reactions pinned by the growth-failure feedback
+    (:func:`_diagnose_growth_gap`). Confinement does not overwrite their placement, because
+    overwriting would let the two diagnosers move a reaction between two compartments until the
+    round budget is used. When a confined metabolite is shared with a protected reaction, it is
+    relaxed (transported) instead; the protected placement stays and the pool is reconnected.
     """
     movable_ids = {r.id for r in movable}
     # confined base -> {compartment: [rids]}
@@ -348,10 +345,10 @@ def _diagnose_confinement(
 
 
 def _split_transports(placements, pinned_comp, touches, transp, default_compartment, relaxed):
-    """Star-topology transports for transportable pools a placement splits across compartments.
+    """Star-topology transports for transportable pools that a placement splits across compartments.
 
     A base metabolite touched by single-compartment reactions in more than one compartment needs a
-    transport into each non-default compartment (routed through ``default_compartment``). ``relaxed``
+    transport into each non-default compartment (through ``default_compartment``). ``relaxed``
     confined metabolites (which could not be co-located) are transported too.
     """
     used: dict[str, set[str]] = {}
@@ -374,10 +371,11 @@ def _split_transports(placements, pinned_comp, touches, transp, default_compartm
 
 # --------------------------------------------------------------------------- certification
 def _apply_medium(applied: cobra.Model, medium: Mapping[str, float] | None) -> None:
-    """Close all uptake, then open the listed exchanges — ``medium`` fully specifies the environment.
+    """Close all uptake, then open the listed exchanges, so ``medium`` fully specifies the
+    environment.
 
-    ``None`` leaves the model's own medium untouched (the primary condition). Call inside a
-    ``with applied:`` block so bounds revert.
+    ``None`` leaves the model's own medium unchanged (the primary condition). The bound changes are
+    reverted when the call is made inside a ``with applied:`` block.
     """
     if medium is None:
         return
@@ -408,8 +406,8 @@ def _certify(applied, biomass_id, min_growth, conditions) -> tuple[bool, dict[st
 
 
 def _usable_transports(applied, proposal, biomass_id, min_growth, conditions, default_compartment):
-    """Drop transports that can carry no flux in *any* certification medium (sound: an unusable
-    reaction's removal cannot change any of those FBAs). Returns the pruned transport list."""
+    """Drop transports that can carry no flux in any certification medium. Removing a blocked
+    reaction does not change the FBA of that medium. Returns the pruned transport list."""
     from cobra.flux_analysis import find_blocked_reactions
 
     tr_of = {}  # transport reaction id -> (base, compartment)
@@ -430,16 +428,15 @@ def _usable_transports(applied, proposal, biomass_id, min_growth, conditions, de
 
 
 def _minimize_transports(model, proposal, sc, conditions, default_compartment, universal):
-    """Prune the transport/gap-fill set to the reactions that carry flux in a **parsimonious FBA**
-    solution, then re-certify.
+    """Prune the transport and gap-fill set to the reactions that carry flux in a **parsimonious
+    FBA** solution, then re-certify.
 
-    Sound by construction: a reaction carrying zero flux in a feasible solution can be removed without
-    changing that solution, so the pruned model still grows. pFBA (minimise total flux at max biomass)
-    keeps the sparse, functionally-used subset — a large, honest reduction (yeast-GEM: ~1260 -> ~280),
-    computed in one LP-scale solve. (An exact minimum-count subset would need a MILP; the earlier
-    indicator formulation did not reliably bind at genome scale, so pFBA — sound and fast — is used
-    instead.) Falls back to the input proposal if pFBA is infeasible or if the pruned set regresses any
-    medium (a transport a growth-condition needs may carry no flux on the primary medium).
+    A reaction with zero flux in a feasible solution can be removed without changing that solution,
+    so the pruned model still grows. pFBA (minimise total flux at maximum biomass) keeps the subset
+    that carries flux (yeast-GEM: ~1260 -> ~280 transports) in one solve. An exact minimum-count
+    subset would need a MILP, and pFBA is used instead. Returns the input proposal if pFBA raises an
+    error or if the pruned set misses the growth floor on any medium (a transport that a growth
+    condition needs may carry no flux on the primary medium).
     """
     from cobra.flux_analysis import pfba
 
@@ -471,16 +468,15 @@ def _minimize_transports(model, proposal, sc, conditions, default_compartment, u
 
 def _enrich_multilocalization(model, proposal, scores, sc, conditions, default_compartment,
                               universal, threshold, eps, loopless):
-    """Add sound, FVA-validated multi-compartment placements to a certified mono proposal.
+    """Add FVA-validated multi-compartment placements to a certified mono proposal.
 
-    The scalable, ghost-free replacement for the in-MILP ``aF``/``aR`` machinery (see
-    `multi-localisation design
-    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/multi_localization_design.md>`_): propose, for each placed reaction, a second
-    compartment its gene has DeepLoc evidence for (score ``>= threshold``); materialise every candidate
-    as a duplicate; then keep only those a **loopless FVA** shows can carry flux ``>= eps`` in a
-    biomass-supporting solution. A dead duplicate (which would harvest a compartment's score for free)
-    carries no flux and is dropped, so multi-localisation stays sound — enforced by a real FVA in a
-    single flux-free master. Returns an enriched proposal, or the input if nothing survives.
+    For each placed reaction, a second compartment is proposed if one of its genes has a DeepLoc
+    score ``>= threshold`` there (see the `multi-localisation design
+    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/multi_localization_design.md>`_).
+    Every candidate is materialised as a duplicate reaction, and a **loopless FVA** keeps only the
+    duplicates that can carry flux ``>= eps`` in a solution that meets the growth floor. A duplicate
+    that carries no flux is dropped. Returns the enriched proposal, or the input if no duplicate
+    survives, if the FVA fails or if the enriched model misses the growth floor on a medium.
     """
     from cobra.flux_analysis import flux_variability_analysis
 
@@ -578,72 +574,75 @@ def assign_compartments(
     multi_localize_eps: float = 1e-6,
     multi_localize_loopless: bool = True,
 ) -> AssignmentProposal:
-    """Assign ``reactions_to_relocate`` to compartments, certifying functionality with a real FBA.
+    """Assign ``reactions_to_relocate`` to compartments and certify functionality with an FBA.
 
-    Placement is decided by a flux-free score MILP, and functionality is a separate,
-    materialised-FBA-verified repair (see the module docstring and
-    the `compartment-assignment redesign
-    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/localization_redesign.md>`_ on raven-gecko-parity). Notable parameters:
+    A flux-free score MILP decides the placement. A repair step adds transports (and gap-fill
+    reactions when ``universal`` is given), and the result is certified by an FBA on the applied
+    model. When no tightening is available or the round budget ends, the best proposal is
+    returned uncertified (see the module docstring and the
+    `compartment-assignment redesign
+    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/localization_redesign.md>`_
+    on raven-gecko-parity). Notes on parameters:
 
     ``transport_cost``
-        Accepted for signature compatibility but **not used**: the placement master is flux-free and
-        score-only, and ``minimize_transports`` prunes transports by flux (pFBA), not by cost.
+        Accepted and not used: the placement master is flux-free and score-only, and
+        ``minimize_transports`` prunes transports by flux (pFBA), not by cost.
     ``multi_compartment_penalty``
-        Weight (default ``0.5``) that discourages the primary placement pass from spreading one gene's
-        support across multiple compartments; higher values consolidate a gene's placement more
-        aggressively.
+        Weight (default ``0.5``) subtracted in the primary placement pass for each gene-compartment
+        assignment. A higher value places a gene in fewer compartments.
     ``transportable``
-        Metabolites eligible for a cross-compartment transport, by base id. ``None`` (default) allows
-        every metabolite touched by a relocatable reaction; pass a narrower set to forbid transports
-        for the rest (those pools are then confinement-repaired by co-location instead).
+        Base ids of the metabolites eligible for a cross-compartment transport. ``None`` (default)
+        allows every metabolite touched by a relocatable reaction. A narrower set forbids transports
+        for the other metabolites, and the reactions that share them are co-located by the
+        confinement repair.
     ``max_rounds``
-        Budget on placement-tightening rounds (confinement repair + growth-failure feedback). The
-        common genome-scale case (everything transportable) certifies in one round.
+        Maximum number of placement rounds (confinement repair and growth-failure feedback; default
+        ``8``). When every metabolite is transportable, the confinement repair adds no rounds and
+        the common genome-scale case certifies in one round.
     ``prune_transports``
-        Drop transports blocked in every certification medium (sound; on by default).
+        If True (default), drop transports that are blocked in every certification medium.
     ``minimize_transports``
-        After certifying, prune the transport (and gap-fill) set to the reactions that carry flux in a
-        **parsimonious FBA** solution (:func:`_minimize_transports`). Sound by construction (a zero-flux
-        reaction can be removed without changing the solution) and fast (one LP-scale pFBA), it gives a
-        large honest reduction (yeast-GEM: ~1260 -> ~280 transports) while staying certified — re-checked
-        against every medium, falling back to the un-minimised set if a growth-condition need was pruned,
-        so it is never non-functional. Off by default (adds one pFBA + re-certification).
-    multi_localize:
-        After certifying, add sound **multi-compartment** placements (:func:`_enrich_multilocalization`):
-        propose, per reaction, a second compartment its gene has DeepLoc evidence for (score
-        ``>= multi_localize_threshold``), materialise all candidates, and keep only those a single
-        **loopless FVA** shows can carry flux ``>= multi_localize_eps`` in a biomass-supporting solution.
-        Keeping the placement master mono-localised (tractable at genome scale) and gating each second
-        compartment with one loopless FVA is what makes multi-localisation scale: an FVA that a dead
-        duplicate cannot pass does the soundness check no in-MILP activity binary could afford at this
-        size. Off by default (adds one FVA).
+        If True, prune the transport and gap-fill set after certifying to the reactions that carry
+        flux in a parsimonious FBA solution (:func:`_minimize_transports`; yeast-GEM: ~1260 ->
+        ~280 transports). The pruned set is certified again against every medium, and the
+        un-minimised set is kept if the pruning removed a transport that a growth condition needs.
+        Default False; the option adds one pFBA and one certification.
+    ``multi_localize``
+        If True, add multi-compartment placements after certifying
+        (:func:`_enrich_multilocalization`): for each reaction, a second compartment is proposed if
+        its gene has a DeepLoc score ``>= multi_localize_threshold`` there, all candidates are
+        materialised, and one loopless FVA keeps those that can carry a flux of at least
+        ``multi_localize_eps`` in a biomass-supporting solution. The placement master stays
+        mono-localised, and the FVA removes duplicates that carry no flux. Default False; the option
+        adds one FVA.
 
-        **Caveat (over-inclusive).** The gate — DeepLoc score above threshold *and* able to carry flux
-        — is *sound* (no dead duplicate survives) but not *precise*: many reactions can carry some flux
-        in a second compartment without being biologically dual, so at genome scale a large fraction is
-        multi-placed (yeast-GEM: ~700 of ~2300 at the default threshold). It recovers the
-        DeepLoc-visible dual enzymes (e.g. HTS1/VAS1/GLR1) but not those dual by post-translational
-        retro-translocation (FUM1, ACO1), whose second compartment carries no DeepLoc signal — catching
-        those needs a functionality-driven candidate source (a metabolite required in the second
-        compartment), which is future work. Treat this as a scalable, sound *lower bound* on
-        multi-localisation, not a precise dual-localisation caller.
-    multi_localize_threshold:
-        DeepLoc score a gene needs in a second compartment for that placement to be *proposed*
-        (default ``0.7``). Higher = fewer, more confident duplicates, but too high loses genuine duals
-        (yeast-GEM: 0.9 drops HTS1/VAS1/GLR1; 0.7 keeps them).
-    multi_localize_eps:
-        Flux magnitude a proposed duplicate must reach in the FVA to be *kept* (default ``1e-6``).
-    multi_localize_loopless:
-        Use loopless FVA (default ``True``) so a duplicate active only in a futile cycle is not kept —
-        closing the internal-cycle caveat of the old in-MILP mode. Set ``False`` for a faster,
-        cycle-permissive check.
+        The gate (DeepLoc score above the threshold and flux in the FVA) removes duplicates that
+        carry no flux, and does not test whether the enzyme is dual-localised. Many reactions can
+        carry some flux in a second compartment without being dual, so many reactions are
+        multi-placed (in the yeast-GEM run, about 700 of 2300 reactions at the default threshold). The
+        gate recovers the DeepLoc-visible dual enzymes (for example HTS1, VAS1, GLR1) and misses
+        enzymes that are dual by post-translational retro-translocation (FUM1, ACO1), whose second
+        compartment carries no DeepLoc signal. A candidate source based on function (a metabolite
+        required in the second compartment) is not implemented. The result is a lower bound on
+        multi-localisation, not a precise dual-localisation call.
+    ``multi_localize_threshold``
+        DeepLoc score that a gene needs in a second compartment for that placement to be proposed
+        (default ``0.7``). A higher value gives fewer duplicates with higher confidence and misses
+        duals (yeast-GEM: 0.9 drops HTS1, VAS1 and GLR1; 0.7 keeps them).
+    ``multi_localize_eps``
+        Flux magnitude that a proposed duplicate must reach in the FVA to be kept (default
+        ``1e-6``).
+    ``multi_localize_loopless``
+        If True (default), use loopless FVA, so a duplicate that is active only in a futile cycle is
+        not kept. False gives a faster check that permits cycles.
 
     Returns
     -------
     AssignmentProposal
-        With ``certified`` set iff the materialised model reached the growth floor on every medium,
-        and ``growths`` giving the biomass flux per medium (``"__primary__"`` + each condition name).
-        ``status`` is ``"certified"`` or ``"uncertified"`` (or a solver status if the master failed).
+        ``certified`` is set if and only if the materialised model reached the growth floor on every
+        medium, and ``growths`` gives the biomass flux per medium (``"__primary__"`` and each
+        condition name). ``status`` is ``"certified"`` or ``"uncertified"`` (or a solver status if
+        the master failed).
     """
     conditions = list(growth_conditions or ())
     compartments = sorted(set(model.compartments) | set(scores.compartments))
@@ -754,23 +753,24 @@ def assign_compartments(
 
 
 def _gapfill(applied, universal, biomass_reaction, min_growth) -> list[str]:
-    """The ``universal`` reactions whose addition restores the primary growth floor, via a flux-based fill.
+    """The ``universal`` reactions whose addition restores the primary growth floor, from a
+    flux-based fill.
 
-    On a working copy: add every ``universal`` candidate not already present in one batch, check the floor
-    is even reachable, hold biomass at the floor, run pFBA (maximise biomass, then minimise total flux),
-    and return -- sorted -- the added reactions that carry flux. pFBA makes the set flux-parsimonious (not
-    guaranteed reaction-count-minimal); the caller re-certifies with a real FBA regardless, so no false
-    certificate is possible.
+    On a working copy, every ``universal`` candidate not already present is added in one batch, and
+    the function checks that the floor is reachable. It holds biomass at the floor, runs pFBA
+    (maximise biomass, then minimise total flux) and returns the added reactions that carry flux,
+    sorted. The set is flux-parsimonious and not guaranteed to have the minimum number of reactions.
+    The caller re-certifies the result with FBA.
 
-    An LP, not cobra's indicator MILP — ``cobra.flux_analysis.gapfill`` at genome scale fails to find a
-    valid fill in the *majority* of cases even when the exact restoring reaction is present in the
-    universal (its own validation then rejects the broken incumbent and raises); on single-reaction
-    knockout-recovery this restores every case where that MILP restores under half.
+    The fill is an LP (pFBA) and not cobra's indicator MILP: at genome scale
+    ``cobra.flux_analysis.gapfill`` failed to find a valid fill in most cases even when the
+    restoring reaction was present in the universal model, and on single-reaction knockout recovery
+    the LP restores every case where that MILP restores under half.
 
-    **Namespace.** Candidates are matched to the model by metabolite id (as cobra's gapfill required): the
-    universal must share the draft's metabolite namespace. A candidate whose metabolites do not resolve
-    becomes a dead-end that cannot carry flux and is left out — and a warning fires when most candidates
-    fail to resolve, so a silent empty result is distinguishable from a namespace mismatch.
+    **Namespace.** Candidates are matched to the model by metabolite id, so the universal model must
+    share the draft's metabolite namespace. A candidate whose metabolites do not resolve becomes a
+    dead end that cannot carry flux and is left out. A warning is issued when more than half of the
+    candidates share no metabolite id with the model.
     """
     if biomass_reaction not in applied.reactions:
         return []
@@ -816,12 +816,14 @@ def _gapfill(applied, universal, biomass_reaction, min_growth) -> list[str]:
 
 def _diagnose_growth_gap(applied, proposal, biomass_reaction, movable_ids, pinned_comp,
                          touches, base, compartments) -> tuple[str, str] | None:
-    """If a biomass precursor is unproducible, pin the movable reaction that produces it to the
-    compartment biomass needs it in. Returns ``(reaction_id, compartment)`` or ``None``.
+    """Select a blocked movable reaction that touches a biomass precursor and return its pin.
 
-    A cheap, targeted placement-gap repair: find a metabolite the biomass reaction consumes that is
-    blocked in the materialised model, then pin its sole movable producer back to biomass's
-    compartment so the pool reconnects. Broader gaps are left to ``universal`` gap-fill / reported.
+    Returns ``(reaction_id, compartment)``, where ``compartment`` is the compartment of the biomass
+    reaction, or ``None``. The reaction is the first reaction in ``proposal.placements`` that is
+    movable, is not a gap-fill reaction, is blocked in the materialised model and touches a base
+    metabolite that the biomass reaction consumes. ``None`` is also returned when the biomass
+    reaction is absent or does not lie in a single compartment. Other gaps are left to ``universal``
+    gap-fill.
     """
     from cobra.flux_analysis import find_blocked_reactions
 

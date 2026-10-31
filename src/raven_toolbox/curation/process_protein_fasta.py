@@ -1,9 +1,8 @@
-"""Rename protein FASTA headers from a gene-mapping table — port of RAVEN's
+"""Rename protein FASTA headers from a gene-mapping table; port of RAVEN's
 ``processProteinFastaFile``.
 
-Reads and writes FASTA by hand rather than via a new dependency (e.g.
-Biopython), matching ``readFasta.m``/``writeFasta.m``'s own reasoning for
-being hand-rolled: something this simple doesn't need one.
+The module reads and writes FASTA itself and has no dependency on a FASTA library such
+as Biopython, as ``readFasta.m`` and ``writeFasta.m`` read and write FASTA themselves.
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ __all__ = ["process_protein_fasta_file"]
 
 
 def _read_fasta(path: Path) -> list[dict[str, str]]:
-    """Matches readFasta.m: header without the leading '>', trimmed;
+    """Read FASTA as readFasta.m does: header without the leading '>', trimmed;
     sequence with all line breaks removed; blank lines ignored."""
     records: list[dict[str, str]] = []
     header: str | None = None
@@ -38,7 +37,7 @@ def _read_fasta(path: Path) -> list[dict[str, str]]:
 
 
 def _write_fasta(path: Path, records: list[dict[str, str]], line_width: int = 80) -> None:
-    """Matches writeFasta.m: wraps sequences at line_width residues per line."""
+    """Write FASTA as writeFasta.m does: sequences wrap at line_width residues per line."""
     with open(path, "w", encoding="utf-8") as fh:
         for record in records:
             fh.write(f">{record['header']}\n")
@@ -66,11 +65,11 @@ def process_protein_fasta_file(
     faa_file:
         Path to the protein FASTA file (``.faa``) to process.
     gene_table:
-        Either a DataFrame, or a path to a tab-delimited file to load one
-        from (e.g. from :func:`raven_toolbox.curation.get_gene_data`). Must
-        contain at least the columns ``"GenBank_protein"`` and ``header_col``.
+        A DataFrame, or the path of a tab-delimited file that holds one
+        (for example from :func:`raven_toolbox.curation.get_gene_data`). It needs the
+        columns ``"GenBank_protein"`` and ``header_col``.
     header_col:
-        Column whose values replace each FASTA header (e.g. ``"locus_tag"``).
+        Column whose values replace each FASTA header (for example ``"locus_tag"``).
     output_dir:
         Directory the processed FASTA is saved in. The output file name is
         the original base name with ``"_processed"`` appended before the
@@ -84,16 +83,15 @@ def process_protein_fasta_file(
     Raises
     ------
     FileNotFoundError
-        If ``faa_file`` doesn't exist.
+        If ``faa_file`` does not exist.
     ValueError
         If ``gene_table`` is missing ``"GenBank_protein"`` or ``header_col``.
 
     Notes
     -----
-    A row is skipped only if its ``GenBank_protein`` is empty — not if
-    ``header_col`` is, matching ``processProteinFastaFile.m`` exactly (an
-    accession mapped to an empty ``header_col`` value still renames that
-    sequence's header to an empty string).
+    A row is skipped when its ``GenBank_protein`` is empty or missing. An empty or
+    missing ``header_col`` value does not skip the row: the header of the matching
+    sequence becomes an empty string, as in ``processProteinFastaFile.m``.
     """
     faa_file = Path(faa_file)
     if not faa_file.is_file():

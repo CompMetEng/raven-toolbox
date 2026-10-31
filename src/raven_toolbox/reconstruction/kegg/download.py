@@ -1,19 +1,18 @@
-"""Download and arrange a local KEGG flat-file dump (step 3b.1).
+"""Download and arrange a local KEGG flat-file dump.
 
-Maintainer-side, build-time tooling. Ports ``fetch_keggdb.sh`` — fetch the KEGG
-FTP source archives, extract them, and lift/concatenate the files that the
-parser (3b.2) and HMM build (3b.3) consume — but as **pure Python stdlib**
-(``urllib`` + ``tarfile`` + ``gzip`` + ``netrc``). That drops the script's
-dependence on ``wget``/``tar``/``gunzip`` (and Cygwin on Windows), so it runs
-unchanged on Linux, macOS and Windows. Credential hygiene is kept: a paid KEGG
-subscription's username/password are read from ``~/.netrc`` (mode 600), never
+Maintainer-side build-time tooling. Ports ``fetch_keggdb.sh``: fetches the KEGG
+FTP source archives, extracts them, and moves and concatenates the files that the
+parser (:mod:`.parse`) and HMM build (:mod:`.hmm`) consume. It uses the Python standard library
+(``urllib``, ``tarfile``, ``gzip``, ``netrc``) and ``tqdm`` for progress bars, so it
+needs neither ``wget``, ``tar``, ``gunzip`` nor Cygwin on Windows. The username and
+password of a paid KEGG subscription are read from ``~/.netrc`` (mode 600) and are not
 passed on the command line.
 
 Requires an active KEGG FTP subscription. Add to ``~/.netrc``::
 
     machine ftp.kegg.net login YOUR_USER password YOUR_PASS
 
-Typical use (run once per KEGG release)::
+Example, run once per KEGG release::
 
     from raven_toolbox.reconstruction.kegg import download_kegg_dump, parse_kegg_dump
     download_kegg_dump("keggdb")            # -> keggdb/{reaction,compound,ko,...}
@@ -105,11 +104,11 @@ def _build_opener(base_url: str, user: str, password: str) -> urllib.request.Ope
 def _copy_with_progress(
     src, dst, *, total: int | None, desc: str, progress: bool, chunk: int = 1 << 20
 ) -> None:
-    """Copy ``src`` → ``dst`` in chunks, advancing a tqdm byte bar.
+    """Copy ``src`` to ``dst`` in chunks, advancing a tqdm byte bar.
 
-    ``total`` (e.g. from a ``Content-Length`` header) gives the bar a percentage;
-    ``None`` (unknown size) makes it a count-up of bytes with a transfer rate. The
-    bar is suppressed unless ``progress``.
+    ``total`` (for example from a ``Content-Length`` header) gives the bar a percentage;
+    ``None`` (unknown size) gives a byte count with a transfer rate. The
+    bar is shown only when ``progress`` is true.
     """
     with tqdm(
         total=total, desc=desc, unit="B", unit_scale=True, unit_divisor=1024,
@@ -132,12 +131,11 @@ def fetch_kegg_files(
     verbose: bool = True,
     progress: bool = True,
 ) -> list[Path]:
-    """Download the raw KEGG archives into ``dest`` (basenames). Returns the paths.
+    """Download the raw KEGG archives into ``dest``, named by their basenames, and return the paths.
 
-    Existing files are skipped unless ``force=True`` (the script's ``wget -N``
-    intent, simplified to skip-if-present). ``progress`` shows a per-file byte
-    download bar (sized from the response ``Content-Length``); ``verbose`` keeps
-    the ``fetching``/``skip`` INFO log lines.
+    Existing files are skipped unless ``force=True``. ``progress`` shows a per-file byte
+    download bar, sized from the response ``Content-Length``; ``verbose`` enables the
+    ``fetching`` and ``skip`` INFO log lines.
     """
     user, password = _resolve_auth(host, netrc_path=netrc_path, auth=auth)
     opener = _build_opener(base_url, user, password)
@@ -186,15 +184,15 @@ def _concat(sources: list[Path], target: Path) -> None:
 def extract_kegg_dump(dest: str | Path, *, progress: bool = False) -> dict[str, Path]:
     """Extract and arrange the downloaded archives into the flat dump layout.
 
-    Mirrors ``fetch_keggdb.sh``'s extract step: untar the ``*.tar.gz`` archives,
-    gunzip the ``*.pep.gz`` proteomes, lift the needed files out of their
-    sub-directories, and concatenate compound+glycan and the two proteomes.
-    Tar extraction uses the ``data`` filter (no path traversal). Returns a
-    mapping of logical name -> path for the files produced. ``progress`` shows a
+    Mirrors the extract step of ``fetch_keggdb.sh``: untars the ``*.tar.gz`` archives,
+    gunzips the ``*.pep.gz`` proteomes, moves the needed files out of their
+    sub-directories, and concatenates compound and glycan, and the two proteomes.
+    Tar extraction uses the ``data`` filter, which rejects paths outside ``dest``. Returns
+    a mapping of logical name to path for the files produced. ``progress`` shows a
     bar over the untar step and a byte bar per proteome gunzip.
 
-    Network-free, so this is the unit-tested core; ``download_kegg_dump`` chains
-    :func:`fetch_kegg_files` in front of it.
+    The function makes no network access; :func:`download_kegg_dump` runs
+    :func:`fetch_kegg_files` before it.
     """
     dest = Path(dest)
 
@@ -283,11 +281,10 @@ def download_kegg_dump(
 ) -> dict[str, Path]:
     """Fetch and arrange a complete KEGG dump into ``dest``.
 
-    Convenience wrapper chaining :func:`fetch_kegg_files` and
-    :func:`extract_kegg_dump`. Returns the logical-name -> path mapping of the
-    arranged dump, ready for :func:`raven_toolbox.reconstruction.kegg.parse_kegg_dump`.
-    ``progress`` (on by default) shows download/extraction bars; pass
-    ``progress=False`` for non-interactive runs.
+    Runs :func:`fetch_kegg_files` and then :func:`extract_kegg_dump`. Returns the mapping of
+    logical name to path of the arranged dump, the input of
+    :func:`raven_toolbox.reconstruction.kegg.parse_kegg_dump`. ``progress`` (default True)
+    shows download and extraction bars.
     """
     fetch_kegg_files(
         dest,

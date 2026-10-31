@@ -1,33 +1,34 @@
 """Loaders for gene → compartment localisation predictors (DeepLoc 2, MULocDeep, COMPARTMENTS).
 
-The localisation algorithm in :mod:`raven_toolbox.localization.predict` consumes a
-*gene × compartment* score table (:class:`LocalizationScores`) where higher = stronger
-evidence. Each predictor/database produces this differently; the loaders here normalise them.
-The format is open — a user can build a :class:`LocalizationScores` from any source by
-constructing the :class:`pandas.DataFrame` directly.
+The localisation algorithms in :mod:`raven_toolbox.localization.predict` and
+:mod:`raven_toolbox.localization.certify` consume a gene × compartment score table
+(:class:`LocalizationScores`) where a higher value is stronger evidence. Each predictor or database
+produces the table differently; the loaders here normalise them. A :class:`LocalizationScores` can
+also be built from any other source by constructing the :class:`pandas.DataFrame` directly.
 
 Predictors label compartments with their own names (``Mitochondrion``, ``Cytoplasm``, …).
-Pass ``compartment_map`` (e.g. :data:`DEFAULT_COMPARTMENT_MAP`) to rename them to your model's
-compartment ids. Three consequences worth knowing:
+``compartment_map`` (for example :data:`DEFAULT_COMPARTMENT_MAP`) renames them to the compartment
+ids of the model. Consequences of the mapping:
 
-* A label absent from the map is dropped with its whole column, which is how compartments the
-  model does not have are excluded. Without a map the predictor's own labels are kept (use
-  :meth:`LocalizationScores.with_compartments` to rename later).
+* A label absent from the map is dropped with its whole column, which excludes compartments that the
+  model does not have. Without a map the predictor's own labels are kept
+  (:meth:`LocalizationScores.with_compartments` renames them later).
 * Several labels may share one compartment id, which merges their columns by taking the
-  **maximum** per gene, not the sum: a gene scoring 0.7 cytoplasm and 0.4 cytosol scores 0.7
-  for ``c``. Use it for synonyms and for collapsing compartments the model does not separate.
-* One label cannot be split across two compartment ids — a mapping holds one value per key. Do
-  it on the resulting frame instead, e.g. ``scores.df["v"] = scores.df["g"]`` to let a gene
-  predicted Golgi compete for both. The columns are then independent, and
-  :func:`raven_toolbox.localization.predict_localization` picks whichever placement keeps the
-  network better connected.
+  maximum per gene, not the sum: a gene scoring 0.7 cytoplasm and 0.4 cytosol scores 0.7
+  for ``c``. This applies to synonyms and to compartments that the model does not separate.
+* One label cannot be split across two compartment ids, because a mapping holds one value per key.
+  The split is made on the resulting frame, for example ``scores.df["v"] = scores.df["g"]``
+  lets a gene predicted Golgi compete for both. The columns are then independent, and
+  :func:`raven_toolbox.localization.predict_localization` trades the scores against the transport
+  cost.
 
-Each loader normalises every gene's row so the best compartment is 1.0 (RAVEN's ``parseScores``
-convention), which lets transport costs be set on a comparable scale.
+By default, each loader normalises every gene's row so that the best compartment is 1.0 (RAVEN's
+``parseScores`` convention), so the scores of several predictors share one scale
+(``load_deeploc(normalise=False)`` keeps the raw probabilities).
 
-Sequence-based predictors are external tools; run them yourself and pass their output files here.
-Modern multi-label predictors (DeepLoc 2, MULocDeep) and the COMPARTMENTS evidence database
-supersede older single-label callers, so no loader for those is provided.
+Sequence-based predictors are external tools; the loaders read their output files.
+The module has loaders for the multi-label predictors (DeepLoc 2, MULocDeep) and the COMPARTMENTS
+evidence database, and none for older single-label predictors.
 """
 from __future__ import annotations
 
@@ -59,14 +60,16 @@ class LocalizationScores:
     """Per-gene compartment scores. ``df`` is indexed by ``gene_id`` with one column per
     compartment id; values are floats (higher = stronger evidence for that compartment).
 
-    Genes absent from ``df`` and NaN entries are treated as "no signal" by
-    :func:`raven_toolbox.localization.predict_localization` (uniform prior contribution).
+    :func:`raven_toolbox.localization.predict_localization` counts a NaN entry as score 0, leaves a
+    gene absent from ``df`` out of its gene coupling, and lists a reaction that has genes, none of
+    them in ``df``, in ``unplaced_reactions``. A reaction without a GPR is placed freely and is not
+    listed.
 
-    ``raw_confidence`` (optional) is a per-gene Series of the predictor's *pre-normalisation* top
-    probability — the loaders normalise every gene's best compartment to 1.0, which discards how
-    confident the call was. :func:`load_deeploc` populates it with ``keep_raw_confidence=True`` so
-    downstream consumers (notably :func:`raven_toolbox.localization.triage_localization`) can tell a
-    0.97 call from a 0.40 one.
+    ``raw_confidence`` (optional) is a per-gene Series of the pre-normalisation top probability of
+    the predictor. The loaders normalise every gene's best compartment to 1.0, which discards the
+    confidence of the call. :func:`load_deeploc` populates ``raw_confidence`` with
+    ``keep_raw_confidence=True``, so downstream consumers (notably
+    :func:`raven_toolbox.localization.triage_localization`) can tell a 0.97 call from a 0.40 one.
     """
 
     df: pd.DataFrame
@@ -87,7 +90,7 @@ class LocalizationScores:
         return list(self.df.columns)
 
     def with_compartments(self, mapping: Mapping[str, str]) -> LocalizationScores:
-        """Rename compartment columns via ``{old: new}`` (e.g. predictor labels →
+        """Rename compartment columns via ``{old: new}`` (for example predictor labels →
         model compartments). Unmapped columns are kept; multiple sources can be merged
         with ``df.combine_first`` afterwards."""
         return LocalizationScores(self.df.rename(columns=dict(mapping)))
@@ -143,7 +146,8 @@ def _apply_map(df: pd.DataFrame, compartment_map: Mapping[str, str] | None) -> p
 # --------------------------------------------------------------------- DeepLoc 2 / MULocDeep
 
 def _wide_mapped(df: pd.DataFrame, *, id_column, compartment_map, source: str) -> pd.DataFrame:
-    """Mapped, *un-normalised* gene x model-compartment table (numeric metadata cols dropped)."""
+    """Mapped, un-normalised gene x model-compartment table (non-numeric metadata columns
+    dropped)."""
     id_col = id_column if id_column is not None else df.columns[0]
     wide = df.set_index(id_col).apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
     if wide.shape[1] == 0:
@@ -173,30 +177,33 @@ def load_deeploc(path: str | Path, *,
 
     DeepLoc 2's per-protein CSV has ``Protein_ID, Localizations, Signals`` then one probability
     column per compartment. The first column is the gene id; non-numeric metadata columns
-    (``Localizations``, ``Signals``) are dropped automatically.
+    (``Localizations``, ``Signals``) are dropped.
 
     ``min_confidence`` drops genes whose top compartment probability (before per-gene normalisation)
-    is below it — DeepLoc's probability is well calibrated, so low-confidence calls are unreliable
-    and best left to other evidence (benchmark: ~67% corroborated below 0.7 vs ~97% above 0.9).
+    is below it. In the yeast-GEM benchmark of the confidence study, the share of calls that other
+    evidence corroborates rises with the raw probability.
 
-    ``membrane_split`` (e.g. ``{"m": "mm"}``) routes an organelle's probability to its **membrane**
-    sub-compartment when the protein is membrane-associated (``1 - P(Soluble) >= membrane_threshold``,
-    using DeepLoc's ``Soluble`` column), else it stays in the lumen. Keys/values are your model's
-    compartment ids (post-``compartment_map``). **Only the mitochondrial split (`m`/`mm`) is supported
-    by the evidence** (matrix-vs-membrane AUC ~0.92); DeepLoc does *not* separate ER lumen from
-    membrane, so do not add `er`/`erm`. See the `DeepLoc yeast-GEM benchmark
-    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_ on raven-gecko-parity.
+    ``membrane_split`` (for example ``{"m": "mm"}``) moves the probability of an organelle to its
+    membrane sub-compartment when the protein is membrane-associated (``1 - P(Soluble) >=
+    membrane_threshold``, using DeepLoc's ``Soluble`` column); otherwise it stays in the lumen. Keys
+    and values are the compartment ids of the model (after ``compartment_map``). The evidence
+    supports only the mitochondrial split (``m``/``mm``; matrix versus membrane AUC ~0.93). DeepLoc
+    does not separate the ER lumen from the membrane, so a split of ``er`` has no support. See the
+    `DeepLoc yeast-GEM benchmark
+    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_
+    on raven-gecko-parity.
 
-    ``keep_raw_confidence=True`` attaches the per-gene *pre-normalisation* top probability to
-    :attr:`LocalizationScores.raw_confidence` (normalisation otherwise forces every top to 1.0). It
-    is the strongest signal for :func:`triage_localization`.
+    ``keep_raw_confidence=True`` attaches the per-gene pre-normalisation top probability to
+    :attr:`LocalizationScores.raw_confidence` (normalisation otherwise sets every top to 1.0).
+    :func:`triage_localization` uses it for its low-confidence signal.
 
-    ``normalise=False`` keeps DeepLoc's raw probabilities instead of rescaling every gene's best
-    compartment to 1.0. The raw probabilities are calibrated (a 0.97 call is far more reliable than
-    a 0.40 one), so leaving them un-normalised lets a downstream assignment weight confident genes
-    more heavily; the default ``True`` preserves the RAVEN ``parseScores`` convention and keeps
-    multi-source scales comparable. See the `DeepLoc normalisation benchmark
-    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_normalisation_benchmark.md>`_ on raven-gecko-parity.
+    ``normalise=False`` keeps DeepLoc's raw probabilities and does not rescale the best compartment
+    of every gene to 1.0. The raw probabilities are calibrated (a 0.97 call is more reliable than a
+    0.40 one), so a downstream assignment can weight confident genes more heavily. The default
+    ``True`` follows the RAVEN ``parseScores`` convention and keeps the scales of several sources
+    comparable. See the `DeepLoc normalisation benchmark
+    <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_normalisation_benchmark.md>`_
+    on raven-gecko-parity.
     """
     raw = pd.read_csv(path)
     wide = _wide_mapped(raw, id_column=None, compartment_map=compartment_map, source=str(path))
@@ -224,10 +231,10 @@ def load_mulocdeep(path: str | Path, *,
                    min_confidence: float = 0.0) -> LocalizationScores:
     """Parse MULocDeep output into a normalised :class:`LocalizationScores`.
 
-    Expects a wide table: a protein/gene id column plus one numeric probability column per major
+    Expects a wide table: a protein or gene id column plus one numeric probability column per major
     subcellular compartment (MULocDeep predicts 10). ``sep=None`` auto-detects the delimiter;
-    pass ``id_column`` if the id is not the first column. ``min_confidence`` works as in
-    :func:`load_deeploc`.
+    ``id_column`` names the id column when it is not the first column. ``min_confidence`` works as
+    in :func:`load_deeploc`.
     """
     df = (pd.read_csv(path, sep=None, engine="python") if sep is None
           else pd.read_csv(path, sep=sep))
@@ -237,14 +244,14 @@ def load_mulocdeep(path: str | Path, *,
 
 def combine_scores(sources: list[LocalizationScores], *,
                    weights: list[float] | None = None) -> LocalizationScores:
-    """Merge several :class:`LocalizationScores` into a **consensus** by weighted sum.
+    """Merge several :class:`LocalizationScores` into a consensus by weighted sum.
 
     Genes and compartments are the union across sources; absent entries count as 0. Scores are
     summed per ``(gene, compartment)`` (optionally weighted) and the result is per-gene normalised
-    (best -> 1.0), so a compartment supported by **several** sources is reinforced relative to a
-    lone-source call. Use this to fuse complementary evidence (e.g. DeepLoc + curated UniProt +
-    COMPARTMENTS) instead of trusting one reference — robust when no single source is authoritative
-    (two curated sources agree only ~90% on yeast-GEM).
+    (best -> 1.0), so a compartment supported by several sources scores higher than a
+    compartment supported by one source. The consensus combines complementary evidence (for example
+    DeepLoc, curated UniProt and COMPARTMENTS); two curated sources agree on ~90% of the genes in
+    yeast-GEM.
     """
     sources = list(sources)
     if not sources:
@@ -270,14 +277,14 @@ def load_compartments(path: str | Path, *,
     """Parse a COMPARTMENTS (jensenlab.org) channel file into a normalised
     :class:`LocalizationScores`.
 
-    Targets the tidy ``*_<channel>_full.tsv`` layout (no header): column 1 = protein/gene id,
+    Reads the tidy ``*_<channel>_full.tsv`` layout (no header): column 1 = protein or gene id,
     column 4 = GO compartment term name, last column = confidence score. Rows are aggregated per
     (gene, compartment) by the maximum confidence; ``min_confidence`` drops weak annotations
-    (the integrated/text-mining channels score 0–5).
+    (the integrated and text-mining channels score 0 to 5).
 
-    The per-organism files (e.g. ``yeast_compartment_integrated_full.tsv``) are at
-    https://download.jensenlab.org/ — fetch them there if the COMPARTMENTS *Downloads* web page
-    is unavailable.
+    The per-organism files (for example ``yeast_compartment_integrated_full.tsv``) are available
+    from https://download.jensenlab.org/, also when the COMPARTMENTS Downloads web page is
+    unavailable.
     """
     raw = pd.read_csv(path, sep="\t", header=None, dtype=str)
     if raw.shape[1] < 5:
@@ -307,12 +314,12 @@ def load_uniprot(path: str | Path, *,
 
     UniProt's curated ``Subcellular location [CC]`` annotation is qualitative (a set of
     compartments, not probabilities), so each annotated compartment gets score ``1.0`` (a
-    multi-location protein lands in several). The annotation text is scanned for the labels in
-    ``compartment_map`` (which therefore doubles as the vocabulary), mapping them to your model's
-    compartment ids. Labels match as whole words (``cytoplasm`` does not match ``Cytoplasmic
-    vesicle``). Evidence ``{ECO:…}`` braces are stripped, the text is split into one block per
-    ``[Isoform …]:`` and the ``Note=…`` free text is cut within each block, so incidental mentions
-    there are ignored and a later isoform's locations are kept.
+    multi-location protein gets 1.0 in several compartments). The annotation text is scanned for the
+    labels in ``compartment_map`` (which is therefore also the vocabulary), and the labels are
+    mapped to the compartment ids of the model. Labels match as whole words (``cytoplasm`` does not
+    match ``Cytoplasmic vesicle``). Evidence ``{ECO:…}`` braces are removed, the text is split into
+    one block per ``[Isoform …]:`` and the ``Note=…`` free text is cut within each block, so
+    incidental mentions there are ignored and the locations of a later isoform are kept.
 
     The columns are the distinct codes of ``compartment_map`` in the order they first occur when
     the map keys are sorted, whether or not a gene has a hit in them, as in RAVEN. Genes without a
@@ -320,9 +327,9 @@ def load_uniprot(path: str | Path, *,
     sorted and a ``UserWarning`` is issued.
 
     Export from https://rest.uniprot.org with ``fields=accession,gene_oln,cc_subcellular_location``
-    (TSV). Pick ``id_column`` to match your model's gene ids; for yeast-GEM that is the
-    ordered-locus column (``Gene Names (ordered locus)``, the ORF id like ``YNR001C``), not the
-    default accession.
+    (TSV). ``id_column`` selects the column with the gene ids (default: the first column, the
+    accession in this export). For yeast-GEM, the ordered-locus column
+    (``Gene Names (ordered locus)``, the ORF id like ``YNR001C``) matches the gene ids.
     """
     df = pd.read_csv(path, sep=sep, dtype=str).fillna("")
     return _uniprot_scores(df, id_column=id_column, location_column=location_column,
@@ -343,14 +350,14 @@ def fetch_uniprot_localization(organism: int | str, *,
                                reviewed: bool = True,
                                extra_query: str | None = None,
                                timeout: float = 120.0) -> LocalizationScores:
-    """Query the UniProtKB REST API for an organism's subcellular locations → normalised
-    :class:`LocalizationScores` (no manual export needed).
+    """Query the UniProtKB REST API for the subcellular locations of an organism and return
+    normalised :class:`LocalizationScores`.
 
-    ``organism`` is a UniProt organism/taxon id (e.g. ``559292`` for *S. cerevisiae* S288C).
-    ``id_field`` picks which identifier becomes the gene id — ``"gene_oln"`` (ordered locus, the
-    ORF name like ``YNR001C``) matches yeast-GEM; also ``"accession"`` or ``"gene_primary"``.
-    ``reviewed=True`` restricts to curated Swiss-Prot entries; ``extra_query`` is ANDed into the
-    UniProt query string. Parsing matches :func:`load_uniprot`.
+    ``organism`` is a UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae*
+    S288C). ``id_field`` selects the identifier used as gene id: ``"gene_oln"`` (ordered locus, the
+    ORF name like ``YNR001C``; matches yeast-GEM), ``"accession"`` or ``"gene_primary"``.
+    ``reviewed=True`` restricts the query to curated Swiss-Prot entries; ``extra_query`` is ANDed
+    into the UniProt query string. Parsing is as in :func:`load_uniprot`.
     """
     if id_field not in _UNIPROT_ID_COLUMN:
         raise ValueError(f"id_field must be one of {list(_UNIPROT_ID_COLUMN)}")
@@ -421,7 +428,7 @@ def _uniprot_scores(df: pd.DataFrame, *, id_column, location_column,
 # ----------------------------------------------------------------------- helpers
 
 def _normalise_rows(s: LocalizationScores) -> LocalizationScores:
-    """Per-gene row normalisation: best compartment → 1.0 (RAVEN's parseScores convention).
+    """Per-gene row normalisation: best compartment to 1.0 (RAVEN's parseScores convention).
 
     Rows whose max is ≤0 are left unscaled (no positive evidence to normalise against).
     """

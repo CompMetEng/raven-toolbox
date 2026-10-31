@@ -1,4 +1,4 @@
-"""Homology-based reconstruction from template models (getModelFromHomology, BLAST/DIAMOND)."""
+"""Homology-based reconstruction from template models (getModelFromHomology, BLAST or DIAMOND)."""
 from raven_toolbox.reconstruction.homology.blast import (
     blast_from_table,
     run_blast,

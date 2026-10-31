@@ -1,34 +1,34 @@
-"""Batch curation of metabolites / reactions / genes from data tables.
+"""Batch curation of metabolites, reactions and genes from data tables.
 
-Port of yeast-GEM's MATLAB ``curateMetsRxnsGenes`` into a generic
-DataFrame-driven engine. Other GEM projects (Human-GEM, custom
-reconstructions, …) can use the same machinery with their own TSV
-layouts; the only required pieces are the data tables and (optionally)
-project-specific id prefixes for fresh metabolites and reactions.
+Port of yeast-GEM's MATLAB ``curateMetsRxnsGenes`` into a DataFrame-driven function.
+Other GEM projects (Human-GEM, custom reconstructions) use it with their own TSV
+layouts. The inputs are the data tables and, optionally, project-specific id prefixes
+for new metabolites and reactions.
 
 Public API:
 
-* :func:`batch_curate` — entrypoint taking pandas DataFrames.
-* :func:`batch_curate_from_tsv` — file-path convenience wrapper.
-* :class:`CurationResult` — record of what was added / updated.
-* :func:`rename_model_genes` — rename gene identifiers from a mapping table.
-* :func:`get_gene_data` / :func:`download_genome_data` — build that mapping
-  table from an NCBI genome assembly's GFF3 annotation.
-* :func:`process_protein_fasta_file` — rename a protein FASTA's headers
+* :func:`batch_curate`: takes pandas DataFrames.
+* :func:`batch_curate_from_tsv`: takes file paths.
+* :class:`CurationResult`: record of what was added and updated.
+* :func:`rename_model_genes`: rename gene identifiers from a mapping table.
+* :func:`get_gene_data` and :func:`download_genome_data`: build that mapping
+  table from the GFF3 annotation of an NCBI genome assembly.
+* :func:`process_protein_fasta_file`: rename the headers of a protein FASTA
   from the same mapping table.
 
-Schema (mirrors yeast-GEM's ``data/modelCuration/template/`` layout):
+Schema (follows the layout of yeast-GEM's ``data/modelCuration/template/``):
 
 - **mets_df**: ``metNames, comps, formula, charge, inchi, metNotes``
-  + any number of MIRIAM-annotation columns. Match key is
+  + any number of MIRIAM-annotation columns. The match key is
   ``(name, comp)``.
-- **genes_df**: ``genes, geneShortNames`` + MIRIAM columns. Match key
+- **genes_df**: ``genes, geneShortNames`` + MIRIAM columns. The match key
   is ``genes``.
 - **rxns_df**: ``rxnNames, grRules, lb, ub, rev, subSystems, eccodes,
   rxnNotes, rxnReferences, rxnConfidenceScores`` + MIRIAM columns, and an
-  optional ``rxnIdx``. Match key is the reaction's *stoichiometry*; the same
-  metabolites and coefficients ⇒ same reaction. A new reaction without ``lb``
-  or ``ub`` is unbounded in that direction, as in RAVEN.
+  optional ``rxnIdx``. The match key is the stoichiometry of the reaction: the same
+  metabolites and coefficients identify the same reaction. A new reaction without ``lb``
+  gets ``-inf`` as its lower bound and one without ``ub`` gets the ``defaultUB`` stored in the
+  model (``inf`` if the model has none), as in RAVEN.
 - **rxns_coeffs_df**: ``rxnNames, metNames, comps, coefficient``. One
   row per ``(reaction, metabolite)`` pair. When both reaction tables have a
   ``rxnIdx`` column, a coefficient row belongs to the reaction with the same
@@ -40,9 +40,9 @@ Headers are matched case-insensitively and read under the spellings RAVEN's
 ``metCharges`` for ``charge``, ``geneShortName`` for ``geneShortNames`` and
 ``index`` for ``rxnIdx``.
 
-Everything after the core columns in any of the four tables is
-interpreted as a MIRIAM annotation: the column header becomes the
-namespace key (``met.annotation[<header>] = <cell>``).
+Every column after the core columns in any of the four tables is read as a MIRIAM
+annotation: the column header is the namespace key
+(``met.annotation[<header>] = <cell>``).
 
 ``inchi``, ``metNotes``, ``rxnNotes``, ``rxnReferences`` and
 ``rxnConfidenceScores`` are RAVEN fields and go to ``.notes`` under the keys

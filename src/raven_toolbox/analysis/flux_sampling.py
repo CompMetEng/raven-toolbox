@@ -1,39 +1,38 @@
-"""Markov-chain Monte Carlo flux sampling — CHRR and ACHR.
+"""Markov-chain Monte Carlo flux sampling with CHRR and ACHR.
 
 Two near-uniform samplers of the flux polytope ``{v : S v = 0, lb <= v <= ub}``,
 reached through the unified :func:`~raven_toolbox.analysis.sampling.random_sampling`
 entry point (``method="achr"`` default, or ``method="chrr"``):
 
-* **CHRR** — *Coordinate Hit-and-Run with Rounding* (Haraldsdóttir et al. 2017,
+* **CHRR**: Coordinate Hit-and-Run with Rounding (Haraldsdóttir et al. 2017,
   Bioinformatics 33:1741). The polytope is reduced to a full-dimensional body via
-  the nullspace of ``S``, **rounded** with the maximum-volume inscribed ellipsoid
+  the nullspace of ``S``, rounded with the maximum-volume inscribed ellipsoid
   (MVE, Zhang & Gao 2003), and then walked with coordinate hit-and-run. Rounding
-  makes the mixing time independent of how elongated the original polytope is —
-  which is exactly the regime of enzyme-constrained (ecModel + proteomics) and
-  flux-measured models, where the feasible set is a thin, badly-conditioned slab.
-  **cobrapy has no CHRR**, so this is a genuine addition.
+  makes the mixing time independent of how elongated the original polytope is.
+  Enzyme-constrained (ecModel + proteomics) and flux-measured models are elongated,
+  because the feasible set is a thin, badly-conditioned slab. cobrapy has no CHRR.
 
-* **ACHR** — *Artificially Centered Hit-and-Run* (Kaufman & Smith 1998). Walks the
-  polytope directly using FVA warmup directions mixed through a running center, no
-  rounding. cobrapy already ships a mature ACHR
-  (:class:`cobra.sampling.ACHRSampler`); rather than reimplement it, this module
-  **wraps** it so both methods are reachable through the same RAVEN-flavoured API
-  and return the same :class:`FluxSamplingResult`. On well-conditioned models ACHR
-  is lighter (no MVE solve); on elongated polytopes its chains mix slowly and look
-  converged while having explored only the long axes — prefer CHRR there.
+* **ACHR**: Artificially Centered Hit-and-Run (Kaufman & Smith 1998). Walks the
+  polytope directly using FVA warmup directions mixed through a running centre,
+  without rounding. This module wraps cobrapy's ACHR
+  (:class:`cobra.sampling.ACHRSampler`) so that both methods are reachable through the
+  same RAVEN-style API and return the same :class:`FluxSamplingResult`. ACHR needs no
+  MVE solve. On elongated polytopes its chains mix slowly and can look converged while
+  having explored only the long axes; CHRR rounds the polytope first and does not have
+  this limitation.
 
-Both return a ``samples`` DataFrame shaped *n_samples × n_reactions* (the
+Both return a ``samples`` DataFrame shaped n_samples × n_reactions (the
 ``cobra.sampling`` layout), matching :class:`~raven_toolbox.analysis.sampling.RandomSamplingResult`.
 
-This complements :func:`~raven_toolbox.analysis.sampling.random_sampling` (Bordel
-2010), which draws diverse *vertices* of the polytope; CHRR/ACHR draw the
-(near-)uniform *interior* distribution.
+:func:`~raven_toolbox.analysis.sampling.random_sampling` (Bordel 2010) draws diverse
+vertices of the polytope; CHRR and ACHR draw the (near-)uniform interior distribution.
 
 Relation to RAVEN MATLAB
 ------------------------
-RAVEN ships only ``randomSampling`` (random-objective vertices). ``sampleFluxSpace``
-(``method='achr'|'chrr'``) is added to RAVEN alongside this module; the CHRR/MVE
-numerics here are the validated reference the MATLAB port mirrors.
+RAVEN's ``randomSampling`` dispatches on ``method`` (``'achr'``, ``'chrr'`` or
+``'randomObjective'``). The CHRR and MVE numerics follow COBRA's ``chrrSampler``;
+``tests/test_analysis_flux_sampling.py`` checks the MVE solver against boxes and a triangle
+with known inscribed ellipsoids.
 """
 from __future__ import annotations
 
@@ -62,24 +61,25 @@ class FluxSamplingResult:
     Attributes
     ----------
     samples:
-        Flux vectors shaped *n_samples × n_reactions* (one sample per row, reaction
-        ids as columns — the ``cobra.sampling`` layout).
+        Flux vectors shaped n_samples × n_reactions (one sample per row, reaction
+        ids as columns; the ``cobra.sampling`` layout).
     method:
         ``"achr"``, ``"chrr"``, or ``"random_objective"``.
     good_reactions:
-        ``random_objective`` only — reaction ids eligible as random objectives;
+        ``random_objective`` only: reaction ids eligible as random objectives;
         ``None`` for the MCMC methods.
     n_dimensions:
-        ``chrr`` only — dimension of the full-dimensional flux polytope sampled
+        ``chrr`` only: dimension of the full-dimensional flux polytope sampled
         (degrees of freedom after fixing implicitly-determined reactions).
     mve_converged:
-        ``chrr`` only — whether the MVE rounding solver reached its tolerance. A
-        ``False`` here is not fatal (the last ellipsoid iterate is still a valid
-        rounding) but very elongated results may warrant more thinning.
+        ``chrr`` only: whether the MVE rounding solver reached its tolerance. With
+        ``False``, the last ellipsoid iterate is used as the rounding; elongated
+        polytopes may need more thinning.
     n_warmup:
-        ``achr`` only — number of FVA warmup directions.
+        ``achr`` only: number of FVA warmup directions.
     fixed_reactions:
-        ``chrr`` only — reactions folded into the equality system as fixed.
+        ``chrr`` only: reactions added to the equality system as fixed (FVA width below
+        ``fixed_width_tol``).
     """
 
     samples: pd.DataFrame
@@ -97,10 +97,10 @@ class FluxSamplingResult:
 def _nearest_spd(M: np.ndarray) -> np.ndarray:
     """Return the nearest symmetric positive-definite matrix to ``M``.
 
-    A light-weight variant of Higham's algorithm: symmetrise, then bump the
-    diagonal until a Cholesky factorisation succeeds. ``M`` here is an ellipsoid
-    matrix ``E2`` that is theoretically SPD but may pick up tiny asymmetries from
-    the matrix inverse.
+    A light-weight variant of Higham's algorithm: symmetrise, then add a growing
+    multiple of the identity to the diagonal until a Cholesky factorisation succeeds. ``M``
+    here is an ellipsoid matrix ``E2`` that is theoretically SPD but may acquire small
+    asymmetries from the matrix inverse.
     """
     S = (M + M.T) / 2.0
     try:
@@ -139,19 +139,19 @@ def max_volume_ellipsoid(
     Parameters
     ----------
     A, b:
-        Polytope ``A z <= b`` with ``A`` of shape *(m, n)*, ``m >= n + 1``, and a
+        Polytope ``A z <= b`` with ``A`` of shape ``(m, n)``, ``m >= n + 1``, and a
         non-empty interior.
     x0:
         A strictly interior point (``A x0 < b``). If ``None`` a Chebyshev centre is
         computed by LP.
     maxiter, tol, reg:
-        Iteration cap, convergence tolerance, and the diagonal/Levenberg
-        regularisation that keeps the two Newton solves well-conditioned.
+        Iteration cap, convergence tolerance, and the diagonal (Levenberg)
+        regularisation added to the two Newton solves.
 
     Returns
     -------
     x:
-        Ellipsoid centre, shape *(n,)*.
+        Ellipsoid centre, shape ``(n,)``.
     E:
         Lower-triangular rounding transform with ``E @ E.T == E2`` (the SPD
         ellipsoid matrix). The rounding substitution is ``z = x + E y``.
@@ -161,7 +161,7 @@ def max_volume_ellipsoid(
     Notes
     -----
     Validated against analytic cases: a box maps to the unit ball (``E = I``); a
-    scaled/sheared box ``{-1 <= M z <= 1}`` gives ``E E^T = M^{-1} M^{-T}``; the
+    scaled or sheared box ``{-1 <= M z <= 1}`` gives ``E E^T = M^{-1} M^{-T}``; the
     standard simplex gives its inscribed ball.
     """
     A = np.asarray(A, dtype=float)

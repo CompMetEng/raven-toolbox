@@ -1,11 +1,11 @@
 """Expand reactions with isozymes into one reaction per isozyme.
 
-Operates on cobra's GPR AST, so the model stays a plain ``cobra.Model`` throughout.
+The functions operate on the GPR syntax tree of cobra.
 
-MATLAB-COMPAT: GECKO MATLAB and RAVEN ``expandModel.m`` use string manipulation
-on grRules to detect and split isozymes. raven_toolbox uses cobrapy's GPR AST
-instead. Output should be equivalent for any well-formed GPR; cases that differ
-are likely malformed GPR strings that the AST flags as invalid.
+GECKO MATLAB and RAVEN ``expandModel.m`` detect and split isozymes by string manipulation of
+grRules; raven_toolbox uses the GPR syntax tree of cobrapy instead. The output is expected to be
+equivalent for any well-formed GPR. A malformed GPR string, which the syntax tree flags as invalid,
+can give a different result.
 """
 from __future__ import annotations
 
@@ -23,11 +23,11 @@ __all__ = ["expand_model", "gpr_to_dnf"]
 def gpr_to_dnf(gpr: GPR | str | None) -> list[list[str]]:
     """Convert a GPR to disjunctive normal form (list of AND-clauses).
 
-    An empty GPR yields an empty list. A single clause (no OR anywhere)
-    yields a list of length 1. OR-of-ANDs yields one sublist per
-    disjunct, each containing the gene names ANDed together.
+    An empty GPR gives an empty list. A single clause (no OR anywhere)
+    gives a list of length 1. An OR of ANDs gives one sublist per
+    disjunct, each containing the gene names combined by AND.
 
-    Handles distributivity: ``g1 and (g2 or g3)`` becomes
+    AND is distributed over OR: ``g1 and (g2 or g3)`` becomes
     ``[[g1, g2], [g1, g3]]``.
 
     Parameters
@@ -50,7 +50,7 @@ def gpr_to_dnf(gpr: GPR | str | None) -> list[list[str]]:
 
 
 def _node_to_dnf(node) -> list[list[str]]:
-    """Recursive helper. Returns DNF as list of AND-clauses."""
+    """Recursive helper. Returns the DNF as a list of AND-clauses."""
     if isinstance(node, ast.Name):
         return [[node.id]]
     if isinstance(node, ast.BoolOp):
@@ -73,23 +73,24 @@ def _node_to_dnf(node) -> list[list[str]]:
 
 
 def expand_model(model: cobra.Model) -> list[str]:
-    """Split reactions with isozymes (OR in GPR) into one reaction per isozyme.
+    """Split reactions with isozymes (OR in the GPR) into one reaction per isozyme.
+
     For each reaction whose GPR contains at least one OR, the reaction
     is removed and replaced by one copy per disjunctive clause. The new
-    reactions get ID suffix ``_EXP_1``, ``_EXP_2``, etc. The ``_EXP_1`` copy
+    reactions get the ID suffix ``_EXP_1``, ``_EXP_2``, and so on. The ``_EXP_1`` copy
     takes the position of the original reaction; the other copies are appended
-    in the order of the originals, as RAVEN's ``expandModel`` does. All other
-    fields (stoichiometry, bounds, name, subsystem) are copied verbatim;
-    only the GPR is simplified to the single AND-clause for that
+    in the order of the originals, as RAVEN's ``expandModel`` does. Stoichiometry, bounds,
+    name, subsystem, annotation and notes are copied from the original, and each copy gets the
+    objective coefficient of the original. The GPR of a copy is the single AND-clause of its
     isozyme.
 
     Reactions with no GPR, or with a GPR that has no OR, are left
-    untouched.
+    unchanged.
 
     Parameters
     ----------
     model
-        A cobra.Model, mutated in place.
+        The ``cobra.Model``, modified in place.
 
     Returns
     -------

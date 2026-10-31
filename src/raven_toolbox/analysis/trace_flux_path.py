@@ -1,16 +1,15 @@
-"""Highest-flux-fraction path between two reactions — port of RAVEN's
+"""Highest-flux-fraction path between two reactions: port of RAVEN's
 ``traceFluxPath``.
 
 Traces how flux flows from one reaction to another through the network: at
 each metabolite junction, flux splits proportionally among every reaction
 that net-consumes it, and a best-first (greedy) search finds the path with
 the highest cumulative fraction of the source reaction's own flux. By
-default, common currency/cofactor metabolites (ATP, NAD, CoA, H2O, ...) are
-excluded so the path follows material (carbon-skeleton) flow rather than an
-energy-carrier shortcut.
+default, common currency and cofactor metabolites (ATP, NAD, CoA, H2O, ...) are
+excluded so the path follows material (carbon-skeleton) flow.
 
-The search is forward-only: it follows metabolites ``from_rxn`` actually
-produces (given the sign of its flux) to reactions that actually consume
+The search is forward-only: it follows metabolites that ``from_rxn``
+produces (given the sign of its flux) to reactions that consume
 them, so ``from_rxn`` and ``to_rxn`` in parallel branches, or connected only
 in reverse, yield no path.
 """
@@ -69,7 +68,7 @@ class TraceFluxPathResult:
     metabolites:
         Metabolite id at each junction; ``len(metabolites) == len(reactions) - 1``.
     cumulative_fraction:
-        Fraction of ``from_rxn``'s flux that routes through this exact path
+        Fraction of ``from_rxn``'s flux that passes through this exact path
         (0 = no path found, 1 = all of it reaches ``to_rxn`` directly).
     """
 
@@ -112,24 +111,23 @@ def trace_flux_path(
         Model both reactions belong to.
     fluxes:
         Flux for every reaction the search might visit, indexed by reaction
-        id (a full-model flux vector, e.g. from ``model.optimize().fluxes``,
+        id (a full-model flux vector, for example from ``model.optimize().fluxes``,
         always qualifies).
     from_rxn, to_rxn:
         Source and target reaction ids.
     cutoff:
-        Minimum ``|flux|`` for a reaction to count as consuming a metabolite.
+        A reaction counts as consuming a metabolite when its stoichiometric coefficient
+        times its flux is below ``-cutoff``.
     max_hops:
         Longer paths are pruned.
     trace_material:
-        Exclude common currency/cofactor metabolites (ATP, ADP, NAD, NADH,
-        H2O, CoA, Pi, CO2, ...) so the path follows material flow rather than
-        an energy-carrier shortcut.
+        Exclude common currency and cofactor metabolites (ATP, ADP, NAD, NADH,
+        H2O, CoA, Pi, CO2, ...) so the path follows material flow.
     carbon_only:
         Additionally require each intermediate metabolite to contain at
         least one carbon atom (via ``Metabolite.elements``, which parses the
-        formula properly — unlike a naive regex, it does not mistake e.g. a
-        calcium ion for a carbon-bearing one). A metabolite with no formula
-        counts as having none.
+        formula, so for example a calcium ion is not counted as carbon-bearing). A
+        metabolite with no formula counts as having no carbon.
     exclude_mets:
         Extra metabolite names or ids (compartment suffix stripped) to
         exclude, on top of the currency list.
@@ -249,9 +247,8 @@ def print_flux_path(
 ) -> TraceFluxPathResult:
     """Print :func:`trace_flux_path`'s result and return it.
 
-    A simpler, Pythonic rendering of ``traceFluxPath.m``'s console diagram —
-    not a literal reproduction of its text; the structured result is what's
-    compared for parity.
+    The output is a simplified rendering of ``traceFluxPath.m``'s console
+    diagram. Parity with RAVEN is defined on the structured result.
     """
     result = trace_flux_path(model, fluxes, from_rxn, to_rxn, **kwargs)
 

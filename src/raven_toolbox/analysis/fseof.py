@@ -3,12 +3,12 @@
 FSEOF (Choi et al., Appl Environ Microbiol 2010) finds metabolic-engineering targets
 for over-producing a metabolite: enforce an increasing flux toward the target product
 while optimising growth, and watch how each reaction's flux responds. This follows
-RAVEN's ``FSEOF`` and returns tables instead of a printed list:
+RAVEN's ``FSEOF`` and returns tables, where RAVEN prints a list:
 
 * **Trend of the absolute flux.** Each reaction's absolute flux is regressed against the
   enforced product flux across the scan; the **slope** is the response and the
-  **correlation** (|r|) is a quality score. A reaction is a target when its track is not
-  constant and |r| >= ``correlation_threshold``. Every step is solved with pFBA.
+  **correlation** (|r|) is a quality score. A reaction is a target when its flux across the
+  scan is not constant and |r| >= ``correlation_threshold``. Every step is solved with pFBA.
 * **Direction classification.** Targets are labelled ``amplify`` (the absolute flux
   rises with the product), ``knockdown`` (it falls) or ``knockout`` (it falls to at most
   1e-8), like the Amplify, Knockdown and Knockout labels of RAVEN's ``FSEOF``.
@@ -91,47 +91,52 @@ def fseof(
 ) -> FSEOFResult:
     """Run FSEOF for over-production of ``target_rxn``'s product.
 
-    Enforces target flux from ``max_fraction/n_steps`` up to ``max_fraction`` of the
-    theoretical maximum (the target flux of the pFBA solution that maximises it) in
-    ``n_steps`` steps, maximising growth (``biomass_rxn`` or the
-    model's current objective) with pFBA at each step. Returns an :class:`FSEOFResult`.
+    Enforces the target flux in ``n_steps`` evenly spaced levels, from
+    ``max_fraction`` / ``n_steps`` times the theoretical maximum up to ``max_fraction`` times
+    the theoretical maximum (the target flux of the pFBA solution that maximises it),
+    maximising growth (``biomass_rxn`` or the model's current objective) with pFBA at each
+    step. Returns an :class:`FSEOFResult`.
 
     Parameters
     ----------
     correlation_threshold:
-        Minimum absolute correlation between a reaction's flux and the enforced
-        product flux for it to be reported as a target; raise it to keep only
-        the most cleanly-trending reactions.
+        Minimum absolute Pearson correlation between the absolute flux of a reaction and
+        the enforced product flux for the reaction to be reported as a target; a higher
+        value keeps fewer reactions, those with the most consistent trend.
     flux_eps:
         Tolerance below which the theoretical maximum of the target flux is treated as zero
-        (the scan then raises). Reaction fluxes are classified as in RAVEN's ``FSEOF``: a
-        reaction is a target when some absolute flux exceeds 1e-10, the standard deviation of
-        its absolute flux is above 0 and the correlation reaches ``correlation_threshold``;
-        it is ``knockout`` when the slope is negative and the last absolute flux is at most
-        1e-8, ``knockdown`` for a negative slope otherwise.
-
-        Each level is solved in two steps as in RAVEN: the objective is maximised, then the
-        flux sum is minimised with the objective held at 0.999999 of its optimum at that
-        level. A level at which the first step is infeasible ends the scan.
-
-        The top of the scan is ``max_fraction`` of the target flux in the pFBA solution that
-        maximises the target, as in RAVEN's ``FSEOF`` and GECKO's ``ecFSEOF``.
-
-        Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
-        so the last absolute flux used for the knockout label is that of the last feasible
-        level; ``targets`` is sorted by ``|slope| * |r|`` (equal scores in model order) and is
-        neither grouped by label nor split into reaction and transport targets; and
-        ``flux_eps`` only gates the check of the theoretical maximum.
+        (the scan then raises). It gates only that check.
     min_target:
-        Floor of the enforced-flux range, evenly spaced up to the scan's ceiling
-        (``max_fraction`` of the theoretical maximum) in ``n_steps`` steps.
-        Defaults to ``None``, which floors the range at
-        ``max_fraction of the theoretical maximum / n_steps`` instead. Pass e.g.
-        the target reaction's flux at growth-optimum to scan from there.
+        Lowest enforced flux. The ``n_steps`` levels are evenly spaced from ``min_target``
+        up to the scan's ceiling (``max_fraction`` times the theoretical maximum).
+        Defaults to ``None``, in which case the lowest level is the ceiling divided by
+        ``n_steps``. Passing the flux of the target reaction at the growth optimum starts
+        the scan at that flux.
     equality:
         How the enforced flux is imposed. ``False`` (the default) sets it as the lower bound
         of the target reaction, as RAVEN's ``FSEOF`` does; ``True`` fixes the target flux at
         the level (lower and upper bound), as GECKO's ``ecFSEOF`` does.
+
+    Notes
+    -----
+    Reaction fluxes are classified as in RAVEN's ``FSEOF``: a reaction is a target when some
+    absolute flux exceeds 1e-10, the standard deviation of its absolute flux is above 0 and
+    the correlation reaches ``correlation_threshold``; it is ``knockout`` when the slope is
+    negative and the last absolute flux is at most 1e-8, ``knockdown`` for a negative slope
+    otherwise.
+
+    Each level is solved in two steps as in RAVEN: the objective is maximised, then the
+    flux sum is minimised with the objective held at 0.999999 of its optimum at that
+    level. A level at which the first step is infeasible ends the scan.
+
+    The top of the scan is ``max_fraction`` of the target flux in the pFBA solution that
+    maximises the target, as in RAVEN's ``FSEOF`` and GECKO's ``ecFSEOF``.
+
+    Differences from ``FSEOF.m``: the scan stops at the first infeasible enforced level,
+    so the last absolute flux used for the knockout label is that of the last feasible
+    level; ``targets`` is sorted by ``|slope| * |r|`` (equal scores in model order) and is
+    one table, whereas ``FSEOF.m`` prints the targets grouped by the labels Amplify,
+    Knockdown and Knockout; it is not split into reaction and transport targets.
     """
     with model:  # find the theoretical maximum target flux
         model.objective = target_rxn

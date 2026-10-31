@@ -1,17 +1,12 @@
-"""Connectivity gap-filling: add the fewest template reactions so reactions that are
-*blocked* in a draft can carry flux.
+"""Connectivity gap-filling: add the fewest template reactions to unblock draft reactions.
 
-For the other gap-filling flavour (add the fewest template reactions until the model's
-own objective becomes feasible) use ``cobra.flux_analysis.gapfill``, after aligning the
-template's metabolite ids to the draft first, since cobra matches by id.
-
-It solves an MILP: pick the minimum-penalty subset of template reactions such that the
-blocked (irreversible) draft reactions can carry flux at steady state. Template
+The function solves an MILP: pick the minimum-penalty subset of template reactions such
+that the blocked (irreversible) draft reactions can carry flux at steady state. Template
 metabolites are matched to the draft by ``name[compartment]`` (via
-:func:`add_reactions_from_model`), so templates in a different identifier namespace
-than the model still work. Per-reaction ``scores`` (higher = prefer to include) map to
+:func:`add_reactions_from_model`), so templates with a different identifier namespace
+than the model are supported. Per-reaction ``scores`` (higher = prefer to include) map to
 RAVEN's ``rxnScores``; the MILP minimises the penalty ``-score`` (default penalty
-``1.0``, i.e. minimise the number of reactions added). As in RAVEN, a score that is not
+``1.0``, so the MILP minimises the number of reactions added). As in RAVEN, a score that is not
 negative is replaced by the least negative score among the template reactions (or by 0
 when none is negative), so a reaction is never rewarded for being added.
 """
@@ -31,11 +26,12 @@ from raven_toolbox.manipulation.transfer import add_reactions_from_model
 
 @dataclass
 class GapFillResult:
-    """Outcome of a connectivity gap-fill.
+    """Result of a connectivity gap-fill.
 
     ``added_reactions`` are the template reaction ids added to ``model``;
     ``newly_connected`` are draft reactions that were blocked but can now carry flux;
-    ``cannot_connect`` are blocked reactions left unconnectable.
+    ``cannot_connect`` are the blocked draft reactions that are not in ``newly_connected``,
+    including the reversible ones, which are not forced.
     """
 
     added_reactions: list[str]
@@ -193,15 +189,16 @@ def connect_blocked_reactions(
     Finds reactions that cannot carry a flux larger than ``threshold`` in ``model`` under its current bounds,
     then adds the minimum-penalty set of template reactions that lets the (irreversible)
     ones carry flux, and returns the filled model. Like RAVEN, only irreversible blocked
-    reactions are forced; reversible ones can carry flux trivially in the split
-    formulation, so forcing them is uninformative.
+    reactions (``lower_bound >= 0``) are forced. A blocked reversible reaction is not forced
+    and is listed in ``cannot_connect``.
 
-    For the *other* gap-filling flavour (adding reactions to make the model's
-    objective feasible), use ``cobra.flux_analysis.gapfill`` after aligning the
-    template's metabolite ids to the draft.
+    Unlike ``cobra.flux_analysis.gapfill``, which adds reactions until the objective of the
+    model is feasible and matches metabolites by id, this function connects blocked
+    reactions and matches template metabolites to the draft by ``name[compartment]``.
 
-    The draft is expected to have exchange reactions for its nutrients (otherwise most
-    reactions are trivially blocked).
+    The blocked reactions are determined under the bounds of the draft. A draft without
+    exchange reactions for its nutrients has every reaction blocked that depends on those
+    nutrients.
 
     ``scores`` maps a template reaction id to its score; a negative score is the penalty
     of adding that reaction, and the default penalty applies to a reaction without one.
@@ -215,8 +212,8 @@ def connect_blocked_reactions(
     the draft and, for a blocked reaction, with the templates added. ``min_flux`` is the
     flux forced through each rescuable reaction while solving. ``allow_net_production``
     relaxes the steady-state balance from ``S @ v == 0`` to ``S @ v >= 0`` (metabolites
-    may accumulate) in both checks and in the MILP, which can rescue reactions whose real
-    fix is a missing consumption route rather than a genuine connectivity gap.
+    may accumulate) in both checks and in the MILP. This can connect reactions that are
+    blocked because a consumption pathway is missing.
     """
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")

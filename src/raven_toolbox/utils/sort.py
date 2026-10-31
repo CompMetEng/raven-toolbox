@@ -1,8 +1,8 @@
-"""Sort a model's identifiers alphabetically (useful for deterministic,
-diff-friendly output) and standardise reaction directions and ordering.
+"""Sort a model's identifiers alphabetically and standardise reaction directions and ordering.
 
-cobra's ``DictList.sort`` reorders one list (and rebuilds its lookup index), but
-there is no single "sort the whole model" call; this provides it.
+Sorted lists give deterministic output, which keeps diffs of written model files small.
+cobra's ``DictList.sort`` reorders one list and rebuilds its lookup index; cobra has no single
+call that sorts a whole model, and :func:`sort_identifiers` is that call.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ MAX_SUBSYSTEM_REACTIONS = 250
 def sort_identifiers(model: cobra.Model) -> cobra.Model:
     """Sort reactions, metabolites and genes alphabetically by ID, in place.
 
-    Returns the same (mutated) model for convenience. Compartments are a plain
-    dict and are emitted sorted by writers as needed.
+    Returns the same model object. Compartments are a plain dict, which this function leaves
+    unchanged; writers sort them as needed.
     """
     model.reactions.sort(key=lambda r: r.id)
     model.metabolites.sort(key=lambda m: m.id)
@@ -174,13 +174,13 @@ def sort_model(
         The model to sort.
     sort_reversible
         Reverse the stoichiometry of each reversible reaction whose metabolite that is first
-        in sorted order of ``name + compartment`` is a product, so that it becomes a reactant.
-        Bounds are not changed. Ignored when ``sort_reaction_order`` is true.
+        in sorted order of ``name + compartment`` is a product; that metabolite then is a
+        reactant. Bounds are not changed. Ignored when ``sort_reaction_order`` is true.
     sort_met_name
         Order the metabolites of the model by ``name[compartment]``.
     sort_reaction_order
         Reorder the reactions of each subsystem with 2 to 250 reactions, and reverse reversible
-        reactions, so that as many metabolites as possible are produced before they are
+        reactions, to maximise the number of metabolites that are produced before they are
         consumed (see ``subsystem_order_scores``). A reaction that lists several subsystems
         takes part in each of them in turn. Reactions without a subsystem are not moved.
     seed
@@ -189,11 +189,11 @@ def sort_model(
     Notes
     -----
     The reaction-order search is the random pair-swap search of ``sortModel.m``, with the same
-    score and stop rule. It draws from a numpy generator instead of MATLAB's, so the same seed
-    gives a different permutation in the two implementations; their scores can be compared.
-    RAVEN positions the reactions of a later subsystem with indices found before the first
-    subsystem was reordered; here the positions are found again after each subsystem, which
-    gives the same result when no reaction lists several subsystems.
+    score and stop rule. It draws from a numpy generator, so the same seed gives a different
+    permutation than in MATLAB; their scores can be compared. RAVEN positions the reactions of
+    a later subsystem with indices found before the first subsystem is reordered; here the
+    positions are found again after each subsystem, which gives the same result when no
+    reaction lists several subsystems.
     """
     if sort_met_name:
         model.metabolites.sort(key=lambda m: f"{m.name}[{m.compartment}]")

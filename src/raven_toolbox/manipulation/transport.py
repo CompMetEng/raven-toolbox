@@ -1,9 +1,8 @@
 """Add transport reactions between compartments.
 
-cobra has no transport-reaction primitive. For each metabolite this matches the
-species by *name* across compartments (the source in ``from_compartment`` and its
-same-named twin in each target compartment), optionally creating the target
-metabolite, and
+cobra has no transport-reaction function. For each metabolite, the function matches the
+species by name across compartments (the source in ``from_compartment`` and the metabolite
+with the same name in each target compartment), optionally creates the target metabolite, and
 builds a ``-1 from / +1 to`` reaction with a sequential ``tr_0001`` ID. As in RAVEN's
 ``addTransport``, the subsystem of each reaction names the two compartments:
 ``Transport between <from> and <to>`` for a reversible reaction and
@@ -22,11 +21,10 @@ from raven_toolbox.manipulation.add import _new_met_id
 
 
 def _index_by_name(mets: Iterable[Metabolite], compartment: str) -> dict[str, Metabolite]:
-    """Index metabolites by name, warning when a name is duplicated.
+    """Index metabolites by name, with a warning when a name is duplicated.
 
-    Same-name duplicates in a single compartment are unusual but legal in
-    cobra; a plain dict keyed by name would silently drop all but one, so
-    this warns and keeps the first.
+    cobra allows several metabolites with the same name in one compartment. A dict keyed by
+    name holds one of them, so the function warns and keeps the first.
     """
     out: dict[str, list[Metabolite]] = {}
     for m in mets:
@@ -92,8 +90,8 @@ def add_transport_reactions(
     only_to_existing
         If True (default), only transport a metabolite into a target
         compartment where a same-named metabolite already exists. If False,
-        create the missing target metabolite (copying name/formula/charge/
-        annotation from the source) before adding the transport.
+        create the missing target metabolite (with name, formula, charge and
+        annotation of the source) before adding the transport.
     id_prefix
         Prefix for the sequential reaction IDs (``tr_0001``, ...).
 

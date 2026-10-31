@@ -1,21 +1,22 @@
-"""Curated transporter-family → coarse-substrate-class tables.
+"""Curated tables from transporter family to coarse substrate class.
 
-These small hand-maintained tables are the "coarse-first" substrate layer of the evidence-aware
-transport scoring (see the `design
-<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/transport_evidence_scoring.md>`_ on raven-gecko-parity). They serve two consumers:
+These hand-maintained tables are the coarse substrate layer of the evidence-aware transport scoring
+(see the `design
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/transport_evidence_scoring.md>`_
+on raven-gecko-parity). They have two consumers:
 
-* ``scripts/build_transporter_data.py`` reads :data:`PFAM_TRANSPORTERS` to know **which** Pfam HMMs to
+* ``scripts/build_transporter_data.py`` reads :data:`PFAM_TRANSPORTERS` to select the Pfam HMMs to
   fetch (from InterPro) into the bundled transporter HMM database.
-* the annotation backend maps a gene's Pfam family / TCDB TC-number to a coarse substrate class via
-  :data:`PFAM_TRANSPORTERS` and :data:`TC_FAMILY_CLASS`, so a transporter can be matched to the
-  metabolites it plausibly carries.
+* The annotation backend maps the Pfam family or TCDB TC-number of a gene to a coarse substrate
+  class via :data:`PFAM_TRANSPORTERS` and :data:`TC_FAMILY_CLASS`, so that a transporter can be
+  matched to the metabolites it plausibly carries.
 
-Classes are drawn from :data:`COARSE_CLASSES`. Many carriers are promiscuous, so a family maps to a
-*set* of classes; matching succeeds on any overlap with the metabolite's class(es). Entries are
-deliberately conservative and easily extended — the build script verifies every accession against the
-live InterPro API, so a stale/typo'd accession is reported rather than silently shipped. The precise
-per-substrate ChEBI mapping (TCDB substrate table + ChEBI ontology roll-up, see
-:mod:`raven_toolbox.localization.substrate_ontology`) sits on top of this coarse fallback.
+Classes are drawn from :data:`COARSE_CLASSES`. Many carriers transport several substrate types, so a
+family maps to a set of classes; a match succeeds on any overlap with the class(es) of the
+metabolite. The build script verifies every accession against the live InterPro API and reports an
+accession that is outdated or misspelled. The per-substrate ChEBI mapping (TCDB substrate table and
+ChEBI ontology roll-up, see :mod:`raven_toolbox.localization.substrate_ontology`) is applied on top
+of this coarse fallback.
 """
 from __future__ import annotations
 

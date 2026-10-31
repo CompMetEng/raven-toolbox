@@ -1,19 +1,19 @@
 """Remove metabolites or genes from a model.
 
-For removing *reactions*, use cobra directly:
+Reactions are removed with cobra directly:
 ``cobra.Model.remove_reactions(reactions, remove_orphans=...)``.
 
-The two functions here delegate the core to cobra and add the cobra-absent behaviour:
+The two functions delegate the core to cobra and add behaviour that cobra lacks:
 
-* ``remove_metabolites`` — cobra matches metabolites by ID; RAVEN's ``isNames``
-  deletes a metabolite in **every compartment at once** by name. That name
-  resolution is the *sole* reason this wrapper exists (see the note on it).
-* ``remove_genes`` — cobra's ``cobra.manipulation.remove_genes`` already rewrites
-  GPRs through the boolean AST (removing one gene of ``A and B`` empties the
-  rule, of ``A or B`` keeps the other) — exactly RAVEN's intent, without its
-  ``eval``. What it adds is RAVEN's default of **constraining** flux-blocked
-  reactions to zero instead of deleting them (``blocked_reactions``) and RAVEN's
-  removal of genes that no remaining reaction uses.
+* ``remove_metabolites``: cobra matches metabolites by ID. RAVEN's ``isNames`` deletes a
+  metabolite in every compartment at once by name. The name resolution is the only addition to
+  cobra.
+* ``remove_genes``: ``cobra.manipulation.remove_genes`` rewrites GPRs through the boolean syntax
+  tree (removing one gene of ``A and B`` empties the rule, removing one gene of ``A or B`` keeps
+  the other), which is the intent of RAVEN's function. The function adds RAVEN's default of
+  constraining flux-blocked reactions to zero by default, with deletion as an option
+  (``blocked_reactions``), and
+  RAVEN's removal of genes that no remaining reaction uses.
 """
 from __future__ import annotations
 
@@ -42,17 +42,17 @@ def remove_metabolites(
     Parameters
     ----------
     by_name
-        If True, ``metabolites`` are metabolite *names*; every metabolite with a
-        matching name is removed, regardless of compartment (RAVEN ``isNames``).
-        If False, they are IDs/objects, resolved via cobra.
+        If True, ``metabolites`` are metabolite names; every metabolite with a
+        matching name is removed, in any compartment (RAVEN ``isNames``).
+        If False, they are IDs or objects, resolved by cobra.
     destructive
-        Passed to cobra: if True, also remove every reaction the metabolite
-        participates in.
+        Passed to cobra. If True, every reaction that contains the metabolite is
+        removed as well.
 
     Note
     ----
-    With ``by_name=False`` this is just ``model.remove_metabolites`` — the
-    ``by_name`` cross-compartment deletion is the only thing this adds over cobra.
+    With ``by_name=False`` the function calls ``model.remove_metabolites``. The
+    deletion across compartments by name is the only addition to cobra.
     """
     if by_name:
         wanted = set(_as_list(metabolites))
@@ -70,32 +70,31 @@ def remove_genes(
     blocked_reactions: str = "constrain",
     remove_orphans: bool = False,
 ) -> list[str]:
-    """Remove genes and handle reactions left unable to carry flux.
+    """Remove genes and handle reactions that can no longer carry flux.
 
-    GPR rewriting (with correct AND/OR semantics) and gene deletion are done by cobra;
-    this adds a policy for reactions whose GPR becomes empty (no enzyme left):
+    cobra rewrites the GPRs (AND and OR semantics) and deletes the genes; this function adds a
+    policy for reactions whose GPR becomes empty (no enzyme left):
 
-    * ``"constrain"`` (default, as RAVEN's ``removeGenes``) — keep them with an empty
+    * ``"constrain"`` (default, as RAVEN's ``removeGenes``): keep them with an empty
       GPR and bounds ``(0, 0)``.
-    * ``"remove"`` — delete them.
-    * ``"keep"`` — leave them with an empty GPR and unchanged bounds.
+    * ``"remove"``: delete them.
+    * ``"keep"``: keep them with an empty GPR and unchanged bounds.
 
-    Requested genes that are not in the model are ignored. When none of the requested
-    genes is in the model, the model is not changed and ``[]`` is returned. Otherwise,
-    besides the requested genes, every gene that no remaining reaction named in its GPR
-    before the removal is deleted too, as RAVEN's ``removeGenes`` does: genes that no
-    reaction uses (orphan genes, also when not requested) and, with ``"remove"``, genes
-    used only by the deleted reactions. A gene whose only reaction is blocked and kept
-    (``"constrain"`` or ``"keep"``), such as the other subunit of a complex that lost
-    one, stays in ``model.genes``.
+    Requested genes that are not in the model are ignored. When none of the requested genes is in
+    the model, the model is not changed and ``[]`` is returned. Otherwise, after the requested genes
+    are removed, every gene that is not named in the GPR (before the removal) of any remaining
+    reaction is deleted too, as in RAVEN's ``removeGenes``. These are genes that no reaction uses
+    (also when not requested) and, with ``"remove"``, genes used only by the deleted reactions. A
+    gene whose only reaction is blocked and kept (``"constrain"`` or ``"keep"``), such as the other
+    subunit of a complex that lost one, stays in ``model.genes``.
 
-    ``remove_orphans`` (only meaningful with ``blocked_reactions="remove"``)
-    passes through to cobra: also drop metabolites orphaned by the removal.
+    ``remove_orphans`` (relevant with ``blocked_reactions="remove"`` only) is passed to
+    cobra's ``remove_reactions``, which also removes the metabolites left without a reaction.
 
     Returns
     -------
     list of str
-        IDs of the reactions that became flux-blocked (had a GPR, now empty).
+        Sorted IDs of the reactions that became flux-blocked (had a GPR, now empty).
     """
     if blocked_reactions not in ("remove", "constrain", "keep"):
         raise ValueError(

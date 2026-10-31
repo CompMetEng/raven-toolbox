@@ -1,15 +1,15 @@
-"""Interactive flux-network navigation — port of RAVEN's ``walkFluxes``.
+"""Interactive flux-network navigation: port of RAVEN's ``walkFluxes``.
 
 Starting from a reaction, groups every other flux-carrying reaction connected
-through a shared metabolite, labelled with its role (produces/consumes) and
-ranked by its own flux magnitude. Two ways in:
+through a shared metabolite, labelled with its role (``produces`` or ``consumes``) and
+ranked by its own flux magnitude. Two interfaces:
 
-* :class:`FluxWalker` — a steppable, inspectable object (``.groups``,
-  ``.step(n)``, ``.back()``): the Pythonic form of "interactive", useful
-  directly in a script or notebook without a blocking terminal loop.
-* :func:`walk_fluxes` — the literal terminal REPL, matching RAVEN's
-  blocking ``input()``-driven navigator command for command
-  (number/``b``/``q``), built on top of :class:`FluxWalker`.
+* :class:`FluxWalker`: a steppable, inspectable object (``.groups``,
+  ``.step(n)``, ``.back()``) for use in a script or notebook without a blocking
+  terminal loop.
+* :func:`walk_fluxes`: the terminal loop, matching RAVEN's blocking
+  ``input()``-driven navigator command for command (a number, ``b``, ``q``),
+  built on :class:`FluxWalker`.
 """
 from __future__ import annotations
 
@@ -66,10 +66,9 @@ def _neighbor_groups(
     Matches ``walkFluxes.m``'s per-step computation: metabolites are visited
     in the model's own global order (not stoichiometry-dict insertion order),
     candidate neighbours are collected in the model's global reaction order
-    before a *stable* sort by descending ``|flux|`` (so tied fluxes keep their
-    original relative order, exactly as MATLAB's ``sort`` would), and a
-    reaction already numbered under an earlier metabolite keeps that number
-    rather than being renumbered.
+    before a stable sort by descending ``|flux|`` (so tied fluxes keep their
+    original relative order, as MATLAB's ``sort`` does), and a
+    reaction already numbered under an earlier metabolite keeps that number.
     """
     rxn = model.reactions.get_by_id(rxn_id)
     own_flux = _flux(fluxes, rxn_id)
@@ -135,7 +134,7 @@ def _neighbor_groups(
 class FluxWalker:
     """Steppable navigator over a solved flux distribution.
 
-    ``fluxes`` is indexed by reaction id (e.g. a :class:`cobra.Solution`'s
+    ``fluxes`` is indexed by reaction id (for example a :class:`cobra.Solution`'s
     ``.fluxes``, or the result of ``pfba(model).fluxes``). Only a metabolite
     whose net contribution from the current reaction is at least ``cutoff``
     in absolute value is shown, and at most ``max_per_met`` of its other
@@ -256,8 +255,8 @@ def walk_fluxes(
 
     Starting from ``start_rxn``, prints all flux-carrying reactions connected
     through shared metabolites, grouped by metabolite and labelled with each
-    neighbour's role (produces/consumes). Enter a neighbour's number to step
-    to it, ``b`` to go back, or ``q`` to quit. ``input_fn``/``print_fn`` are
+    neighbour's role (``produces`` or ``consumes``). Entering a neighbour's number steps
+    to it, ``b`` goes back, and ``q`` quits. ``input_fn`` and ``print_fn`` are
     injectable for scripting or testing; they default to the builtins.
 
     See :class:`FluxWalker` for a non-blocking, programmatic form of the same

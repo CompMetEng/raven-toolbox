@@ -1,9 +1,9 @@
-"""Annotation helpers — SBO term assignment, ΔG CSV persistence.
+"""Annotation helpers: SBO term assignment and ΔG CSV persistence.
 
-These are the pieces of yeast-GEM's ``missingFields`` module that are
-organism-agnostic enough to live upstream. Default parameter values
-match the RAVEN/yeast convention so the functions are immediately
-useful on the standard layout; consumers with different naming pass
+These are the parts of yeast-GEM's ``missingFields`` module that are
+organism-agnostic. Default parameter values
+match the RAVEN and yeast-GEM convention, so the functions apply to the
+standard layout without arguments; consumers with different naming pass
 overrides.
 """
 from raven_toolbox.annotation.delta_g import load_delta_g_csv, save_delta_g_csv

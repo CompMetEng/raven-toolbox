@@ -1,26 +1,22 @@
-"""Gap analysis summary — port of RAVEN's ``gapReport``.
+"""Gap analysis summary, a port of RAVEN's ``gapReport``.
 
-Runs a battery of connectivity checks over a model: which reactions cannot
-carry flux (at all, and even if net production of every metabolite were
-allowed), how the model's metabolites split into isolated sub-networks, which
-metabolites cannot be net-produced and the minimal set of metabolites that
-would need an external source to fix that, which metabolites can be produced
-or consumed for free once every existing boundary reaction is closed, and
-(optionally) how much of the remaining damage a set of template models could
-repair.
+Runs connectivity checks over a model: which reactions cannot carry flux (under the
+model's constraints, and when net production of every metabolite is allowed), how the
+metabolites split into isolated sub-networks, which metabolites cannot be net-produced
+and the minimal set of metabolites that need an external source to fix that, and which
+metabolites can be produced or consumed for free once every existing boundary reaction
+is closed. Optionally, it reports how many blocked reactions a set of template models
+can connect.
 
-Two of ``gapReport.m``'s own helpers — ``checkProduction`` and
-``getAllSubGraphs`` — have no separate Python port: their only real caller in
-RAVEN is ``gapReport`` itself (their ledger rows note this), so their logic
-is folded in here as private helpers rather than exposed as reusable
-functions with no second user. A third, ``canExchange``, is reimplemented the
-same way for the same reason, on top of the same probe-reaction technique
-:func:`~raven_toolbox.gapfilling.find_leak_metabolite` already uses.
+The helpers ``checkProduction`` and ``getAllSubGraphs`` of ``gapReport.m`` are private
+functions of this module, because ``gapReport`` is their only caller in RAVEN. The helper
+``canExchange`` is reimplemented as a private function in the same way, with the
+probe-reaction technique that :func:`~raven_toolbox.gapfilling.find_leak_metabolite`
+uses.
 
-The mass-balancing section (``can_produce_without_input`` /
-``can_consume_without_output``) temporarily closes every one of the model's
-own boundary reactions, as ``gapReport.m`` does with the reactions
-``getExchangeRxns`` returns.
+The mass-balancing section (``can_produce_without_input`` and
+``can_consume_without_output``) temporarily closes every boundary reaction of the model,
+as ``gapReport.m`` does with the reactions that ``getExchangeRxns`` returns.
 """
 from __future__ import annotations
 
@@ -45,12 +41,12 @@ _EXCRETE_PREFIX = "_gap_report_excrete_"
 class MinToConnect:
     """One entry of the minimal set of metabolites to connect.
 
-    ``connects`` counts every not-produced metabolite that giving this one a
-    free source would, directly or transitively, also make producible. That
-    can include the metabolite itself, but only if the rest of the network
-    can actually drain it once it has a source (e.g. some other reaction
-    consumes it on net) — a metabolite with no other route at all never
-    connects itself.
+    ``connects`` counts the not-produced metabolites that giving this one a free
+    source makes producible, directly or transitively, and that no earlier entry of
+    the set has connected. The count includes the metabolite itself only when the
+    rest of the network can drain it once it has a source (for example, another
+    reaction consumes it on net). A metabolite with no other reaction does not
+    connect itself.
     """
 
     metabolite: str
@@ -66,29 +62,30 @@ class GapReportResult:
     no_flux_reactions:
         Reactions that cannot carry flux under the model's own constraints.
     no_flux_reactions_relaxed:
-        Reactions that still cannot carry flux even if every metabolite is
-        allowed unconstrained net production.
+        Reactions that cannot carry flux even if every metabolite is allowed
+        unconstrained net production.
     subgraphs:
         Metabolite ids in each isolated sub-network (two metabolites are
         connected if they share a reaction), largest first.
     not_produced_metabolites:
         Metabolites that cannot have net production.
     needed_for_production:
-        Metabolite id → ids of every not-produced metabolite that a free
-        source of it would, directly or transitively, also make producible
-        (see :class:`MinToConnect` on when that includes the metabolite
-        itself).
+        Metabolite id to the ids of the not-produced metabolites that a free
+        source of it makes producible, directly or transitively (see
+        :class:`MinToConnect` on when the list includes the metabolite itself).
     min_to_connect:
-        A minimal set of metabolites to give a free source, chosen greedily
-        (most newly-connected metabolites first), that together account for
-        every entry in ``not_produced_metabolites``.
+        Metabolites to give a free source, chosen greedily (most newly connected
+        metabolites first). The selection stops when no remaining metabolite
+        connects any remaining metabolite (a metabolite whose reach is only itself is
+        still selected), so a not-produced metabolite that no selected metabolite
+        connects is not covered.
     can_produce_without_input:
         Metabolites that can be produced with every boundary reaction closed.
     can_consume_without_output:
         Metabolites that can be consumed with every boundary reaction closed.
     gap_fill:
-        Result of gap-filling against ``template_models``, or None if none
-        were given.
+        Result of gap-filling against ``template_models``, or None if no template
+        models were given.
     """
 
     no_flux_reactions: list[str]
@@ -111,7 +108,7 @@ def _blocked_ids(model: cobra.Model, reactions: list[cobra.Reaction] | None = No
 
 
 def _relaxed_copy(model: cobra.Model) -> cobra.Model:
-    """A copy where every metabolite may freely accumulate (net production allowed)."""
+    """A copy in which every metabolite may accumulate (net production allowed)."""
     relaxed = model.copy()
     for met in relaxed.metabolites:
         met.constraint.ub = None
@@ -121,9 +118,9 @@ def _relaxed_copy(model: cobra.Model) -> cobra.Model:
 def _subgraphs(model: cobra.Model) -> list[list[str]]:
     """Connected components of the metabolite graph, largest first.
 
-    Ties are broken by the index (in ``model.metabolites``) of each
-    component's first-discovered member, matching ``getAllSubGraphs.m``'s own
-    sequential-assignment order before its final size sort.
+    Components of equal size are ordered by the index (in ``model.metabolites``) of
+    their first-discovered member, which is the sequential-assignment order of
+    ``getAllSubGraphs.m`` before its final size sort.
     """
     adjacency: dict[str, set[str]] = {m.id: set() for m in model.metabolites}
     for rxn in model.reactions:
@@ -153,12 +150,9 @@ def _subgraphs(model: cobra.Model) -> list[list[str]]:
 
 
 def _can_exchange(model: cobra.Model, direction: Literal["produce", "consume"]) -> list[str]:
-    """Which metabolites can be freely produced/consumed via a temporary exchange.
+    """Ids of the metabolites that can be freely produced or consumed via a temporary exchange.
 
-    Reimplements ``canExchange.m`` (``addExchangeRxns`` + ``haveFlux``); not
-    exposed publicly since cobrapy already covers the same need directly
-    (``analyse_topology`` / ``cobra.flux_analysis.find_blocked_reactions``)
-    for any caller other than this one.
+    Reimplements ``canExchange.m`` (``addExchangeRxns`` and ``haveFlux``).
     """
     working = model.copy()
     coeff = -1.0 if direction == "produce" else 1.0
@@ -177,9 +171,9 @@ def _can_exchange(model: cobra.Model, direction: Literal["produce", "consume"]) 
 def _reachable(start: set[str], edges: dict[str, set[str]], remaining: set[str]) -> set[str]:
     """Nodes reachable from ``start`` via ``edges``, restricted to ``remaining``.
 
-    Deliberately does *not* seed the search with the metabolite whose row
-    ``start`` came from: whether it reaches itself depends entirely on
-    whether ``edges`` says so (see :class:`MinToConnect`).
+    The search does not start from the metabolite whose row ``start`` came from; that
+    metabolite is in the result only when ``edges`` leads back to it (see
+    :class:`MinToConnect`).
     """
     reach: set[str] = set()
     queue = list(start & remaining)
@@ -219,11 +213,7 @@ def _greedy_min_to_connect(
 def _check_production(
     model: cobra.Model, excretion_compartments: set[str]
 ) -> tuple[list[str], dict[str, list[str]], list[MinToConnect]]:
-    """Reimplements ``checkProduction.m`` with ``checkNeededForProduction=True``.
-
-    Not exposed publicly (see the module docstring): its only real caller is
-    ``gapReport`` itself.
-    """
+    """Reimplements ``checkProduction.m`` with ``checkNeededForProduction=True``."""
     allowed = [m for m in model.metabolites if m.compartment in excretion_compartments]
 
     working = model.copy()
@@ -259,7 +249,10 @@ def _check_production(
 
 
 def _require_feasible(model: cobra.Model, condition: str) -> None:
-    """Raise a ValueError naming the forced-flux reactions if ``model`` is infeasible."""
+    """Raise a ValueError if ``model`` is infeasible.
+
+    The message lists the reactions with a forced flux.
+    """
     if not math.isnan(model.slim_optimize(error_value=float("nan"))):
         return
     forced = [r.id for r in model.reactions if r.lower_bound > 0 or r.upper_bound < 0]
@@ -280,11 +273,11 @@ def gap_report(
     Parameters
     ----------
     model:
-        Model to analyse. Never modified.
+        Model to analyse. The function does not modify it.
     template_models:
         Model(s) to gap-fill blocked reactions from
         (:func:`~raven_toolbox.gapfilling.connect_blocked_reactions`). If
-        omitted, ``result.gap_fill`` is None and that step is skipped.
+        omitted, the gap-filling step is skipped and ``result.gap_fill`` is None.
 
     Returns
     -------
@@ -295,9 +288,10 @@ def gap_report(
     ValueError
         If ``model`` is infeasible under its own bounds, or once its boundary
         reactions are closed for ``can_produce_without_input`` and
-        ``can_consume_without_output``. The usual cause is a reaction with a
-        forced flux, such as ATP maintenance with a positive lower bound; set
-        its bounds to zero before calling ``gap_report``.
+        ``can_consume_without_output``. The message lists the reactions with a
+        forced flux (lower bound above zero or upper bound below zero), such as
+        ATP maintenance with a positive lower bound. Setting the bounds of the forced
+        reactions to zero before the call removes the cause.
     """
     _require_feasible(model, "under its own bounds")
     no_flux_reactions = [r.id for r in model.reactions if r.id in _blocked_ids(model)]
@@ -339,11 +333,10 @@ def print_gap_report(
     print_fn=print,
     **kwargs,
 ) -> GapReportResult:
-    """Print :func:`gap_report`'s result and return it.
+    """Print the result of :func:`gap_report` and return it.
 
-    A simpler, Pythonic rendering of ``gapReport.m``'s console report — not a
-    literal reproduction of its text; the structured result is what's
-    compared for parity.
+    The text is a Python rendering of the console report of ``gapReport.m`` and
+    differs from its wording. Parity with RAVEN is compared on the structured result.
     """
     result = gap_report(model, **kwargs)
 
