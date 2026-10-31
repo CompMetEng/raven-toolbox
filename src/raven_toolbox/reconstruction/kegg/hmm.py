@@ -1,25 +1,25 @@
-"""Build per-KO HMM libraries from KEGG sequences (step 3b.3, maintainer-side).
+"""Build per-KO HMM libraries from KEGG sequences (maintainer-side).
 
-Ports RAVEN ``constructMultiFasta`` plus the clustering/alignment/training stages
-of ``getKEGGModelForOrganism``. Run once per KEGG release to produce the per-domain
-(``kegg<version>_prokaryotes`` / ``kegg<version>_eukaryotes``) HMM libraries that the
-de-novo query path (3b.5) searches.
+Ports RAVEN ``constructMultiFasta`` and the clustering, alignment and training stages
+of ``getKEGGModelForOrganism``. Run once per KEGG release, it produces the per-domain
+HMM libraries (``kegg<version>_prokaryotes`` and ``kegg<version>_eukaryotes``) that the
+de-novo query path (:mod:`.query`) searches.
 
-Per KO, within one domain (prokaryote / eukaryote):
+Per KO, within one domain (prokaryote or eukaryote):
 
-1. **Multi-FASTA** — gather the member genes' sequences from ``genes.pep``
+1. **Multi-FASTA**: gather the sequences of the member genes from ``genes.pep``
    (:func:`build_ko_fastas`).
-2. **CD-HIT** — dereplicate near-identical sequences (default 90 % identity).
-3. **MAFFT** — multiple-sequence alignment (``--auto --anysymbol``).
-4. **hmmbuild** — train the profile HMM.
+2. **CD-HIT**: remove near-identical sequences (default 90 % identity).
+3. **MAFFT**: multiple-sequence alignment (``--retree 2 --maxiterate 0 --anysymbol`` by
+   default, ``--auto --anysymbol`` with ``fast=False``).
+4. **hmmbuild**: train the profile HMM.
 
-Finally the per-KO HMMs are concatenated into a single library: end users search it
-with a single ``hmmsearch`` over the multi-profile query (the fast direction), replacing
-RAVEN's per-KO ``hmmsearch`` sweep — one invocation, no ``hmmpress``.
+The per-KO HMMs are then concatenated into a single library. End users search it with
+one ``hmmsearch`` over the multi-profile query, the fast direction, which replaces
+RAVEN's per-KO ``hmmsearch`` sweep; ``hmmpress`` is not run.
 
-The pure parts (FASTA indexing/grouping, command construction, CD-HIT ``-n``
-choice) are unit-tested; running the binaries needs HMMER/MAFFT/CD-HIT, located
-via :func:`raven_toolbox.binaries.resolve_binary`.
+Running the binaries needs HMMER, MAFFT and CD-HIT, located via
+:func:`raven_toolbox.binaries.resolve_binary`.
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Step 1 — per-KO multi-FASTA (constructMultiFasta)
 # --------------------------------------------------------------------------- #
 def _full_id(organism: str, gene: str) -> str:
-    """The genes.pep header key for a gene, i.e. ``organism:gene``."""
+    """The id of a gene in the ``genes.pep`` headers, ``organism:gene``."""
     return f"{organism}:{gene}"
 
 
@@ -86,18 +86,18 @@ def build_ko_fastas(
 ) -> dict[str, Path]:
     """Write one ``<KO>.fa`` per KO with its member genes' sequences.
 
-    Uses a stdlib offset index instead of a Java-hashtable byte scan.
-    ``organisms`` restricts to a domain's organism codes (for the prok/euk
-    split). Empty KOs are skipped (no file).
-    ``progress`` shows a tqdm bar over the per-KO writing pass. Returns
-    ``{ko: path}`` for the files written.
+    The sequences are located through an index of byte offsets built in one pass over
+    ``genes_pep``. ``organisms`` restricts the genes to the organism codes of a domain
+    (for the prokaryote and eukaryote libraries). KOs without a sequence in ``genes_pep``
+    are skipped and get no file. ``progress`` shows a tqdm bar over the per-KO writing
+    pass. Returns ``{ko: path}`` for the files written.
 
-    **Resumable:** a ``<KO>.fa`` that already exists is kept (not rewritten), and
-    once a full pass completes a ``.ko_fastas_complete`` marker is written so a
-    later call returns the existing files without re-scanning ``genes_pep`` (the
-    costly part). ``force`` ignores both and rebuilds. The resume assumes the same
-    inputs as the original run (as the per-KO HMM resume in :func:`build_hmm_library`
-    does); use ``force`` after changing ``organism_gene_ko``/``organisms``.
+    A ``<KO>.fa`` that already exists is kept and not rewritten. Once a full pass
+    completes, a ``.ko_fastas_complete`` marker is written, and a later call returns the
+    existing files without scanning ``genes_pep`` again. ``force`` ignores both and
+    rebuilds. The resume assumes the same inputs as the original run, as does the per-KO
+    HMM resume in :func:`build_hmm_library`; ``force`` is needed after ``organism_gene_ko``
+    or ``organisms`` change.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -257,10 +257,10 @@ def _mafft_cmd(
 ) -> list[str]:
     """Build the MAFFT command.
 
-    ``fast`` selects FFT-NS-2 (``--retree 2 --maxiterate 0``) — fast progressive
-    alignment, the right trade-off for building profile HMMs — instead of
-    ``--auto`` (which picks slow iterative refinement on medium/large inputs).
-    ``parttree`` adds MAFFT's PartTree approximation for very large inputs.
+    ``fast`` selects FFT-NS-2 (``--retree 2 --maxiterate 0``), a fast progressive
+    alignment; otherwise ``--auto`` is used, which selects iterative refinement on
+    medium and large inputs. ``parttree`` selects MAFFT's PartTree approximation
+    (``--retree 2 --parttree``) for large inputs and takes precedence over ``fast``.
     """
     cmd = [mafft]
     if parttree:
@@ -301,14 +301,13 @@ def _staged_run(
     cmd: list[str], *, label: str, stage: str, verbose: bool,
     stdout_path: Path | None = None, log: bool = True,
 ) -> float:
-    """Run a stage's command; log one completion line per stage (when verbose).
+    """Run the command of a stage and, when ``verbose``, log one completion line.
 
-    At INFO (when ``log``): a single ``[KO] stage: done in X.Xs`` line — the
-    ``stage`` descriptor already names the tool/mode and any seq/res/cost context,
-    so the timing is just appended rather than repeated on a second line. The
-    tool's own stderr (MAFFT/CD-HIT/hmmbuild progress) is logged at DEBUG. Pass
-    ``log=False`` to suppress the line so the caller can fold the timing into its
-    own message. Returns the stage's wall-clock seconds.
+    With ``log`` true, the line is logged at INFO as ``[KO] stage: done in X.Xs``; the
+    ``stage`` descriptor names the tool, the mode and any sequence, residue and cost
+    counts. The stderr of the tool (MAFFT, CD-HIT or hmmbuild progress) is logged at
+    DEBUG. ``log=False`` suppresses the INFO line so that the caller can include the
+    timing in its own message. Returns the wall-clock seconds of the stage.
     """
     start = time.perf_counter()
     stderr = _run(cmd, stdout_path=stdout_path)
@@ -336,19 +335,19 @@ def build_ko_hmm(
 ) -> Path:
     """Cluster, align and train a profile HMM for one KO's multi-FASTA.
 
-    Single-sequence KOs skip CD-HIT/MAFFT (a lone sequence is its own alignment).
-    ``seq_identity=-1`` skips CD-HIT. All (deduplicated) sequences are kept —
-    memory on large KOs is bounded by switching MAFFT to PartTree, not by
-    dropping sequences. ``fast`` uses MAFFT FFT-NS-2 (fast progressive) rather
-    than ``--auto``'s slow iterative refinement. MAFFT switches to memory-light
-    PartTree once an alignment is predicted to be too memory-heavy: by default from
-    its **DP cost** (``n_seqs × mean_len²`` — long proteins cost far more than the
-    same residue count in short ones) against a RAM-derived budget
-    (:func:`_auto_cost_budget`). Passing ``parttree_residues`` overrides this with a
-    simple residue-count cutoff.
-    ``verbose`` logs (via the ``logging`` module, INFO/DEBUG) which tool is running
-    for this KO, sequence counts at each stage, timings, and the tools' own
-    output. ``threads`` (CD-HIT, MAFFT and hmmbuild) defaults to every CPU the process may
+    A KO with one sequence skips CD-HIT and MAFFT, because a single sequence is its own
+    alignment; MAFFT is also skipped when one sequence remains after CD-HIT.
+    ``seq_identity=-1`` skips CD-HIT. CD-HIT removes near-identical sequences at
+    ``seq_identity``, and no other sequences are dropped. ``fast`` (default True) uses
+    MAFFT FFT-NS-2, a fast progressive alignment, and False uses ``--auto``. MAFFT
+    switches to PartTree, which needs less memory, once an alignment is predicted to need
+    too much: by default from its **DP cost** (``n_seqs × mean_len²``) against a
+    RAM-derived budget (:func:`_auto_cost_budget`). The cost of an alignment of long
+    proteins is higher than that of the same residue count in short proteins.
+    ``parttree_residues`` replaces the cost criterion with a cutoff on the residue count.
+    ``verbose`` logs, via the ``logging`` module at INFO and DEBUG, which tool is running
+    for this KO, the sequence counts at each stage, the timings and the output of the
+    tools. ``threads`` (CD-HIT, MAFFT and hmmbuild) defaults to every CPU the process may
     use. Returns ``out_hmm``.
     """
     threads = _available_cpus() if threads is None else threads
@@ -444,23 +443,23 @@ def build_hmm_library(
     mafft: str | Path | None = None,
     hmmbuild: str | Path | None = None,
 ) -> dict[str, Path | list[Path] | None]:
-    """Build a domain (``"prokaryotes"``/``"eukaryotes"``) HMM library.
+    """Build the HMM library of a domain (``"prokaryotes"`` or ``"eukaryotes"``).
 
     Restricts genes to the domain's organisms (from ``taxonomy``), builds a
-    multi-FASTA and a profile HMM per KO under ``out_dir``, and (if ``concatenate``)
-    concatenates them into ``out_dir/library.hmm`` — searched directly with
-    ``hmmsearch`` (no ``hmmpress`` needed). Returns ``{"hmms": [...], "library": path | None}``.
+    multi-FASTA and a profile HMM per KO under ``out_dir``, and, if ``concatenate``,
+    concatenates them into ``out_dir/library.hmm``, which ``hmmsearch`` searches directly
+    without ``hmmpress``. Returns ``{"hmms": [...], "library": path | None}``.
 
-    Heavy and binary-dependent — intended for the maintainer, run once per KEGG
-    release. **Resumable:** skips KOs that already have an ``.hmm`` and reuses an
-    already-built multi-FASTA (see :func:`build_ko_fastas`), so re-running after a
-    failure continues rather than restarting. ``force`` rebuilds everything.
+    The function is run by the maintainer once per KEGG release and needs CD-HIT, MAFFT
+    and hmmbuild. It skips KOs that already have an ``.hmm`` and reuses an existing
+    multi-FASTA (see :func:`build_ko_fastas`), so a rerun after a failure continues from
+    the existing files. ``force`` rebuilds everything.
 
-    ``progress`` shows tqdm bars for the multi-FASTA and per-KO HMM passes (the
-    headline ``N of M`` counter for the long build); it is independent of
-    ``verbose`` (per-KO INFO logging). With both on, per-KO log lines are routed
-    through ``tqdm.write`` so they don't corrupt the bar. ``threads`` goes to
-    :func:`build_ko_hmm` and defaults to every CPU the process may use.
+    ``progress`` shows tqdm bars for the multi-FASTA and per-KO HMM passes, with an
+    ``N of M`` counter for the per-KO pass; it is independent of ``verbose`` (per-KO INFO
+    logging). With both on, per-KO log lines are routed through ``tqdm.write`` so that
+    they do not overwrite the bar. ``threads`` goes to :func:`build_ko_hmm` and defaults
+    to every CPU the process may use.
     """
     out_dir = Path(out_dir)
     fasta_dir = out_dir / "fasta"

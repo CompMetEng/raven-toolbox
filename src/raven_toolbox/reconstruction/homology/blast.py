@@ -1,8 +1,9 @@
-"""Run BLAST+ / DIAMOND (or load precomputed hits) into a homology hits table.
+"""Run BLAST+ or DIAMOND, or load precomputed hits, into a homology hits table.
 
 Each producer returns the bidirectional hits DataFrame (``HIT_COLUMNS``) consumed by
 :func:`~raven_toolbox.reconstruction.homology.get_model_from_homology`. Binaries are
-located via :func:`raven_toolbox.binaries.resolve_binary` (arg → env → PATH → bundled).
+located via :func:`raven_toolbox.binaries.resolve_binary` (argument, environment variable,
+PATH, bundled binary, in that order).
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ _FIELD_TO_HIT = {
 
 
 def _parse_tabular(text: str, from_id: str, to_id: str, sep: str) -> pd.DataFrame:
-    """Parse one BLAST/DIAMOND tabular output into hit rows for one direction."""
+    """Parse one BLAST or DIAMOND tabular output into hit rows for one direction."""
     if not text.strip():
         return pd.DataFrame(columns=HIT_COLUMNS)
     # round_trip parses each number exactly, as RAVEN does: the default parser can read
@@ -75,16 +76,16 @@ def run_blast(
     ``model_ids`` and ``ref_fastas`` are parallel: ``ref_fastas[i]`` is the
     reference proteome for template ``model_ids[i]``.
 
-    Returns the hits DataFrame (filtered at
-    ``evalue``). Requires BLAST+ (`blastp`, `makeblastdb`). ``threads``
-    defaults to every CPU the process may use, as in RAVEN's ``getBlast``.
+    Returns the hits DataFrame, filtered at ``evalue``. Requires BLAST+
+    (``blastp``, ``makeblastdb``). ``threads`` defaults to every CPU the process
+    may use, as in RAVEN's ``getBlast``.
 
-    The default matches MATLAB RAVEN's ``getBlast``, which hardcodes
-    ``-evalue 10e-5`` -- that is 1e-4, not 1e-5. Unlike RAVEN's, this one is an
-    argument, so a stricter search stays available; it's also a loose
-    pre-filter only, dominated downstream by
-    :func:`~raven_toolbox.reconstruction.homology.homology.get_model_from_homology`'s
-    much stricter ``max_evalue``/``min_align_len``/``min_identity``.
+    The default ``evalue`` of 1e-4 equals the ``-evalue 10e-5`` that MATLAB
+    RAVEN's ``getBlast`` hardcodes. Here ``evalue`` is an argument. The cutoff is
+    a pre-filter; the ``max_evalue``, ``min_align_len`` and ``min_identity``
+    arguments of
+    :func:`~raven_toolbox.reconstruction.homology.homology.get_model_from_homology`
+    apply stricter limits downstream.
     """
     model_ids = list(model_ids)
     ref_fastas = _as_list(ref_fastas)
@@ -130,18 +131,18 @@ def run_diamond(
 
     ``model_ids`` and ``ref_fastas`` are parallel: ``ref_fastas[i]`` is the
     reference proteome for template ``model_ids[i]``. ``sensitivity`` is
-    passed straight through as a DIAMOND CLI flag (e.g. ``"--more-sensitive"``,
-    ``"--sensitive"``, or ``""`` to use DIAMOND's default fast mode).
+    passed unchanged as a DIAMOND command-line flag (for example ``"--more-sensitive"``
+    or ``"--sensitive"``); ``""`` selects DIAMOND's default fast mode.
 
     Returns the hits DataFrame. Requires DIAMOND. ``threads`` defaults to
     every CPU the process may use, as in RAVEN's ``getDiamond``.
 
-    The default matches MATLAB RAVEN's ``getDiamond``, which passes no
-    ``--evalue`` at all and so inherits DIAMOND's own default of 1e-3. Stated
-    explicitly here rather than left implicit, since the two aligners disagree:
-    ``run_blast`` uses 1e-4, following ``getBlast``. Neither cutoff has been
-    calibrated against data on either side -- unlike the KO-assignment cutoffs,
-    where measurement did justify diverging from RAVEN.
+    The default ``evalue`` of 1e-3 equals DIAMOND's own default, which MATLAB
+    RAVEN's ``getDiamond`` uses because it passes no ``--evalue``. ``run_blast``
+    uses 1e-4, following ``getBlast``. Neither cutoff has been calibrated
+    against data, unlike the KO-assignment cutoffs of
+    :func:`~raven_toolbox.reconstruction.kegg.assign_kos`, where measurement justified
+    diverging from RAVEN.
     """
     model_ids = list(model_ids)
     ref_fastas = _as_list(ref_fastas)
@@ -171,7 +172,7 @@ def run_diamond(
 
 
 def blast_from_table(source: str | Path | pd.DataFrame) -> pd.DataFrame:
-    """Load a precomputed homology hits table (CSV path or DataFrame, not Excel).
+    """Load a precomputed homology hits table from a CSV path or a DataFrame (not Excel).
 
     Must contain the ``HIT_COLUMNS`` columns.
     """

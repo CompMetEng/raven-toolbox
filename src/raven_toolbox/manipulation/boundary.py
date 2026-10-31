@@ -1,11 +1,11 @@
-"""Close a model's exchange reactions for metabolic-task checking (RAVEN ``closeModel``)."""
+"""Close the exchange reactions of a model for metabolic-task checking (RAVEN ``closeModel``)."""
 from __future__ import annotations
 
 import cobra
 
 
 def _is_boundary_reaction(rxn: cobra.Reaction) -> bool:
-    """Whether ``rxn`` has metabolites on only one side (RAVEN's rule, matching ``getExchangeRxns``)."""
+    """Whether ``rxn`` has metabolites on only one side (the rule of ``getExchangeRxns``)."""
     coeffs = list(rxn.metabolites.values())
     if not coeffs:
         return False
@@ -13,19 +13,19 @@ def _is_boundary_reaction(rxn: cobra.Reaction) -> bool:
 
 
 def close_model(model: cobra.Model) -> cobra.Model:
-    """Return a copy with the exchange reactions closed, RAVEN ``closeModel``-style.
+    """Return a copy of ``model`` with the exchange reactions closed.
 
-    RAVEN's ``closeModel`` adds a boundary metabolite to every reaction with metabolites on
-    only one side — no substrates or no products, an exchange / sink / demand reaction —
-    balancing it against a boundary metabolite so it can no longer carry flux. After it, a
-    metabolic task's inputs and outputs are defined *solely* by the task constraints (as
-    ``checkTasks`` assumes), not by leftover open exchanges.
+    Every reaction with metabolites on only one side (no substrates or no products: an
+    exchange, sink or demand reaction) gets the bounds (0, 0) and can no longer carry flux.
+    RAVEN's ``closeModel`` closes the same reactions by balancing each one with a boundary
+    metabolite. After closing, the inputs and outputs of a metabolic task are set by the task
+    constraints only, as ``checkTasks`` assumes, and no open exchange reactions remain.
 
-    This closes exactly that set of reactions, which for a single-metabolite reaction is the
-    same set as cobra's own ``Reaction.boundary``, but also includes a reaction that consumes
-    or produces several metabolites at once without a balancing side.
+    For a reaction with a single metabolite, the set equals cobra's ``Reaction.boundary``; the
+    set also includes a reaction that consumes or produces several metabolites without a
+    balancing side.
 
-    Modifies a copy; the original is untouched.
+    The input model is not modified.
     """
     out = model.copy()
     close_model_in_place(out)

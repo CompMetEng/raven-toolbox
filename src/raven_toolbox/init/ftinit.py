@@ -1,54 +1,57 @@
-"""The ftINIT MILP — the faster staged variant of INIT.
+"""The ftINIT MILP, the faster staged variant of INIT.
 
-ftINIT keeps tINIT's objective — pick the reaction subset best matching expression
-scores while staying flux-consistent — but with a cheaper MILP encoding that is the
-reason it is *fast*: a **positive-score reaction needs no binary**. Because the
-objective *maximises* ``Σ score·y`` with ``score > 0``, the optimiser pushes its
-continuous indicator ``y ∈ [0,1]`` to 1, and the gate ``net_flux ≥ force_on·y`` only
-lets ``y`` reach 1 if the reaction can actually carry flux. Only *negative*-score
-reactions need a true ``{0,1}`` binary (their indicator would otherwise sit at 0 for
-free). This roughly halves the integer count — the dominant MILP cost.
+ftINIT keeps the objective of tINIT, which picks the reaction subset that best matches the
+expression scores while staying flux-consistent. Its MILP encoding is cheaper because a
+positive-score reaction needs no binary. The objective maximises ``Σ score·y`` with
+``score > 0``, so the optimiser pushes the continuous indicator ``y ∈ [0,1]`` to 1, and the
+gate ``net_flux ≥ force_on·y`` lets ``y`` reach 1 only if the reaction can carry flux. Only
+negative-score reactions need an on/off binary ``{0,1}``, because their indicator would
+otherwise be 0 at no cost. The integer variables are these on/off binaries and the direction
+binaries of reversible reactions with a positive score or a metabolomics producer role.
 
-Reaction categories (RAVEN's six), by score sign × reversibility:
+Reaction categories (RAVEN's six), by score sign and reversibility:
 
-* **score 0** — left in the model, *not* in the problem: a free flux variable that can
-  carry flux for connectivity but is neither scored nor removable.
-* **positive, irreversible** — continuous ``y∈[0,1]``; ``v ≥ force_on·y``. No binary.
-* **positive, reversible** — split ``v = v⁺ − v⁻``; continuous ``y``; a single
-  direction binary keeps one of ``v⁺/v⁻`` at 0 (no fwd/back loop faking "on");
-  ``v⁺+v⁻ ≥ force_on·y``.
-* **negative, irreversible** — binary ``x∈{0,1}``; ``v ≤ ub·x``.
-* **negative, reversible** — split; binary ``x``; ``v⁺+v⁻ ≤ cap·x``.
-* **essential** — forced on (``v ≥ force_on_ess``); no indicator. Assumed already
-  oriented irreversible in its forced direction (``prepINITModel`` does this).
+* score 0: left in the model, not in the problem. The flux variable is free; the
+  reaction can carry flux for connectivity but is neither scored nor removable.
+* positive, irreversible: continuous ``y∈[0,1]``; ``v ≥ force_on·y``. No binary.
+* positive, reversible: split ``v = v⁺ − v⁻``; continuous ``y``; a single
+  direction binary keeps one of ``v⁺`` and ``v⁻`` at 0 (a forward and backward
+  loop cannot count as "on"); ``v⁺+v⁻ ≥ force_on·y``.
+* negative, irreversible: binary ``x∈{0,1}``; ``v ≤ M·x``, with ``M`` the big-M of the
+  reaction (see below).
+* negative, reversible: split; binary ``x``; ``v⁺+v⁻ ≤ M·x``.
+* essential: forced on (``v ≥ force_on_ess``); no indicator. The reaction is assumed to
+  be oriented irreversibly in its forced direction (``prepINITModel`` does this).
 
-Objective: **maximise** ``Σ score·indicator`` (``+ Σ prod_weight·mon`` when
-``metabolomics`` is given). ftINIT does **not** reward production of every metabolite by
-default — ``prod_weight`` applies only to metabolomics-detected metabolites, each getting
-one continuous ``mon`` variable capped by the sum of its producers' own indicators (see
-``run_ftinit``'s docstring). Connectivity otherwise comes solely from the flux gates plus
-any essential reactions. ``allow_excretion`` relaxes ``S·v = 0`` to ``≥ 0``; ``rem_pos_rev``
+Objective: maximise ``Σ score·indicator`` (``+ Σ prod_weight·mon`` when
+``metabolomics`` is given). The objective has no term for the production of metabolites in
+general: ``prod_weight`` applies only to metabolomics-detected metabolites, each with one
+continuous ``mon`` variable capped by the sum of its producers' own indicators (see the
+docstring of ``run_ftinit``). Connectivity otherwise follows from the flux gates and the
+essential reactions. ``allow_excretion`` relaxes ``S·v = 0`` to ``≥ 0``; ``rem_pos_rev``
 drops positive reversible reactions from the problem (used in the staging schedule).
 
-Needs a MILP solver (cobra's configured optlang solver; only Gurobi is fully viable at
-genome scale — see the `INIT solver benchmark
+Needs a MILP solver (cobra's configured optlang solver). In the `INIT solver benchmark
 <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md>`_
-on raven-docs). Magic numbers (``force_on``/``force_on_ess`` = 0.1, ``big_m`` = 1000) are
-exposed and scale-dependent; calibration tables are in the `INIT parameter calibration
+on raven-docs (Human-GEM, one cell line), Gurobi completed the full pipeline in 92 s; GLPK
+completed it in 2182 s with both main steps stopped at the time limit (Jaccard index 0.892
+against the Gurobi result); optlang's ``scipy`` interface failed because it handles
+continuous variables only. The constants ``force_on`` and ``force_on_ess`` (default 0.1) and
+``big_m`` (default 1000) are parameters whose values depend on the scale of the model; calibration
+tables are in the `INIT parameter calibration
 study
 <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
 on raven-docs. Each scored reaction's on/off (direction) constraints use its own big-M,
 as RAVEN's ``ftINITInternalAlg`` does: its flux capacity ``max(min(ub, big_m),
 min(-lb, big_m), 0)`` (an infinite bound counts as ``big_m``), raised to ``force_on`` so
-the "on" floor stays feasible. ``big_m`` is therefore the cap on that capacity, not a
-fixed constant. Free / essential reactions keep their real bounds.
+that the "on" floor stays feasible. ``big_m`` is therefore the cap on that capacity. Free and
+essential reactions keep their real bounds.
 
-⚠️ **Loops.** The MILP has *no* loopless constraint: an internal
-thermodynamically-infeasible cycle is flux-consistent (``S·v = 0``), so if its
-reactions carry positive net score the optimiser will "include" them with no real
-exchange flux. RAVEN tolerates this — loop-free models come from the staged pipeline
-+ exchange handling, and at genome scale real exchange reactions make such cycles not
-score-optimal. A loopless option could be layered on later if needed.
+Loops. The MILP has no loopless constraint. An internal thermodynamically infeasible
+cycle satisfies ``S·v = 0``, so if its reactions carry positive net score the optimiser
+includes them with no real exchange flux. RAVEN's ``ftINITInternalAlg`` adds no loopless
+constraint either: loop-free models come from the staged pipeline and the exchange handling,
+and at genome scale real exchange reactions make such cycles not score-optimal.
 """
 from __future__ import annotations
 
@@ -155,99 +158,112 @@ def run_ftinit(
 ) -> FtInitResult:
     """Run the single-step ftINIT MILP and return the extracted model.
 
-    ``rxn_scores`` maps reaction id → score (default 0 → reaction left free in the
-    model, not scored or removable). ``essential_rxns`` are forced to carry flux
-    (≥ ``force_on_ess``, overridable per reaction via ``essential_force``);
-    ``essential_directions`` maps an essential reaction id to ``+1`` (forward) or
-    ``-1`` (reverse) for the forced direction (default forward). ``ignore_mets`` are
-    metabolite **names** whose mass balance is dropped (RAVEN's per-step "simple
-    metabolite" removal, e.g. H2O/H+). See the module docstring for the formulation.
-    This is the single-step variant; the staged schedule
-    (:func:`raven_toolbox.init.ftinit`) calls it per step.
+    ``rxn_scores`` maps reaction id to score (a reaction without a score has score 0 and is
+    left free in the model, neither scored nor removable). ``essential_rxns`` are forced to
+    carry flux (at least ``force_on_ess``, clamped to the reaction's capacity in the forced
+    direction, that is ``ub`` forward and ``-lb`` reverse, and overridable per reaction via
+    ``essential_force``); ``essential_directions`` maps an essential reaction id
+    to ``+1`` (forward) or ``-1`` (reverse) for the forced direction (default forward).
+    ``ignore_mets`` are metabolite names whose mass balance is dropped (RAVEN's per-step
+    "simple metabolite" removal, for example H2O and H+). The module docstring describes the
+    formulation. :func:`raven_toolbox.init.ftinit` calls this function once per step of its
+    staged schedule.
 
-    ``mip_gap`` / ``time_limit``: the default ``None`` uses the solver's own
-    defaults (Gurobi: MIPGap≈1e-4, no time cap), which is fine for a single step
-    — solve time here is dominated by model construction, so a tight gap is
-    nearly free (measured on genome-scale Human-GEM, see the `INIT parameter
-    calibration study
+    ``mip_gap`` and ``time_limit``: the default ``None`` leaves the solver defaults (Gurobi:
+    MIPGap≈1e-4, no time limit). ``mip_gap`` is applied on Gurobi only, and a named series of
+    :func:`raven_toolbox.init.ftinit` ignores it (every step has its own run schedule), so it
+    acts on a step without a schedule. In a single step-0 solve of Human-GEM (one cell line;
+    `INIT parameter calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
-    on raven-docs). For the genome-scale staged
-    schedule (:func:`raven_toolbox.init.ftinit`), an essential-forced step can
-    run away without a cap (one severely-degraded case ran >75 min unbounded);
-    set ``time_limit`` ≈120-600 s/step, and loosen ``mip_gap`` to ``0.01`` (or
-    ``0.005``) for a ~37% speedup at ≥0.99 Jaccard vs. the tight-gap model.
+    on raven-docs) the solve took 24 to 25 s for every ``mip_gap`` from 0.0002 to 0.1, and the
+    Jaccard index of the reaction set against the one from ``mip_gap`` 0.0002 fell below 0.97
+    from ``mip_gap`` 0.03. ``time_limit`` bounds each solve in seconds. Without it the solve
+    runs until the gap is met; in the same study the task gap-fill MILP of one model built from
+    expression data with 90% of the genes set to zero ran more than 75 min without a bound.
 
-    ``prove_abs_gap``, when set, proves the solve to this fixed absolute objective
-    gap instead of a relative ``mip_gap``/``mip_gap_abs`` — see the ``prove_abs_gap``
-    parameter of :func:`ftinit` for when to use it (recommended value: ``1.0``).
+    ``mip_gap_abs``, when set and ``prove_abs_gap`` is None, adds an estimate solve before the
+    final solve (limited to ``max(1, min(time_limit // 10, 30))`` s when ``time_limit`` is
+    set). On Gurobi, if the estimate objective ``obj`` is non-zero (step-2 objectives are
+    negative), the final solve uses the relative gap
+    ``min(max(mip_gap or 0, mip_gap_abs / |obj|), 1)``, which is RAVEN's AbsMIPGap/|objVal|.
 
-    ``resolve_ties`` (opt-in, default off to preserve RAVEN parity) resolves the MILP's
-    degeneracy deterministically: after the score optimum is found, a lexicographic
-    phase 2 holds the objective and minimises the id-ordered count of "on" reactions, so
-    the kept set is the sparsest optimum found, independent of solver seed/version,
-    instead of an arbitrary tie-break. At genome scale the phase-2 solves themselves can
-    exhaust ``time_limit``; when that happens the (still-adopted) incumbent is an
-    unproven tie-break and a warning is raised. The tie-break is skipped when the primary
-    solve itself stops at ``time_limit``, since there is then no proven optimum to hold.
-    Phases 2a and 2b get half of ``time_limit`` each (rounded down, at least 1 s).
-    After them, the reported ``fluxes`` are a least-total-flux solution for the selected on
-    set (:func:`_min_abs_flux`) and, among those, the one with the least id-rank-weighted
-    backward flux (:func:`_min_backward_flux`), each with the full ``time_limit``. When one
-    of these two flux phases finds no solution, the fluxes of the phase before it are kept
-    and a warning is raised. See :func:`_resolve_ties`.
+    ``prove_abs_gap``, when set, proves the solve to this fixed absolute objective gap
+    (on Gurobi: ``MIPGap`` 0 and ``MIPGapAbs`` this value); ``mip_gap`` and ``mip_gap_abs``
+    do not apply then. In the four-seed sweep (seeds 1234, 7, 1 and 2; ``resolve_ties=True``;
+    no gap-fill; Human-GEM v2.0.0-38, one cell line) the default escalation returned a step-1
+    objective 4.0 to 12.0 below the proven optimum without a warning, while every value from
+    2.0 to 0.05 reached the optimum for all four seeds and gave the same reaction sets. Every
+    step solve (the 48 primary solves) ended with status ``optimal``; the flux phases
+    ``phase2c-minflux`` (3 of 4 seeds) and ``phase2d-direction`` (4 of 4 seeds) reached the
+    time limit and were adopted as unproven incumbents. The docstring of :func:`ftinit` gives
+    the measured run times.
 
-    ``rank_keys`` maps a reaction id to the key the id-rank phases of ``resolve_ties``
-    sort it by (default: the id itself). :func:`ftinit` passes the smallest original
-    reaction id of each merge group, so the order does not depend on which member names
-    the merged reaction.
+    ``resolve_ties`` (opt-in; the default False gives RAVEN's result) resolves the degeneracy
+    of the MILP deterministically. After the score optimum is found, a lexicographic phase 2
+    holds the objective and minimises the number of kept negative-score reactions (phase 2a),
+    then their summed id rank (phase 2b). The kept set is the sparsest optimum found,
+    independent of the solver seed and version, where otherwise the solver returns an
+    arbitrary tie-break. At genome scale the phase-2 solves can exhaust ``time_limit``; the
+    incumbent is then an unproven tie-break and a warning is issued. The tie-break is skipped
+    when the primary solve itself stops at ``time_limit``, because there is no proven optimum
+    to hold. Phases 2a and 2b get half of ``time_limit`` each (rounded down, at least 1 s).
+    After them, the reported ``fluxes`` are a least-total-flux solution for the selected on set
+    (:func:`_min_abs_flux`) and, among those, the one with the least id-rank-weighted backward
+    flux (:func:`_min_backward_flux`), each with the full ``time_limit``. When one of these two
+    flux phases finds no solution, the fluxes of the phase before it are kept and a warning is
+    issued. See :func:`_resolve_ties`.
 
-    ``_pin_fluxes`` (default true) is set by :func:`ftinit`, not by callers: false in its
-    last step, whose fluxes no later step reads. ``resolve_ties`` then skips phases 2c and
-    2d and the reported ``fluxes`` are those of phase 2b.
+    ``rank_keys`` maps a reaction id to the key by which the id-rank phases of ``resolve_ties``
+    sort it (default: the id itself). :func:`ftinit` passes the smallest original reaction id
+    of each merge group, so the order does not depend on which member names the merged
+    reaction.
 
-    ``metabolomics`` (already in **this model's** id space — :func:`ftinit` resolves a
-    caller-facing metabolite-name list into this once) maps a detected-metabolite label
-    to the set of reaction ids that produce it. A metabolite's ``mon`` indicator
-    (continuous, ``[0, 1]``) is capped by the sum of its producers' own indicators and
-    contributes ``prod_weight`` to the objective when any producer is on — the reward
-    for keeping (or bringing back) a reaction the data itself scored badly, purely
-    because it makes a detected metabolite producible. A producer with score 0 is
-    pulled into the problem (given a continuous indicator, contributing nothing itself)
-    so it has something for ``mon`` to reference; a negative-score producer's indicator
-    gets an added flux *floor* (mirroring what a positive reaction already has), so "on"
-    means the reaction genuinely carries flux, not merely that it is permitted to. A
-    detected metabolite is dropped silently if any of its producers is already in
-    ``essential_rxns`` — it will be produced regardless (RAVEN
-    ``ftINITInternalAlg.m:106-111``). This does not verify the metabolite is actually
-    net-produced through that specific reaction, only that the reaction is "on"; a
-    reaction whose real network role is consumption can still earn the bonus if it ends
-    up carrying flux in reverse (RAVEN's own documented trade-off — the rest of the
-    network's mass balance is trusted to make the "on" flag meaningful).
+    ``_pin_fluxes`` (default True) is set by :func:`ftinit`: it is False in the last step,
+    whose fluxes no later step reads. ``resolve_ties`` then skips phases 2c and 2d, and the
+    reported ``fluxes`` are those of phase 2b.
 
-    ``prod_weight`` is the per-metabolite reward in ``metabolomics``'s ``mon`` terms
-    (RAVEN's ``ftINITInternalAlg`` default when unset; ``ftINIT.m`` itself calls it with
-    5). Unused when ``metabolomics`` is not given.
+    ``metabolomics`` is in the id space of this model (:func:`ftinit` resolves a list of
+    metabolite names into this form once). It maps a detected-metabolite label to the set of
+    reaction ids that produce it. The ``mon`` indicator of a metabolite (continuous,
+    ``[0, 1]``) is capped by the sum of its producers' own indicators and contributes
+    ``prod_weight`` to the objective when any producer is on. This rewards keeping (or bringing
+    back) a reaction that the data scored badly, because it makes a detected metabolite
+    producible. A producer with score 0 is added to the problem (it gets a continuous
+    indicator and contributes nothing itself) so that ``mon`` has an indicator to reference.
+    The indicator of a negative-score producer gets a flux floor (as a positive reaction
+    already has), so "on" means that the reaction carries flux. A detected metabolite is
+    dropped without a warning if any of its producers is in ``essential_rxns``, because it is
+    produced regardless (RAVEN ``ftINITInternalAlg.m:106-111``). The bonus requires that a
+    producer is "on" and does not verify that the metabolite is net-produced through it: a
+    reaction that consumes the metabolite on net can earn the bonus if it carries flux in
+    reverse (a documented trade-off of RAVEN; the mass balance of the rest of the network
+    makes the "on" flag meaningful).
+
+    ``prod_weight`` is the reward per metabolite in the ``mon`` terms of ``metabolomics``. The
+    default 0.5 is the default of RAVEN's ``ftINITInternalAlg`` when the argument is empty. It
+    is unused when ``metabolomics`` is not given.
 
     ``seed`` is Gurobi's ``Seed`` parameter (RAVEN's 1234). The MILP is degenerate, so the
-    seed picks which of many equal-score optima the solver returns; varying it is the cheap
-    way to probe how much of a result rests on the tie-break rather than on the data.
+    seed selects which of many equal-score optima the solver returns. Varying it measures the
+    dependence of a result on the tie-break.
 
     ``feas_tol``, ``opt_tol`` and ``int_feas_tol`` are Gurobi's ``FeasibilityTol``,
     ``OptimalityTol`` and ``IntFeasTol`` (RAVEN's 1e-9 each, Gurobi's minimum; Gurobi's own
     defaults are 1e-6, 1e-6 and 1e-5), and ``presolve`` is Gurobi's ``Presolve`` (RAVEN's 2).
-    They are RAVEN parity settings: they steer which optimal vertex the degenerate MILP lands
-    on and how binaries round at the 0.5 on/off cut. An "off" binary may sit at up to
+    They are RAVEN parity settings: they determine which optimal vertex the solver returns
+    for the degenerate MILP and how binaries round at the 0.5 on/off cut. Changing them
+    changes the optimum returned and the run time. An "off" binary can have a value up to
     ``int_feas_tol`` and still permit flux up to its reaction's big-M times ``int_feas_tol``,
-    so relaxing ``int_feas_tol`` loosens the on/off gate in proportion to that big-M. Their effect on
-    runtime and on the extracted model has not been benchmarked; leave them at the defaults
-    unless you are measuring that.
+    so a larger ``int_feas_tol`` loosens the on/off gate in proportion to that big-M. The
+    studies on raven-docs ran at the defaults; the effect of other values on the run time and
+    on the extracted model has not been benchmarked.
 
-    ``threads`` is Gurobi's ``Threads`` (RAVEN's 1). Raising it speeds the solve but
-    **forfeits reproducibility**: multi-threaded Gurobi races between equal optima, so two
-    runs of the same input can return different reaction sets. Left at 1 unless a caller
-    knowingly trades determinism for speed. Measured to have no effect on the *swing*
-    between different seeds (raising it is not a substitute for ``resolve_ties``) — see the
-    `ftINIT reproducibility study
+    ``threads`` is Gurobi's ``Threads`` (RAVEN's 1). More threads can shorten the solve, and
+    with more than one thread two runs of the same input can return different reaction sets,
+    because multi-threaded Gurobi chooses between equal optima non-deterministically. The
+    studies on raven-docs ran with one thread. The number of threads has no measured effect on
+    the spread between different seeds, so it does not replace ``resolve_ties``; see
+    the `ftINIT reproducibility study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
     on raven-docs.
     """
@@ -571,40 +587,40 @@ def _has_solution(opt) -> bool:
 def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit, rank_key) -> bool:
     """Pin ftINIT's degenerate optimum to a single, reproducible solution (on ``opt``).
 
-    The ftINIT MILP is highly degenerate: many reaction subsets reach the same score
-    optimum and the solver returns an arbitrary one — reproducible for a fixed solver
-    build + seed, but fragile to the Gurobi version or platform (a changed tie-break
-    moves ~1-2% of the kept reactions, which flips a handful of gene-essentiality calls).
+    Many reaction subsets reach the same score optimum of the ftINIT MILP, and the solver
+    returns one of them. The choice is reproducible for a fixed solver build and seed, and can
+    change with the Gurobi version, the platform or the seed. In the determinism study
+    (Human-GEM v2.0.0-38, one cell line) two seeds gave kept-reaction sets that differ by 110
+    reactions and 17 predicted essential genes.
 
-    This runs a lexicographic phase 2, holding the score objective at its optimum with a
-    floor constraint: first minimise the count of kept removable reactions (the sparsest
-    optimum), then, among the sparsest, minimise their summed id rank (prefer lower ids;
-    ``rank_key`` maps a reaction id to the key it is ranked by). The result is a stable,
-    near-unique optimum independent of seed/solver version *when
-    both phases converge* — see the caveat below. ``opt`` is left holding the phase-2
-    solution, which the caller reads for the "on" set and fluxes; the reported objective
-    stays the phase-1 ``primary`` value.
+    The function runs a lexicographic phase 2 that holds the score objective at its optimum
+    with a floor constraint: first it minimises the count of kept removable reactions (the
+    sparsest optimum), then, among the sparsest, their summed id rank (lower ids preferred;
+    ``rank_key`` maps a reaction id to the key by which it is ranked). The result is a stable,
+    near-unique optimum independent of seed and solver version when both phases converge;
+    see the caveat below. ``opt`` is left holding the phase-2 solution, which the caller reads
+    for the "on" set and fluxes; the reported objective stays the phase-1 ``primary`` value.
 
     Only the negative-score reactions carry a true 0/1 "keep" binary (the positive
     indicators are continuous and pinned near 1 by the score objective), so the two phases
-    run over those: their count and id-sum are integers, provable with a cheap absolute gap
-    below 1 rather than the near-full proof a tiny relative gap would need. This resolves
-    the removable-reaction choices, the genuine seed-fragile degeneracy. The flux
-    distribution, which the staged schedule reads for the next step's forced directions and
-    ``ess_force`` clamp, is pinned afterwards by :func:`_min_abs_flux`.
+    run over those. Their count and id sum are integers, so an absolute gap below 1 (0.4) proves
+    the optimum of each phase. These phases resolve the
+    choice among removable reactions, which is the seed-dependent degeneracy. The flux
+    distribution, which the staged schedule reads for the forced directions and the
+    ``ess_force`` clamp of the next step, is pinned afterwards by :func:`_min_abs_flux`.
 
-    Caveat, measured on genome-scale Human-GEM (not visible at toy/unit-test scale, where
-    both phases prove in milliseconds): the phases can themselves exhaust ``time_limit``,
-    in which case the incumbent adopted is an *unproven* tie-break — it still measurably
-    reduces the run-to-run spread relative to no tie-break at all, but it is no longer a
-    guarantee. A warning is raised when this happens; see the `ftINIT reproducibility
+    Caveat, measured on genome-scale Human-GEM (both phases prove in milliseconds at toy or
+    unit-test scale): the phases can exhaust ``time_limit``, in which case the incumbent
+    adopted is an unproven tie-break. It reduces the run-to-run spread relative to no
+    tie-break at all, and it does not guarantee a unique result. A warning is issued when this
+    happens; see the `ftINIT reproducibility
     study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
     on raven-docs.
 
     Returns ``True`` if phase 2 produced a usable solution (the caller then reads the
     resolved "on" set and fluxes), ``False`` if it did not converge to an incumbent (the
-    caller keeps the phase-1 optimum). Best-effort: it never fails the extraction.
+    caller keeps the phase-1 optimum). It never fails the extraction.
     """
     binaries = {rid: ind for rid, (ind, score) in indicators.items() if score < 0}
     if not binaries:  # only positive / free reactions: no removable tie to resolve
@@ -665,16 +681,15 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit, rank_key
 def _min_abs_flux(opt, prob, indicators, flux_terms, time_limit):
     """Phase 2c of ``resolve_ties``: the least total absolute flux for the tie-broken on set.
 
-    Phases 2a/2b fix which reactions are on but leave the flux distribution free, and the
+    Phases 2a and 2b fix which reactions are on and leave the flux distribution free, and the
     staged schedule reads that distribution: the next step forces a reversible reaction in
     the direction of its flux and at ``min(0.99·|flux|, force_on)``. This phase holds the
     on/off state of every indicator (a binary at its value; a continuous indicator that is
     on keeps at least its value, one that is off at most its value) and minimises
-    ``Σ|v|`` over all reactions, so the flux read-out comes from a minimal-flux solution
-    rather than from whichever vertex the solver happened to reach. Directions of
-    reversible scored reactions stay free, so the phase is still a MILP; it stops at a
-    relative or absolute gap of 1e-6, with the full ``time_limit`` as its budget (as RAVEN's
-    phase 2c).
+    ``Σ|v|`` over all reactions. The flux read-out then comes from a minimal-flux solution
+    and not from the vertex the solver happened to reach. The directions of reversible scored
+    reactions stay free, so the phase is a MILP; it stops at a relative or absolute gap of
+    1e-6, with the full ``time_limit`` as its budget (as RAVEN's phase 2c).
 
     Returns ``(abs_expr, total, free_sign)`` if it produced a usable solution (the caller
     then reads its fluxes): the ``Σ|v|`` expression, its value and the ids of the
@@ -742,9 +757,9 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
     value plus ``max(1e-7·Σ|v|, 1e-6)``, and minimises ``Σ w·max(0, -v)`` over the reactions
     whose flux can take either sign. The weight is the reaction's id rank from the end:
     sorted by ``rank_key``, the first of ``n`` reactions gets ``n`` and the last ``1``, so a
-    reaction with a lower id prefers its forward direction. On Gurobi the phase-2c solution
-    is its MIP start, as the tight cap on ``Σ|v|`` leaves the solver's heuristics little
-    room to find a first solution. It stops at a relative or absolute gap of 1e-6, with
+    reaction with a lower id prefers its forward direction. On Gurobi the phase-2c solution is
+    the MIP start, because the tight cap on ``Σ|v|`` limits the first solutions that the
+    solver's heuristics can find. The phase stops at a relative or absolute gap of 1e-6, with
     the full ``time_limit`` as its budget.
 
     Returns ``True`` if it produced a usable solution (the caller then reads its fluxes),
@@ -802,11 +817,11 @@ def _min_backward_flux(opt, prob, flux_terms, abs_expr, total, free_sign, rank_k
 
 
 def _nudge_scores(rxn_scores: Mapping[str, float]) -> dict[str, float]:
-    """Push tiny reaction scores off zero (RAVEN ``ftINIT.m:160-161``).
+    """Set scores near zero to -0.1 or 0.1 (RAVEN ``ftINIT.m:160-161``).
 
-    Scores in ``(-0.1, 0]`` become ``-0.1`` and in ``(0, 0.1)`` become ``0.1`` — near-zero
-    scores cause the MILP numerical trouble. Exactly-zero scores become ``-0.1`` (scored,
-    removable) here; genuinely ignore-masked reactions are set back to 0 afterwards by
+    Scores in ``(-0.1, 0]`` become ``-0.1`` and scores in ``(0, 0.1)`` become ``0.1``, because
+    near-zero scores cause numerical problems in the MILP. Exactly-zero scores become ``-0.1``
+    (scored, removable) here; ignore-masked reactions are set back to 0 afterwards by
     :func:`group_rxn_scores`.
     """
     nudged: dict[str, float] = {}
@@ -820,23 +835,19 @@ def _nudge_scores(rxn_scores: Mapping[str, float]) -> dict[str, float]:
 
 
 def _metabolomics_producers(prep, metabolomics: Iterable[str]) -> dict[str, set[str]]:
-    """Map each detected metabolite name to its producer reactions in ``prep.min_model``'s
-    (merged) id space.
+    """Map each detected metabolite name to its producer reactions in the (merged) id space of
+    ``prep.min_model``.
 
     A producer is any ``prep.ref_model`` reaction with a positive stoichiometric
-    coefficient for a metabolite of that name, or any *reversible* reaction with a
-    negative one (a producer when run in reverse) — RAVEN's own rule
-    (``ftINIT.m:129-152``). Matching is by metabolite *name* (case-insensitive), not id,
-    unioning across every metabolite that shares it (e.g. the same compound in several
-    compartments) — also RAVEN's rule. Translated through the merge groups the same way
-    the (since-removed) ``reference_reactions`` anchoring did: a merged reaction counts
-    as a producer if *any* of its original members does — the conservative reading,
-    since a group's representative id is otherwise an implementation detail the caller
-    should not need to know.
+    coefficient for a metabolite of that name, or any reversible reaction with a
+    negative one (a producer when run in reverse), which is RAVEN's rule
+    (``ftINIT.m:129-152``). Matching is by metabolite name (case-insensitive), not id,
+    and unions across every metabolite that shares the name (for example the same compound in
+    several compartments), which is also RAVEN's rule. A merged reaction counts as a producer
+    if any of its original members is one.
 
-    Warns (does not raise) for a name matching no metabolite at all — likely a typo or a
-    name from an unrelated model. A name matching a metabolite with no producer at all is
-    not warned about: legitimately nothing to reward, not a usage error.
+    Warns (does not raise) for a name that matches no metabolite at all. A name that matches
+    a metabolite with no producer gives no warning.
     """
     ref = prep.ref_model
     by_name: dict[str, list] = {}
@@ -887,11 +898,13 @@ def _solve_step(
     """Solve one ftINIT step, following RAVEN's multi-run gap-escalation schedule.
 
     RAVEN (``ftINIT.m:227-283``) runs a step up to ``len(step.milp_runs)`` times: run 1 at
-    a flat relative gap; each later run at ``max(mip_gap, abs_gap/|obj|)`` — the absolute
-    gap made relative, which is safe when the step's objective is near zero — breaking as
-    soon as the previous run's achieved gap already meets the next (looser) target. A
-    caller ``time_limit`` caps each run's own limit. With no schedule (``step.milp_runs``
-    empty, as in an ad-hoc step) this is a single solve at the caller's gap.
+    a flat relative gap, and each later run at ``max(run mip_gap, abs_gap/|obj|)`` (capped at
+    1), which is the absolute gap made relative and is safe when the objective of the step is
+    near zero. The runs stop as soon as the achieved gap of the previous run meets the target
+    of the next (looser) run. A caller ``time_limit`` caps the time limit of each run. With no
+    schedule (``step.milp_runs`` empty, as in an ad-hoc step) the step is a single solve at the
+    caller's gap. With ``prove_abs_gap`` the step is a single solve proven to that absolute
+    gap.
     """
     def _run(mg, mga, tl, prove=None):
         return run_ftinit(
@@ -972,112 +985,122 @@ def ftinit(
     presolve: int = _EXTRACT_PRESOLVE,
     verbose: bool = False,
 ) -> cobra.Model:
-    """Run the full ftINIT pipeline on prepData and return the context-specific model.
+    """Run the full ftINIT pipeline on ``prep`` and return the context-specific model.
 
     ``prep`` is a :class:`raven_toolbox.init.PrepData`. Like RAVEN's ``ftINIT(prepData, tissue,
-    celltype, hpaData, 'transcrData', ...)``, the scores come from ``hpa`` and/or ``transcr``
+    celltype, hpaData, 'transcrData', ...)``, the scores come from ``hpa``, ``transcr`` or both
     for ``tissue`` (and ``celltype``) on the reference model, by :func:`score_for_init`, which
     also takes the scoring options (``no_gene_score``, ``isozyme_scoring``, ``complex_scoring``,
     ``multiple_cell_scoring``, ``hpa_level_scores``, ``data_precedence``). Alternatively pass
-    ``rxn_scores`` (**original** reaction id → score) and no data; ``gene_scores`` then gives
+    ``rxn_scores`` (original reaction id to score) and no data; ``gene_scores`` then gives
     the gene scores for the final pruning. ``remove_genes`` (default true) prunes low-score
-    genes from the GPRs when gene scores exist; ``use_scores_for_tasks`` (default true) uses
-    the reaction scores as weights when fitting the tasks.
-    ``series`` selects which staged schedule to run — see :func:`get_init_steps` for
-    what each option changes (default ``'1+1'``); pass ``steps`` directly to use a
-    custom schedule instead. Each step regroups scores under its ``ignore_mask``, fixes
-    the reactions turned on by earlier steps as essential (in their flux direction), and
-    solves :func:`run_ftinit` on the merged model. Reactions never turned on (and not
-    essential or left-in) are removed from the reference model; exchange reactions are
-    always kept (RAVEN re-adds them).
+    genes from the GPRs when gene scores exist; ``use_scores_for_tasks`` (default true) sets
+    the cost of the reactions added for the tasks from the reaction scores.
+    ``series`` selects which staged schedule to run (see :func:`get_init_steps` for
+    what each option changes; default ``'1+1'``); ``steps`` passes a custom schedule
+    directly. Each step regroups the scores under its ``ignore_mask``, fixes
+    the reactions turned on by earlier steps as essential (in their flux direction) when the
+    step uses ``'essential'``, and solves :func:`run_ftinit` on the merged model. Reactions
+    never turned on (and not essential or left-in) are removed from the reference model;
+    exchange reactions are always kept (RAVEN re-adds them).
 
     If ``fill_gaps`` and ``prep`` carries tasks, reactions are added back so every task
     is feasible (:func:`raven_toolbox.init.fill_tasks`). If ``gene_scores`` is given,
     negative-scoring genes are pruned from the GPRs at the end
     (:func:`raven_toolbox.init.remove_low_score_genes`).
 
-    Essential reactions are forced to carry ``force_on`` (default 0.1) of flux in the
-    forced direction. On genome-scale models a stricter regime is needed (the previous
-    step's actual carried flux instead of a flat 0.1) — exposed via per-reaction
-    ``essential_force`` on :func:`run_ftinit`.
+    An essential reaction is forced to carry ``min(0.99·|carried flux|, force_on)`` in the
+    forced direction, with ``force_on`` (default 0.1). The carried flux of every reaction
+    starts at ``force_on`` and is replaced by the flux of each step after it is solved. This
+    holds for the permanent (prep) essentials too. The per-reaction ``essential_force`` of
+    :func:`run_ftinit` sets the forced magnitude.
 
-    ``metabolomics`` is a list of detected metabolite **names** (case-insensitive,
-    ``prep.ref_model`` metabolite names — matched and unioned across every metabolite
-    sharing that name, e.g. the same compound in several compartments). Each is resolved
-    once, before the step loop, into its producer reactions (translated through the
-    merge groups so the resolution survives the linear merge collapsing them into
-    combined reactions) and rewarded ``prod_weight`` in every step's objective when any
-    producer is on — see :func:`run_ftinit`'s own ``metabolomics``/``prod_weight``
-    docstring for the MILP mechanics and its one caveat (the bonus checks a producer is
-    "on", not that the metabolite is verifiably net-produced through it). A name that
-    matches no metabolite in ``prep.ref_model`` warns rather than silently doing nothing.
-    Ported from RAVEN 3's ``ftINITInternalAlg``. ``big_m`` (default 1000, RAVEN's
-    ``bigMCap``) caps each scored reaction's own big-M, which is otherwise its flux
-    capacity; see :func:`run_ftinit` and the module docstring.
+    ``metabolomics`` is a list of detected metabolite names (case-insensitive,
+    ``prep.ref_model`` metabolite names, matched and unioned across every metabolite
+    sharing that name, for example the same compound in several compartments). Each is
+    resolved once, before the step loop, into its producer reactions (translated through the
+    merge groups, because the linear merge collapses them into combined reactions) and
+    rewarded ``prod_weight`` in the objective of every step when any producer is on. The
+    ``metabolomics`` and ``prod_weight`` description in the docstring of
+    :func:`run_ftinit` gives the MILP mechanics and its one caveat (the bonus checks that a
+    producer is "on", not that the metabolite is net-produced through it). A name that matches
+    no metabolite in ``prep.ref_model`` gives a warning. Ported from RAVEN 3's
+    ``ftINITInternalAlg``. ``big_m`` (default 1000, RAVEN's ``bigMCap``) caps the big-M of each
+    scored reaction, which is otherwise its flux capacity; see :func:`run_ftinit` and the
+    module docstring.
 
     ``mip_gap`` and ``mip_gap_abs`` apply to a step without a run schedule; a step with a
     schedule (every named series, including ``full``) uses the gaps of its own runs
     (``full``: one run at 0.0004 and 10000 s). ``time_limit`` caps the time limit of each
-    run of every step, scheduled or not. On
-    genome-scale models they are essential for tractability — see the `INIT parameter
-    calibration study
+    run of every step, scheduled or not. On genome-scale models, the gaps and the time limit
+    determine whether the MILP is tractable; the `INIT parameter calibration study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
-    on raven-docs for the calibration table.
+    on raven-docs gives the calibration table.
 
-    ``resolve_ties`` and ``prove_abs_gap`` (both opt-in, default off → exact RAVEN
-    behaviour) reduce the arbitrariness of the degenerate MILP's tie-break, yielding a more
-    parsimonious and more *reproducible* extracted model. They do **not** make the model
-    biologically more accurate: the alternative optima they choose among are equally
-    consistent with the expression data, so this only pins *which* optimum is returned. It
-    reduces the fragility of the MILP, not its correctness:
+    ``resolve_ties`` and ``prove_abs_gap`` (both opt-in; the defaults give RAVEN's behaviour)
+    reduce the arbitrariness of the tie-break in the degenerate MILP and give a more
+    parsimonious and more reproducible extracted model. Both parameters change which optimum is
+    returned and not its score; the alternative optima are equally consistent with the
+    expression data:
 
       * ``resolve_ties`` adds a lexicographic phase 2 that selects the sparsest (then
-        lowest-id) optimum, so the degenerate choice is pinned rather than left to the
-        solver — applied both to each extraction step and to the task gap-fill. In each
-        extraction step it then takes the fluxes from the least-total-flux solution for
-        that on set, so the directions and forced magnitudes the next step reads from
-        them do not depend on the solver's vertex either; among those, it prefers the
-        forward direction of the lower-ranked reaction, a merged reaction ranked by the
-        member with the smallest original id. The last step, whose fluxes no step reads,
-        skips these flux phases. A step whose primary solve stops at ``time_limit`` keeps
-        its primary solution without any of these phases.
+        lowest-id) optimum, so the solver does not make the degenerate choice. It applies to
+        each extraction step and to the task gap-fill. In each extraction step it then takes
+        the fluxes from the least-total-flux solution for that on set, so the directions and
+        forced magnitudes that the next step reads from them do not depend on the solver's
+        vertex either; among those, it prefers the forward direction of the lower-ranked
+        reaction, a merged reaction being ranked by the member with the smallest original id.
+        The last step, whose fluxes no step reads, skips these flux phases. A step whose
+        primary solve stops at ``time_limit`` keeps its primary solution without any of these
+        phases.
       * ``prove_abs_gap`` replaces the loose relative-gap escalation with a single solve per
-        step proven to this fixed *absolute* gap, so the kept-set objective is optimal at
-        any scale — not an arbitrary within-gap incumbent. **Try 1.0**: on Human-GEM/DLD1
-        the escalation returns a solution 2.0 below the optimum at the first stage and 4.0
-        below at the second (351 kept reactions instead of 349), while every value in
-        1.0-2.0 proves the true optimum at ~2.4x the runtime. Tighter values are
-        counter-productive — 0.5 and below stop being provable within the time limit and
-        return the same model anyway.
+        step proven to this fixed absolute gap, so the kept-set objective is optimal at
+        any scale and not an arbitrary within-gap incumbent. The sweep ran on Human-GEM
+        v2.0.0-38 with one cell line, four seeds (1234, 7, 1 and 2), ``resolve_ties=True``,
+        no gap-fill and ``time_limit`` 1800 s. The default escalation returned a step-1
+        objective 4.0 to 12.0 below the proven optimum; with seeds 1234 and 7 alone it ended
+        7.0 and 12.0 below, and 4.0 is seed 2. Every value from 2.0 to 0.05 reached the
+        optimum for all four seeds and gave the same reaction sets, so 1.0 lies in the range
+        of equal results; 5.0 stopped 2.0 below the optimum for one seed. Every step solve
+        (the 48 primary solves) ended with status ``optimal``; the flux phases
+        ``phase2c-minflux`` (3 of 4 seeds) and ``phase2d-direction`` (4 of 4 seeds) reached
+        the time limit and were adopted as unproven incumbents. The mean build time was about
+        5770 s at 0.05 against 5640 s at 1.0. The study recommends 1.0 together with
+        ``resolve_ties`` when the seed-to-seed swing of ``resolve_ties`` alone (41 reactions,
+        1 gene here) is too large and the run time is acceptable. The full-pipeline runs of
+        the calibration study used ``time_limit`` 600 s per step and the determinism builds
+        1800 s.
+
+    ``prod_weight`` defaults to 0.5 here, while RAVEN's ``ftINIT.m`` passes 5 to
+    ``ftINITInternalAlg``.
 
     ``seed`` (RAVEN's 1234), ``threads`` (RAVEN's 1) and the solver tolerances
-    ``feas_tol``/``opt_tol``/``int_feas_tol``/``presolve`` (RAVEN's 1e-9 and 2) are
-    forwarded to every step; see :func:`run_ftinit` for what they trade off. Neither
-    ``seed`` nor ``threads`` makes the extraction *stable*
-    under small input changes, which is a separate property — see the `ftINIT
-    reproducibility study
+    ``feas_tol``, ``opt_tol``, ``int_feas_tol`` and ``presolve`` (RAVEN's 1e-9 and 2) are
+    forwarded to every step. Other values of the tolerances and of ``presolve`` change the
+    optimum returned and the run time, and more than one thread makes the result depend on
+    thread timing; the studies on raven-docs ran at the defaults and one thread (see
+    :func:`run_ftinit`). The stability of
+    the extraction under small input changes is a separate property that neither ``seed`` nor
+    ``threads`` determines; see the `ftINIT reproducibility study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
-    on raven-docs. Measured there on Human-GEM/DLD1: ``resolve_ties`` makes repeated builds
-    at a fixed seed identical and halves the seed-to-seed spread in predicted essential
-    genes (16 → 8 flips); its own tie-break phases can exhaust ``time_limit`` at genome
-    scale, in which case it reduces rather than eliminates that spread and raises a
-    warning. Baseline and ``resolve_ties`` on identical inputs already differ by ~10% of
-    essential-gene calls, both fully score-optimal — when comparing models before and
-    after a curation, apply the edit to the extracted model as a control, not only to the
-    template.
+    on raven-docs. Measured there on Human-GEM v2.0.0-38 with one cell line (seeds 1234 and 7,
+    ``time_limit`` 1800 s): the default escalation differs between the seeds by 110 reactions
+    and 17 predicted essential genes. ``resolve_ties`` alone gives identical reaction sets for
+    repeated builds at a fixed seed and differs between the seeds by 41 reactions and 1 gene,
+    at about 3.6 times the run time (about 14 min against 4 min). ``resolve_ties`` with
+    ``prove_abs_gap=1.0`` differs by 1 reaction and 0 genes, at about 26 times the baseline
+    run time (about 100 min). The tie-break phases of ``resolve_ties`` can exhaust
+    ``time_limit`` at genome scale; the spread is then reduced and not eliminated, and a
+    warning is issued.
 
-    ``verbose`` prints one line per staged step and forwards to :func:`fill_tasks` for
-    per-task gap-fill progress (matching RAVEN ``ftINIT``'s console report); silent by
-    default.
+    When models are compared before and after a curation, an edit applied to the template
+    (followed by a new extraction) and the same edit applied to the extracted model are
+    different controls: the new extraction contains the re-selection noise of the MILP in
+    addition to the effect of the edit, while the edit applied to the extracted model changes
+    only the reactions that it touches.
 
-    A stability-anchoring parameter (``reference_reactions``, biasing a re-extraction
-    toward a prior build's reaction choices) was implemented and tested against a real
-    curation here; it helped on one cell line and caused a 5x *increase* in spurious
-    essential-gene drift on another, traced to a network-topology regime swap the
-    reference-matching objective cannot see coming, and was removed. See the
-    `reference_reactions postmortem
-    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-reference-reactions.md>`_
-    on raven-docs for the full account.
+    ``verbose`` prints one line per staged step and is forwarded to :func:`fill_tasks` for
+    per-task gap-fill progress (as RAVEN ``ftINIT``'s console report); default False.
     """
     if rxn_scores is not None:
         if hpa is not None or transcr is not None:

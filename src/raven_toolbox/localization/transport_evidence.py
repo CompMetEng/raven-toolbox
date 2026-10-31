@@ -1,24 +1,24 @@
-"""Evidence-aware transport scoring — turn transporter evidence into per-metabolite transport costs.
+"""Evidence-aware transport scoring: transporter evidence converted to transport costs.
 
-The localisation assignment (:func:`predict_localization`, :func:`assign_compartments`) charges a flat
-cost per inter-compartment transport it must add. Applied blindly that is *indiscriminate*: it drops
-real, functionally essential transporters as readily as spurious ones, because the cost ignores whether
-a transporter actually exists. This module makes the
-cost **evidence-aware**: a transport is cheap when a transporter gene supports it (right substrate,
-right membrane) and pays the full prior otherwise.
+The localisation assignment (:func:`predict_localization`, :func:`assign_compartments`) charges a
+flat cost for each inter-compartment transport it adds. A flat cost ignores whether a transporter
+exists, so a transport with transporter evidence costs as much as one without. This module scales
+the cost of a transport by transporter evidence: a transport is cheap when a transporter gene
+supports it (right substrate, right membrane) and costs the full ``base_cost`` otherwise.
 
     ``transport_cost(metabolite) = base_cost * (1 - evidence(metabolite))``
 
-:func:`evidence_aware_transport_cost` returns exactly the ``{metabolite_base: cost}`` mapping both
-assignment functions already accept as their ``transport_cost`` argument — so no MILP change is needed.
+:func:`evidence_aware_transport_cost` returns the ``{metabolite_base: cost}`` mapping that both
+assignment functions accept as their ``transport_cost`` argument.
 
-Evidence is carrier-general (any transporter family/membrane) and organism-agnostic (sequence-derived;
-the only per-organism input is the proteome). :func:`annotate_proteome` runs the bundled ``hmmsearch``
-(Pfam transporter families) + ``diamond`` (TCDB) back-ends against a proteome FASTA;
-:func:`annotate_transporters` takes a pre-computed table instead. Substrate matching is *coarse-first*
-(family → coarse class), with a finer per-substrate ChEBI layer available via ``ontology``. See
-the `evidence-aware transport scoring design
-<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/transport_evidence_scoring.md>`_ on raven-gecko-parity for the full design.
+Evidence applies to any transporter family and membrane and is derived from sequence; the
+proteome is the only organism-specific input. :func:`annotate_proteome` runs the bundled
+``hmmsearch`` (Pfam transporter families) and ``diamond`` (TCDB) back-ends against a proteome
+FASTA; :func:`annotate_transporters` takes a pre-computed table instead. Substrate matching starts
+from the coarse layer (family to coarse class); the ``ontology`` argument adds a per-substrate ChEBI
+layer. See the `evidence-aware transport scoring design
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/transport_evidence_scoring.md>`_
+on raven-gecko-parity for the full design.
 """
 from __future__ import annotations
 
@@ -50,11 +50,12 @@ __all__ = [
 
 @dataclass(frozen=True)
 class TransporterAnnotation:
-    """Per-gene transporter evidence, from any source (Pfam/hmmer, TCDB/diamond, orthology, or a
-    hand-curated table). ``confidence`` is a 0..1 strength; ``substrate_classes`` are coarse shared
-    classes (e.g. ``"amino_acid"``, ``"sugar"``, ``"organic_acid"``) used to match a transporter to a
-    metabolite it can plausibly carry; ``substrate_chebi`` are the *specific* curated substrate ChEBIs
-    (from TCDB), for the finer ChEBI-ontology match."""
+    """Per-gene transporter evidence from any source (Pfam with ``hmmsearch``, TCDB with
+    ``diamond``, orthology or a hand-curated table). ``confidence`` is a strength from 0 to 1;
+    ``substrate_classes`` are coarse shared classes (for example ``"amino_acid"``, ``"sugar"``,
+    ``"carboxylate"``) that match a transporter to the metabolites it plausibly carries;
+    ``substrate_chebi`` are the specific curated substrate ChEBIs (from TCDB) for the
+    ChEBI-ontology match."""
 
     gene: str
     confidence: float = 0.0
@@ -65,7 +66,7 @@ class TransporterAnnotation:
 
 
 def _default_base(m: cobra.Metabolite) -> str:
-    """Compartment-agnostic metabolite key: strip a trailing ``_<compartment>`` from the id."""
+    """Compartment-independent metabolite key: the id without a trailing ``_<compartment>``."""
     if m.compartment and m.id.endswith(f"_{m.compartment}"):
         return m.id[: -(len(m.compartment) + 1)]
     return m.id
@@ -74,9 +75,9 @@ def _default_base(m: cobra.Metabolite) -> str:
 def default_metabolite_chebi(metabolite: cobra.Metabolite) -> frozenset[str]:
     """ChEBI identifiers from a metabolite's annotation, normalised to ``CHEBI:NNNN``.
 
-    The model-side input to the ChEBI substrate match; pass as ``metabolite_chebi`` to
-    :func:`evidence_aware_transport_cost`. Returns the empty set for an un-annotated metabolite (which
-    then falls back to the coarse class match).
+    This is the model-side input to the ChEBI substrate match and can be passed as
+    ``metabolite_chebi`` to :func:`evidence_aware_transport_cost`. A metabolite without a ``chebi``
+    annotation returns the empty set and is matched by coarse class only.
     """
     ann = metabolite.annotation.get("chebi")
     if not ann:
@@ -106,12 +107,11 @@ def annotate_transporters(
 ) -> dict[str, TransporterAnnotation]:
     """Parse a per-gene transporter-annotation table into :class:`TransporterAnnotation` objects.
 
-    This is the **bring-your-own** path: the table can come from any tool (eggNOG-mapper, InterProScan,
-    a web service); use :func:`annotate_proteome` instead for the bundled ``hmmsearch``/``diamond``
-    back-ends. List
-    columns (``families``, ``substrate_classes``) may be real lists or ``sep``-joined strings. A gene
-    appearing on several rows keeps its highest-confidence annotation and the union of families /
-    substrate classes.
+    The table can come from any tool (eggNOG-mapper, InterProScan, a web service).
+    :func:`annotate_proteome` runs the bundled ``hmmsearch`` and ``diamond`` back-ends instead. The
+    list columns (``families``, ``substrate_classes``) may hold lists or ``sep``-joined strings. A
+    gene that appears on several rows keeps its highest confidence and the union of the families and
+    of the substrate classes.
     """
 
     def _as_set(v) -> frozenset[str]:
@@ -154,7 +154,7 @@ def evidence_aware_transport_cost(
     base_cost: float = 0.5,
     base_metabolite: Callable[[cobra.Metabolite], str] | None = None,
 ) -> dict[str, float]:
-    """Per-metabolite transport cost from transporter evidence, ready to pass as ``transport_cost``.
+    """Per-metabolite transport cost from transporter evidence, for the ``transport_cost`` argument.
 
     For each (compartment-agnostic) metabolite *m*::
 
@@ -162,47 +162,48 @@ def evidence_aware_transport_cost(
                       restricted to genes localised to a compartment where m occurs (membrane gate).
         cost(m)     = base_cost * (1 - evidence(m))
 
-    ``substrate_match`` is 1.0 for a coarse substrate-class overlap and, when an ``ontology`` is given,
-    a graded 0..1 ChEBI roll-up (metabolite ChEBI → the gene's curated substrate ChEBI) that also
-    evidences metabolites the coarse classifier misses. With neither ``substrate_of`` nor ``ontology``
-    the match is compartment-only (every carrier at the right membrane counts).
+    ``substrate_match`` is 1.0 for a coarse substrate-class overlap and, when an ``ontology`` is
+    given, a graded value from 0 to 1 from the ChEBI roll-up (metabolite ChEBI to the curated
+    substrate ChEBI of the gene), which also gives evidence for metabolites that the coarse
+    classifier misses. With neither ``substrate_of`` nor ``ontology``, the match is by compartment
+    only (every carrier at the right membrane counts). A gene without compartments in
+    ``gene_compartments`` is not restricted by the membrane gate.
 
     Parameters
     ----------
     model:
-        the model to cost; every compartment-agnostic metabolite base in it gets an entry in the
+        the model to cost; every compartment-independent metabolite base in it has an entry in the
         result.
     annotation:
         gene -> transporter evidence, as returned by :func:`annotate_transporters` or
         :func:`annotate_proteome`.
     gene_compartments:
-        gene -> predicted compartment ids (the reliable DeepLoc *compartment* calls). A carrier at
-        compartment *X* is taken to support transports across *X*'s boundary.
+        gene -> predicted compartment ids (the DeepLoc compartment calls). A carrier at
+        compartment *X* supports transports across the boundary of *X*.
     substrate_of:
-        metabolite -> its coarse substrate class(es) (e.g. :func:`default_substrate_of`); a class
-        overlap with the gene is full-credit evidence.
+        metabolite -> its coarse substrate class(es) (for example :func:`default_substrate_of`); a
+        class overlap with the gene gives a substrate match of 1.0.
     ontology:
-        a :class:`~.substrate_ontology.SubstrateOntology` enabling the finer, graded ChEBI-substrate
-        match on top of (and filling the gaps of) the coarse classes.
+        a :class:`~.substrate_ontology.SubstrateOntology` that enables the graded ChEBI-substrate
+        match for pairs without a coarse class overlap.
     metabolite_chebi:
-        metabolite -> its ChEBI id(s) for that match (default: :func:`default_metabolite_chebi`, which
-        reads the ``chebi`` annotation).
+        metabolite -> its ChEBI id(s) for the ChEBI match (default:
+        :func:`default_metabolite_chebi`, which reads the ``chebi`` annotation).
     sibling_weight:
-        if > 0, also credit a metabolite that is a *chemical relative* of a curated substrate (shares a
-        near ChEBI ancestor, not under it) at this fraction of a direct hit — trades specificity for
-        recall (0 = off, the default).
+        if > 0, a metabolite that is a chemical relative of a curated substrate (it shares a near
+        ChEBI ancestor and is not below the substrate) also receives evidence, at this fraction of a
+        direct hit. The credit increases recall and lowers specificity (0 disables it; default 0).
     base_cost:
-        the flat cost for an unsupported transport (recovers today's constant behaviour when no gene
-        supports the metabolite).
+        the flat cost of an unsupported transport; a metabolite that no gene supports receives this
+        cost.
     base_metabolite:
-        metabolite -> the compartment-agnostic key to group it under (default: strip a trailing
-        ``_<compartment>`` from the id).
+        metabolite -> the compartment-independent key to group it under (default: the id without a
+        trailing ``_<compartment>``).
 
     Returns
     -------
     dict[str, float]
-        every metabolite base -> cost (unsupported metabolites map to ``base_cost``), so the result
-        is a self-contained ``transport_cost`` mapping.
+        every metabolite base -> cost (unsupported metabolites map to ``base_cost``).
     """
     base_of = base_metabolite or _default_base
     chebi_of = metabolite_chebi or default_metabolite_chebi
@@ -254,7 +255,9 @@ _TC_FAMILY = re.compile(r"(\d+\.[A-Z]\.\d+)\.\d+\.\d+")  # group 1 = family (3 l
 
 
 def _hmmsearch_families(proteome: Path, hmm_db: Path, threads: int) -> dict[str, tuple[set[str], float]]:
-    """hmmsearch (transporter Pfam HMMs vs proteome) -> gene -> (Pfam accessions hit, best bitscore)."""
+    """Run hmmsearch (transporter Pfam HMMs against the proteome).
+
+    Returns gene -> (Pfam accessions hit, best bitscore)."""
     with tempfile.TemporaryDirectory() as tmp:
         tbl = Path(tmp) / "hits.tbl"
         subprocess.run([resolve_binary("hmmsearch"), "--cut_ga", "--noali", "--cpu", str(threads),
@@ -274,7 +277,9 @@ def _hmmsearch_families(proteome: Path, hmm_db: Path, threads: int) -> dict[str,
 
 def _diamond_tc(proteome: Path, tcdb_db: Path,
                 threads: int) -> dict[str, tuple[set[str], set[str], float]]:
-    """diamond blastp (proteome vs TCDB) -> gene -> (TC family prefixes, full TC-IDs, best frac id)."""
+    """Run diamond blastp (proteome against TCDB).
+
+    Returns gene -> (TC family prefixes, full TC-IDs, best fraction identity)."""
     with tempfile.TemporaryDirectory() as tmp:
         m8 = Path(tmp) / "hits.m8"
         subprocess.run([resolve_binary("diamond"), "blastp", "-q", str(proteome), "-d", str(tcdb_db),
@@ -304,16 +309,17 @@ def annotate_proteome(
     substrates: str | Path | bool | None = None,
     threads: int = 1,
 ) -> dict[str, TransporterAnnotation]:
-    """Annotate a proteome's transporters from sequence, via the bundled ``hmmsearch`` + ``diamond``.
+    """Annotate the transporters of a proteome from sequence with ``hmmsearch`` and ``diamond``.
 
-    Scans the proteome FASTA (headers = gene ids, as written by :func:`prepare_deeploc_input`) against
-    the transporter Pfam HMM database (``hmmsearch --cut_ga``) and the TCDB DIAMOND database
-    (``diamond blastp``); both databases auto-download from toolbox-assets if not supplied. Pfam families
-    and TCDB TC-families map to coarse substrate classes via
-    :mod:`raven_toolbox.localization.transporter_tables`, and each gene's TCDB TC-IDs map to their
-    curated **substrate ChEBIs** (``substrates``: a ``tcdb_substrates.tsv`` path, or ``False`` to skip
-    that lookup). Returns gene → :class:`TransporterAnnotation` (``mechanism`` stays empty). Genes with
-    no transporter hit are absent, so this doubles as a ``substrate_of``-independent membrane screen.
+    Searches the proteome FASTA (headers are gene ids, as written by :func:`prepare_deeploc_input`)
+    against the transporter Pfam HMM database (``hmmsearch --cut_ga``) and the TCDB DIAMOND database
+    (``diamond blastp``); both databases are downloaded from toolbox-assets when not supplied. Pfam
+    families and TCDB TC-families map to coarse substrate classes through
+    :mod:`raven_toolbox.localization.transporter_tables`, and the TCDB TC-IDs of each gene map to
+    their curated substrate ChEBIs (``substrates``: a path to ``tcdb_substrates.tsv``, or ``False``
+    to skip that lookup). Returns gene -> :class:`TransporterAnnotation`, with ``mechanism`` set to
+    ``None``. Genes without a transporter hit are absent, so the compartment-only match (no
+    ``substrate_of``, no ``ontology``) counts only genes with a hit.
     """
     proteome = Path(proteome)
     hmm_db = Path(hmm_db) if hmm_db else ensure_data_file("transporters", "transporter_pfam.hmm")
@@ -385,12 +391,13 @@ _SUBSTRATE_KEYWORDS: dict[str, tuple[str, ...]] = {
 def default_substrate_of(metabolite: cobra.Metabolite) -> frozenset[str]:
     """Coarse substrate class(es) for a model metabolite, from a name-keyword heuristic.
 
-    A dependency-free first pass over :data:`transporter_tables.COARSE_CLASSES`: it matches the
-    metabolite's name against curated keyword lists, so ``(S)-malate`` → ``carboxylate``,
-    ``D-glucose`` → ``sugar``, ``NADPH`` → ``nucleotide`` + ``cofactor_vitamin``. Pass it as
-    ``substrate_of`` to :func:`evidence_aware_transport_cost`. It does not derive classes from a
-    metabolite's ChEBI/KEGG annotation; an unmatched metabolite returns the empty set — no substrate
-    support, so the parsimony prior stands (a safe default).
+    The function matches the name of the metabolite against curated keyword lists, without further
+    dependencies, and returns classes of :data:`transporter_tables.COARSE_CLASSES`: ``(S)-malate``
+    gives ``carboxylate``, ``D-glucose`` gives ``sugar`` and ``NADPH`` gives ``nucleotide`` and
+    ``cofactor_vitamin``. It can be passed as ``substrate_of`` to
+    :func:`evidence_aware_transport_cost`. Classes are not derived from the ChEBI or KEGG annotation
+    of the metabolite. A metabolite that matches no keyword returns the empty set and receives no
+    support from the coarse class match.
     """
     name = (metabolite.name or metabolite.id or "").lower()
     return frozenset(cls for cls, kws in _SUBSTRATE_KEYWORDS.items() if any(k in name for k in kws))

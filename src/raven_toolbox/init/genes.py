@@ -1,12 +1,12 @@
-"""Prune low-scoring genes from a model — the last ftINIT step.
+"""Prune low-scoring genes from a model, the last ftINIT step.
 
-Drop negative-scoring genes from each reaction's GPR, while
-respecting enzyme structure — genes joined by **OR** (isozymes) are candidates for
-removal, but at least one must remain (the least-negative if all are negative);
-genes joined by **AND** (complex subunits) are *not* removed individually, though a
-whole complex can be dropped as one isozyme alternative if its (aggregated) score is
-negative. Operates on cobra's GPR AST recursively, so nested rules like
-``G1 and (G2 or G3) and G4`` prune the inner isozyme group correctly.
+Removes negative-scoring genes from each reaction's GPR according to the enzyme
+structure. Genes joined by OR (isozymes) are candidates for removal, and at least
+one remains (the least negative if all are negative). Genes joined by AND (complex
+subunits) are not removed individually. A whole complex is dropped as one isozyme
+alternative if its aggregated score is negative. The function walks cobra's GPR AST
+recursively, so a nested rule such as ``G1 and (G2 or G3) and G4`` has its inner
+isozyme group pruned.
 """
 from __future__ import annotations
 
@@ -79,14 +79,13 @@ def remove_low_score_genes(
         negative alternatives was cut to one of several alternatives with the same
         best score are appended to it, once per reaction. In such a rule the first of
         the tied alternatives in the rule is kept, so the result depends on the order
-        of the rule. RAVEN keeps the first one too (CompMetEng/RAVEN#11); before that
-        it kept the alphabetically first.
+        of the rule. RAVEN keeps the first one too (CompMetEng/RAVEN#11).
 
     Returns
     -------
     tuple of (cobra.Model, list of str)
-        The pruned copy of the model, and the sorted ids of the genes removed from
-        every rule they were in, and thus from the model.
+        The pruned copy of the model, and the sorted ids of the genes that no
+        reaction of the pruned copy uses; these genes are removed from the copy.
     """
     iso, cplx = resolve_aggregators(isozyme_scoring, complex_scoring)
 

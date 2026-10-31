@@ -1,21 +1,16 @@
-"""Replace gene identifiers in a model — port of RAVEN's ``renameModelGenes``.
+"""Replace gene identifiers in a model; port of RAVEN's ``renameModelGenes``.
 
-Builds an old-id → new-id mapping from a gene table (e.g. from
-:mod:`raven_toolbox.reconstruction.genome_data`, once ported, or supplied
-manually) and applies it via :func:`cobra.manipulation.rename_genes`, rather
-than reimplementing RAVEN's own regex-based word-boundary GPR rewrite:
-cobra's version parses the GPR into an AST and renames the matched gene
-nodes directly, so it cannot suffer the partial-match failure mode
-(`"gene1"` matching inside `"gene10"`) RAVEN's regex specifically guards
-against, and correctly *merges* the underlying gene objects when a rename
-target already exists elsewhere in the model (the GPR string still
-references it as many times as before — e.g. ``"G1 or G1"`` — renaming
-doesn't algebraically simplify a rule, only the gene identity is
-deduplicated) — RAVEN's own version has no such check, and can leave a
-model with two ``model.genes`` entries carrying the same id.
-cobra also already keeps GPR syntax normalised on assignment, so
-``removeUnnecessaryParentheses``/``standardizeGrRules`` have nothing to do
-here either.
+Builds an old-id to new-id mapping from a gene table (for example from
+:mod:`raven_toolbox.curation.genome_data`, or supplied manually) and applies it with
+:func:`cobra.manipulation.rename_genes`. cobra parses the GPR into an AST and renames
+the matched gene nodes, so a gene id that is a substring of another (``"gene1"`` in
+``"gene10"``) is not renamed by mistake; RAVEN guards against this case with a regex
+word boundary. cobra merges the gene objects when a rename target already exists in
+the model. The GPR string keeps one occurrence per reference (``"G1 or G1"`` stays
+as written); only the gene object is shared. RAVEN has no such check and can leave a
+model with two ``model.genes`` entries with the same id. cobra normalises GPR syntax
+on assignment, so the steps of RAVEN's ``removeUnnecessaryParentheses`` and
+``standardizeGrRules`` are not needed.
 """
 from __future__ import annotations
 
@@ -31,7 +26,7 @@ __all__ = ["RenameGenesResult", "rename_model_genes"]
 
 @dataclass
 class RenameGenesResult:
-    """Outcome of a gene-renaming pass.
+    """Result of a gene-renaming pass.
 
     Parameters
     ----------
@@ -59,11 +54,11 @@ def rename_model_genes(
     model:
         Model to rename genes in.
     gene_table:
-        Either a DataFrame, or a path to a tab-delimited file to load one from.
+        A DataFrame, or the path of a tab-delimited file that holds one.
     from_col:
         Column whose values match the ids currently in ``model.genes``.
     to_col:
-        Column whose values will replace them.
+        Column whose values replace them.
 
     Returns
     -------

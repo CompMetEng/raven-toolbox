@@ -1,4 +1,4 @@
-"""Reporter Metabolites — metabolites around which transcriptional change concentrates.
+"""Reporter Metabolites: metabolites around which transcriptional change concentrates.
 
 Patil & Nielsen, PNAS 2005. Each gene's differential-expression p-value becomes a
 Z-score ``z = -Φ⁻¹(p)``; for every metabolite the Z-scores of the genes on its
@@ -7,8 +7,8 @@ back into a p-value.
 
 The background correction has an exact closed form (sampling with replacement from the
 scored-gene pool: a random ``Σz/√n`` has mean ``√n·μ`` and standard deviation ``σ``
-with μ, σ the mean/std of the scored Z-scores), so the corrected score is just
-``(metZ − √n·μ) / σ`` — no Monte-Carlo sampling needed.
+with μ, σ the mean and standard deviation of the scored Z-scores), so the corrected
+score is ``(metZ − √n·μ) / σ`` and needs no Monte-Carlo sampling.
 """
 from __future__ import annotations
 
@@ -95,10 +95,10 @@ def reporter_metabolites(
 ) -> list[ReporterResult]:
     """Compute Reporter Metabolites from per-gene differential-expression p-values.
 
-    ``gene_pvalues`` maps gene id → p-value. Genes not in the model and genes with a
+    ``gene_pvalues`` maps gene id to p-value. Genes not in the model and genes with a
     NaN (or ``None``) p-value are dropped. Any other p-value outside ``[0, 1]``,
     including ±inf and for genes that are not in the model, raises ``ValueError``
-    (RAVEN raises ``RAVEN:badInput``). If ``gene_fold_changes`` (gene id → log fold change)
+    (RAVEN raises ``RAVEN:badInput``). If ``gene_fold_changes`` (gene id to log fold change)
     has at least one non-zero value, two extra results are returned for the up- (fc ≥ 0)
     and down- (fc < 0) regulated gene subsets, in addition to ``"all"``; with all fold
     changes zero (or none given) only ``"all"`` is returned, as in RAVEN. A metabolite
@@ -107,14 +107,11 @@ def reporter_metabolites(
     The background correction uses the population standard deviation
     (``ddof=0``) of the scored Z-scores, which the closed form requires. The
     reported ``p_value`` is the one-sided enrichment ``1 - Φ(z)`` and each
-    table is sorted by ``z_score`` descending.
+    table is sorted by ``z_score`` in descending order.
 
     Parity with RAVEN's ``reporterMetabolites``: the same closed-form
-    correction, one-sided p-value and sort order, with ``"up"``/``"down"``
-    matching its ``"only up"``/``"only down"`` entries. A RAVEN version that
-    divides by the sample standard deviation (``std`` with N−1) gives
-    z-scores smaller by a factor ``√(N/(N−1))`` for N scored genes; the
-    ranking is the same.
+    correction, one-sided p-value and sort order, with ``"up"`` and ``"down"``
+    matching its ``"only up"`` and ``"only down"`` entries.
     """
     given = {g: float(p) for g, p in gene_pvalues.items() if p is not None and not math.isnan(p)}
     invalid = [(g, p) for g, p in given.items() if not 0.0 <= p <= 1.0]

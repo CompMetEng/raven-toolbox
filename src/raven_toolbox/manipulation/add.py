@@ -1,28 +1,22 @@
 """Add reactions to a model from equation strings.
 
-Most of the equivalent MATLAB code is struct-of-arrays bookkeeping (padding parallel
-``rxnNames`` / ``lb`` / ``ub`` / ``grRules`` / ... fields) that does not exist in
-cobra, where each ``Reaction`` carries its own attributes. cobra also already
-covers a large part of the *behaviour*:
+cobra covers part of this task:
 
-* ``Reaction.build_reaction_from_string`` parses equation strings, coefficients,
-  and reversibility arrows (``<=>``, ``-->``, ``=>``) and creates unknown
-  metabolites — but only matching metabolites **by ID**, and it leaves new
-  metabolites with ``compartment=None``.
-* setting a reaction's GPR auto-creates ``Gene`` objects.
+* ``Reaction.build_reaction_from_string`` parses equation strings, coefficients and reversibility
+  arrows (``<=>``, ``-->``, ``=>``) and creates unknown metabolites. It matches metabolites by ID
+  only and leaves new metabolites with ``compartment=None``.
+* Setting the GPR of a reaction creates ``Gene`` objects.
 
-So this port keeps only the parts cobra lacks:
+This module adds the following:
 
-* **name-based matching** — interpret equation tokens as metabolite *names*
-  (RAVEN eqnType 2) or as ``name[comp]`` (eqnType 3), not just IDs;
-* **correct compartment** assignment for newly created metabolites;
-* **strict policies** — optionally *error* (rather than silently create) on
-  unknown metabolites or genes, and always error on a duplicate reaction ID
-  (cobra silently ignores those).
+* Name-based matching: equation tokens are interpreted as metabolite names (``mets_by="name"``) or
+  as ``name[comp]``, in addition to IDs.
+* Assignment of the compartment of newly created metabolites.
+* Strict policies: optional errors on unknown metabolites or genes, and an error on a duplicate
+  reaction ID (cobra ignores a duplicate without an error).
 
-Instead of RAVEN's ``eqnType`` integer (1/2/3) the matching mode is a readable
-keyword: ``mets_by="id"`` or ``mets_by="name"``, with ``name[comp]`` recognised
-automatically.
+The matching mode is the keyword ``mets_by="id"`` or ``mets_by="name"``; a ``name[comp]`` token is
+recognised automatically.
 """
 from __future__ import annotations
 
@@ -60,11 +54,11 @@ def _parse_side(side: str) -> list[tuple[float, str, str | None]]:
     """Parse one side of an equation into ``[(coefficient, token, fallback), ...]``.
 
     The ``fallback`` slot is for the ambiguous ``"<number> <rest>"`` shape: when
-    matching by name, ``"2 oxoglutarate"`` could be either ``coeff=2, name="oxoglutarate"``
-    or ``coeff=1, name="2 oxoglutarate"`` (a real chemistry name). We return the
-    coefficient-split form as the primary and the full term as the fallback; the
-    resolver picks whichever matches an existing metabolite. Pure-number heads
-    with no name (``"2"``) and pure-name terms (``"glucose"``) have no fallback.
+    matching by name, ``"2 oxoglutarate"`` is either ``coeff=2, name="oxoglutarate"``
+    or ``coeff=1, name="2 oxoglutarate"`` (a chemical name that starts with a number). The
+    coefficient-split form is returned as the primary and the full term as the fallback; the
+    resolver picks whichever matches an existing metabolite. A term that is only a number
+    (``"2"``) and a term without a coefficient (``"glucose"``) have no fallback.
     """
     terms: list[tuple[float, str, str | None]] = []
     for raw in side.split(" + "):
@@ -89,7 +83,7 @@ def _parse_side(side: str) -> list[tuple[float, str, str | None]]:
 
 
 def _new_met_id(model: cobra.Model, prefix: str) -> str:
-    """Next free ``<prefix><int>`` metabolite ID (RAVEN m1, m2, ... scheme)."""
+    """Next free ``<prefix><int>`` metabolite ID (``m1``, ``m2``, ... for the prefix ``m``)."""
     pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
     used = [int(m.group(1)) for met in model.metabolites if (m := pattern.match(met.id))]
     n = max(used) + 1 if used else 1
@@ -99,10 +93,11 @@ def _new_met_id(model: cobra.Model, prefix: str) -> str:
 
 
 def _build_met_index(model: cobra.Model) -> dict[tuple[str, str | None], Metabolite]:
-    """Build a ``(name, compartment) -> metabolite`` index (first match wins).
-    Lets name / name[comp] resolution be O(1) instead of re-scanning
-    ``model.metabolites`` per token; callers update it as new mets are created
-    so later tokens dedup against earlier ones."""
+    """Build a ``(name, compartment) -> metabolite`` index (the first metabolite of a key is kept).
+
+    The index makes name and ``name[comp]`` resolution O(1) per token, without scanning
+    ``model.metabolites``. Callers update it when they create metabolites, so that later tokens
+    resolve to the metabolites created earlier."""
     index: dict[tuple[str, str | None], Metabolite] = {}
     for met in model.metabolites:
         index.setdefault((met.name, met.compartment), met)
@@ -119,9 +114,9 @@ def _try_existing(
 ) -> Metabolite | None:
     """Look up ``token`` as an existing metabolite (no creation, no side effects).
 
-    Returns the matching metabolite or ``None``. Used by ``_stoichiometry`` to
-    disambiguate the ``"<number> <rest>"`` shape: if a metabolite whose *name*
-    (or id) literally contains a leading number exists, prefer it over splitting
+    Returns the matching metabolite or ``None``. ``_stoichiometry`` uses it to
+    disambiguate the ``"<number> <rest>"`` shape: if a metabolite whose name
+    (or id) starts with a number exists, it takes precedence over splitting
     the number off as a coefficient.
     """
     name, comp = parse_name_comp(token)
@@ -193,11 +188,11 @@ def _resolve_metabolite(
 
 
 def _warn_unknown_compartment(model: cobra.Model, compartment: str, identifier: str) -> None:
-    """Warn when a new metabolite would be born into a not-yet-registered compartment.
+    """Warn when a new metabolite is created in a compartment that the model does not list.
 
-    A typo (``"cyto"`` for ``"c"``) would otherwise silently produce a
-    one-metabolite ghost compartment. cobra inherits the compartment from the
-    first metabolite assigned to it, so this stays a warning, not a hard error.
+    A misspelled compartment (``"cyto"`` for ``"c"``) would otherwise create a compartment
+    with a single metabolite without any message. cobra takes the compartment from the
+    first metabolite assigned to it, so the check is a warning and not an error.
     """
     known = set(model.compartments) | set(model._compartments)
     if compartment not in known:
@@ -270,7 +265,7 @@ def add_reactions_from_equations(
     allow_new_genes: bool = True,
     new_met_prefix: str = "m",
 ) -> list[Reaction]:
-    """Add reactions defined by equation strings, matching mets by ID or name.
+    """Add reactions defined by equation strings, matching metabolites by ID or name.
 
     Parameters
     ----------
@@ -279,29 +274,31 @@ def add_reactions_from_equations(
     reactions
         Sequence of mappings, one per reaction. Recognised keys:
 
-        * ``id`` (**required**) — reaction ID; must not already exist.
-        * ``equation`` (**required**) — e.g. ``"atp_c + h2o_c <=> adp_c + pi_c"``.
-          Use ``<=>`` for reversible, ``-->``/``->``/``=>`` for irreversible.
-        * ``name`` — reaction name.
-        * ``bounds`` — ``(lower, upper)`` tuple; overrides the arrow.
-        * ``gene_reaction_rule`` — GPR string.
-          Read with :func:`~raven_toolbox.utils.parse_gr_rule`, RAVEN's grammar.
-        * ``subsystem`` — subsystem name.
+        * ``id`` (required): reaction ID; must not already exist.
+        * ``equation`` (required): for example ``"atp_c + h2o_c <=> adp_c + pi_c"``.
+          ``<=>`` marks a reversible reaction; ``-->``, ``->`` and ``=>`` mark an irreversible one.
+        * ``name``: reaction name.
+        * ``bounds``: ``(lower, upper)`` tuple; takes precedence over the arrow. Without ``bounds``,
+          the upper bound is the cobra default upper bound and the lower bound is the cobra default
+          lower bound for a reversible reaction and 0 for an irreversible one.
+        * ``gene_reaction_rule``: GPR string.
+          Read with :func:`~raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN.
+        * ``subsystem``: subsystem name.
     mets_by
         How bare equation tokens (without ``[comp]``) are matched:
-        ``"id"`` (RAVEN eqnType 1) or ``"name"`` (eqnType 2). A ``name[comp]``
-        token (eqnType 3) is always matched by name + compartment.
+        ``"id"`` (``eqnType`` 1 of RAVEN's ``addRxns``) or ``"name"`` (``eqnType`` 2). A
+        ``name[comp]`` token (``eqnType`` 3) is always matched by name and compartment.
     compartment
         Default compartment for new metabolites and for name-matched tokens
         without an explicit ``[comp]``.
     allow_new_mets
-        If True (default), create metabolites not found. New metabolites get
-        ``compartment`` (id mode) or an auto ID ``m1``, ``m2``, ... (name mode).
-        If False, an unknown metabolite raises.
+        If True (default), metabolites that are not found are created. A new metabolite gets
+        ``compartment`` (id mode) or an automatic ID ``m1``, ``m2``, ... (name mode).
+        If False, an unknown metabolite raises ``ValueError``.
     allow_new_genes
-        If True (default), genes in a GPR are created and added to the model in sorted
-        order, independent of the hash seed. If False,
-        a GPR referencing a gene not already in the model raises.
+        If True (default), genes of a GPR that are not in the model are created and added to the
+        model in sorted order, independent of the hash seed. If False, a GPR that references a
+        gene not in the model raises ``ValueError``.
     new_met_prefix
         Prefix for auto-generated metabolite IDs in name mode (default ``"m"``).
 

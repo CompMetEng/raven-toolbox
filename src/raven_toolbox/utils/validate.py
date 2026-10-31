@@ -1,8 +1,9 @@
 """Curation checks for a model.
 
-A QC bundle cobra has no single call for: orphaned objects, empty reactions,
-duplicated metabolite ``name + compartment``, empty names, and objective sanity.
-:func:`check_model` returns these as structured :class:`ModelIssue` records.
+Curation checks that cobra has no single call for: orphaned objects, empty reactions,
+duplicated metabolite ``name + compartment``, empty metabolite names, and reactions with a
+nonzero objective coefficient (none or several). :func:`check_model` returns the findings as
+structured :class:`ModelIssue` records.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ class ModelIssue:
     Attributes
     ----------
     category
-        Machine-readable kind, e.g. ``"orphan_metabolite"``, ``"empty_reaction"``,
+        Machine-readable kind, for example ``"orphan_metabolite"``, ``"empty_reaction"``,
         ``"orphan_gene"``, ``"duplicate_name_compartment"``,
         ``"empty_metabolite_name"``, ``"objective"``.
     object_id
@@ -35,8 +36,7 @@ class ModelIssue:
 def check_model(model: cobra.Model) -> list[ModelIssue]:
     """Run curation checks on a model and return the issues found.
 
-    Does not
-    raise; returns a (possibly empty) list of :class:`ModelIssue`.
+    Does not raise; returns a possibly empty list of :class:`ModelIssue`.
     """
     issues: list[ModelIssue] = []
 

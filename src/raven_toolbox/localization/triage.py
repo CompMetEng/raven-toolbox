@@ -1,27 +1,34 @@
-"""Curation triage for a localisation assignment — *which calls deserve a human's eyes*.
+"""Curation triage for a localisation assignment: the calls that need review by a curator.
 
-This is an **optional companion output** of the compartment-assignment step (not a benchmark): given
-the assignment proposal and the scores it used, it ranks the genes/reactions whose localisation is
-shakiest, each with a plain-English reason, so a curator can spend their time where it matters.
+This is an optional companion output of the compartment-assignment step. Given the assignment
+proposal and the scores it used, it ranks the genes and reactions with the least certain
+localisation, each with a reason in text, so that a curator can review those first.
 
-v1 needs no solver — it reads only the proposal and the scores. Each candidate gets an
-``uncertainty`` in ``[0, 1]`` blended from the signals that apply, and the list is ranked by it.
-Signals (a subset fire per gene):
+The triage needs no solver and reads only the proposal and the scores. Each candidate gets an
+``uncertainty`` in ``[0, 1]`` blended from the signals that apply, and the list is ranked by it. The
+signals that fire differ per gene:
 
-* **low confidence** — the predictor's *raw* top probability is low (calibrated: ~67% reliable below
-  0.7 vs ~97% above 0.9). Needs ``scores.raw_confidence`` (``load_deeploc(keep_raw_confidence=True)``)
-  or an explicit ``raw_confidence=`` — normalisation otherwise hides it.
-* **borderline** — the top two compartments are within ``margin_threshold`` (the placement can flip).
-* **diffuse** — score mass is spread across many compartments (no clear home).
-* **source conflict** — supplied per-source tables (DeepLoc / UniProt / COMPARTMENTS) disagree.
-* **no evidence** — the gene has no predictor score at all (placed by function only).
-* **weak compartment** — the assigned compartment is one the predictor calls badly (see
-  :data:`DEEPLOC_COMPARTMENT_TRUST`).
-* **multi-localised** — the gene was placed in several compartments.
+* **low confidence**: the raw top probability of the predictor is low (in the yeast-GEM
+  benchmark, the share of calls that other evidence corroborates rises with the raw
+  probability). This signal carries the largest default weight (0.35) of the signals in the
+  blended ``uncertainty``. Needs ``scores.raw_confidence``
+  (``load_deeploc(keep_raw_confidence=True)``) or an explicit ``raw_confidence=``, because
+  normalisation hides the raw probability.
+* **borderline**: the top two compartments are within ``margin_threshold``, so the placement can
+  flip.
+* **diffuse**: the score mass is spread across many compartments.
+* **source conflict**: the supplied per-source tables (DeepLoc, UniProt, COMPARTMENTS) disagree.
+* **no evidence**: the gene has no predictor score and is placed by function only.
+* **weak compartment**: the assigned compartment is one that the predictor calls with low accuracy
+  (see :data:`DEEPLOC_COMPARTMENT_TRUST`).
+* **multi-localised**: the gene is placed in several compartments.
 
-Impact (essentiality / flux) and pathway-level aggregation are v2/v3; this is the cheap, no-solver
-core. See the `DeepLoc yeast-GEM benchmark
-<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_ on raven-gecko-parity for where the thresholds come from.
+The triage has no impact signal: it does not use the essentiality of a gene or the flux of a
+reaction.
+
+See the `DeepLoc yeast-GEM benchmark
+<https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_
+on raven-gecko-parity for the source of the thresholds.
 """
 from __future__ import annotations
 
@@ -54,7 +61,7 @@ _DEFAULT_WEIGHTS = {"confidence": 0.35, "disagreement": 0.25, "margin": 0.20,
 
 
 def confidence_bin(p: float) -> str:
-    """Calibration bin of a raw confidence (matches the benchmark's reported corroboration rates)."""
+    """Calibration bin of a raw confidence, with the bins of the benchmark's corroboration rates."""
     for lo, hi in ((0.0, 0.5), (0.5, 0.7), (0.7, 0.9)):
         if lo <= p < hi:
             return f"[{lo:.1f},{hi:.1f})"
@@ -69,7 +76,7 @@ class ReviewReport:
     signals_used: list[str] = field(default_factory=list)
 
     def top(self, n: int = 15) -> pd.DataFrame:
-        """Return the ``n`` highest-uncertainty items (the report is already sorted by it)."""
+        """Return the ``n`` items with the highest uncertainty (``items`` is sorted by it)."""
         return self.items.head(n)
 
     def __str__(self) -> str:
@@ -105,24 +112,26 @@ def triage_localization(
     weights: Mapping[str, float] | None = None,
     top_n: int | None = None,
 ) -> ReviewReport:
-    """Rank the localisation calls in ``proposal`` that most deserve manual curation (v1, no solver).
+    """Rank the localisation calls in ``proposal`` for manual curation, without a solver.
 
-    ``proposal`` is a localisation/assignment proposal exposing ``gene_compartments`` (gene ->
-    [compartments]) and ``unplaced_reactions`` — both :class:`LocalizationProposal` and
-    assignCompartments' ``AssignmentProposal`` qualify. ``scores`` is the table that drove it.
+    ``proposal`` is a localisation or assignment proposal with the attributes ``gene_compartments``
+    (gene -> [compartments]) and ``unplaced_reactions``; both :class:`LocalizationProposal` and
+    :class:`raven_toolbox.localization.assign.AssignmentProposal` provide them. ``scores`` is the
+    table that the proposal is based on.
 
-    ``raw_confidence`` (a gene -> top-probability Series) powers the strongest signal; if omitted it
-    is read from ``scores.raw_confidence`` (set by ``load_deeploc(keep_raw_confidence=True)``), and if
-    that is also absent the confidence signal is skipped. ``sources`` (the *pre-fusion* per-source
-    :class:`LocalizationScores`, e.g. ``{"DeepLoc": ..., "UniProt": ...}``) enables the source-conflict
-    signal — :func:`combine_scores` destroys it. ``model`` (a cobra model) adds a ``reactions`` column
-    listing the reactions each gene gates. ``compartment_trust`` overrides
+    ``raw_confidence`` (a gene -> top-probability Series) enables the low-confidence signal. If it
+    is omitted, it is read from ``scores.raw_confidence`` (set by
+    ``load_deeploc(keep_raw_confidence=True)``), and if that is also absent, the confidence signal
+    is skipped. ``sources`` (the per-source :class:`LocalizationScores` before fusion, for example
+    ``{"DeepLoc": ..., "UniProt": ...}``) enables the source-conflict signal, which is not available
+    after :func:`combine_scores`. ``model`` (a cobra model) adds a ``reactions`` column that lists
+    the reactions each gene gates. ``compartment_trust`` overrides
     :data:`DEEPLOC_COMPARTMENT_TRUST`.
 
-    ``confidence_threshold``, ``margin_threshold``, and ``entropy_threshold`` set the cutoffs that
-    trigger the low-confidence, borderline, and diffuse signals respectively (see the module
-    docstring for what each signal means). ``weights`` controls how much each signal counts toward
-    the blended ``uncertainty`` score. ``top_n`` caps how many rows are returned. Returns a
+    ``confidence_threshold``, ``margin_threshold`` and ``entropy_threshold`` set the cutoffs that
+    trigger the low-confidence, borderline and diffuse signals respectively (see the module
+    docstring for each signal). ``weights`` sets the weight of each signal in the blended
+    ``uncertainty`` score. ``top_n`` limits the number of returned rows. Returns a
     :class:`ReviewReport` ranked by ``uncertainty``.
     """
     df = scores.df

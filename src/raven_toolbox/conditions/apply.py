@@ -7,18 +7,20 @@ Schema (all keys optional):
     name: my_condition
     description: free-form text.
 
-    # Set exchange reactions to (0, ub) before any per-rxn override.
-    # "in" / "out" (RAVEN's getExchangeRxns direction: the boundary metabolite
-    # is the reaction's substrate / product respectively) reset only that
-    # direction; "all" / "both", or any other truthy value, reset every
-    # exchange in either direction.
+    # Set exchange reactions to bounds (0, 1000) before any per-reaction change.
+    # The string "in" or "out" (in any case; RAVEN's getExchangeRxns direction: the
+    # boundary metabolite is the reaction's substrate or product respectively) resets only
+    # that direction. Any other truthy value, such as "all", "both" or true, resets every
+    # exchange in either direction. A falsy value (false, 0, "" or null) resets nothing.
+    # RAVEN passes the value to getExchangeRxns as the reaction type and also accepts
+    # "uptake", "excrete", "reverse" and "blocked"; here those strings reset every exchange.
     prelude:
-      reset_exchanges: out                # "in" | "out" | "all" | "both" | bool truthy
+      reset_exchanges: out                # "in" | "out" | any other truthy value
 
-    # Remove metabolites from a pseudoreaction and rebalance H+
-    # (or any other "balance" met) so total charge stays zero. Raises
-    # ValueError if any remaining participant has no charge set --- an
-    # unknown charge is not the same as a neutral one.
+    # Remove metabolites from a pseudoreaction and, when charge_balance_met is
+    # given, rebalance H+ (or any other balance metabolite) so that the total
+    # charge is zero. With charge_balance_met, raises ValueError if any remaining
+    # participant has no charge set, because the charge balance is then unknown.
     cofactor_pseudoreaction:
       rxn_id: r_4598
       remove_mets:
@@ -33,20 +35,21 @@ Schema (all keys optional):
         - { met: s_0687, coef: -0.08 }
         - { met: s_0794, coef: -0.16 }
 
-    # Per-reaction bounds. lb / ub omitted means "leave unchanged".
+    # Per-reaction bounds. An omitted lb or ub leaves that bound unchanged. A
+    # reaction that is not in the model is skipped with a warning.
     bounds:
       - { rxn: r_1654, lb: -1000 }
       - { rxn: r_1992, lb: 0 }
       - { rxn: r_1663, lb: 0, ub: 0 }
 
-    # Sanity-check counter. Emits a warning if the actual count of
-    # ``lb == -1000`` bound entries doesn't match.
+    # Emits a warning if the number of applied bound entries with
+    # ``lb == -1000`` differs from this value.
     expected_uptake_count: 15
 
-The schema is intentionally narrow: deterministic, idempotent, easy to
-diff in code review. Project-specific extensions (e.g. yeast-GEM's
-``amino_acid_ratio``) are handled by the *caller* before / after this
-function — keep the upstream generic.
+The steps run in the order prelude, cofactor pseudoreaction, biomass stoichiometry
+delta, bounds. Project-specific extensions (for example yeast-GEM's
+``amino_acid_ratio``) are handled by the caller before or after
+:func:`apply_condition`.
 """
 from __future__ import annotations
 
@@ -69,7 +72,9 @@ DEFAULT_RESET_EXCHANGES_UPPER_BOUND: float = 1000.0
 
 
 def load_condition(path: str | Path) -> dict[str, Any]:
-    """Parse a condition YAML file into a plain dict."""
+    """Parse a condition YAML file into a plain dict.
+
+    Raises ``FileNotFoundError`` if ``path`` does not exist."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Condition file not found: {path}")
@@ -83,7 +88,7 @@ def apply_condition(
 ) -> cobra.Model:
     """Apply a parsed condition (or a YAML file path) to ``model`` in place.
 
-    Returns the same model object for chaining.
+    Returns the same model object.
     """
     cfg = condition if isinstance(condition, dict) else load_condition(condition)
 
@@ -99,10 +104,10 @@ def apply_condition(
 def set_reaction_bounds(rxn: cobra.Reaction, lb: float, ub: float) -> None:
     """Set both bounds, bypassing cobra's ``lb <= ub`` validator.
 
-    Some conditions intentionally land on an infeasible ``lb > ub`` state
-    (e.g. forcing flux via a sentinel bound). cobra's setter rejects
-    that. This helper writes the underlying private attributes when
-    needed so the model can match the caller's exact intent.
+    Some conditions set an infeasible state with ``lb > ub`` (for example to force
+    flux via a sentinel bound), which cobra's setter rejects. When ``lb > ub``, the
+    function writes the private bound attributes of the reaction directly; otherwise
+    it uses ``rxn.bounds``.
     """
     if lb > ub:
         rxn._lower_bound = lb  # noqa: SLF001 — intentional bypass
@@ -114,14 +119,14 @@ def set_reaction_bounds(rxn: cobra.Reaction, lb: float, ub: float) -> None:
 # --- step implementations ---------------------------------------------
 
 def _exchange_direction(rxn: cobra.Reaction) -> str | None:
-    """RAVEN ``getExchangeRxns``' in/out rule, direction-of-boundary-metabolite based.
+    """RAVEN ``getExchangeRxns`` rule for "in" and "out", based on the boundary metabolite.
 
-    "out": nothing is produced within the model at all (``sum(S > 0) == 0``) --- the
+    "out": nothing is produced within the model (``sum(S > 0) == 0``), so the
     boundary metabolite is implicitly the reaction's product. "in": nothing is
-    consumed (``sum(S < 0) == 0``) --- the boundary metabolite is implicitly the
-    substrate. Neither (an ordinary internal reaction with both) returns ``None``.
-    Not restricted to single-metabolite reactions, matching RAVEN's own rule exactly
-    rather than cobra's narrower ``Reaction.boundary``.
+    consumed (``sum(S < 0) == 0``), so the boundary metabolite is implicitly the
+    substrate. A reaction with both products and reactants returns ``None``.
+    The rule applies to reactions with any number of metabolites, as in RAVEN, and is
+    wider than cobra's ``Reaction.boundary``.
     """
     has_product = any(c > 0 for c in rxn.metabolites.values())
     has_reactant = any(c < 0 for c in rxn.metabolites.values())
@@ -229,9 +234,9 @@ def _check_uptake_count(cfg: dict[str, Any], n_uptake: int) -> None:
 def _set_coefficient(rxn: cobra.Reaction, met: cobra.Metabolite, value: float) -> None:
     """Set the stoichiometric coefficient of ``met`` in ``rxn`` to ``value``.
 
-    cobra's only public mutation point is ``add_metabolites``; we go via
-    ``combine=True`` with ``(value - current)`` to land on the desired
-    value without depending on cobra's removal-on-zero behaviour.
+    The function calls ``add_metabolites`` with ``combine=True`` and
+    ``(value - current)``, which sets the coefficient without depending on cobra's
+    removal of zero coefficients.
     """
     current = rxn.metabolites.get(met, 0.0)
     delta = float(value) - current

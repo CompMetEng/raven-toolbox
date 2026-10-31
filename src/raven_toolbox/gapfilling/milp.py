@@ -1,24 +1,22 @@
 """Objective-based gap-filling via a global growth-floor MILP.
 
 Finds the smallest set of template reactions that makes the objective
-(biomass) >= *min_growth*, following the database repair of Kumar et al. 2007
+(biomass) >= ``min_growth``, following the database repair of Kumar et al. 2007
 (BMC Bioinformatics 8:212, doi:10.1186/1471-2105-8-212). The floor applies to the
 objective as a whole (the sum of coefficient times flux), as in RAVEN. Reactions
-already in the draft keep their bounds: a reaction with the wrong direction is a
-curation issue and is not changed here.
+already in the draft keep their bounds, including those with a wrong direction.
 
 A template reaction that has the id of a draft reaction (or of an earlier template
 reaction) is renamed to ``<id>_<template model id>``, with ``_2``, ``_3``, ... added
 until the id is unique, as RAVEN's ``mergeModels`` does. The renamed reaction is a
 separate candidate and appears under its new id in ``added_reactions``.
 
-The universal template should include any exchange or transport reactions
-that are desired as repair candidates; they are treated identically to other
-database reactions.
+Exchange and transport reactions are repair candidates only when the universal
+template contains them; they are treated like any other template reaction.
 
-This is computationally more expensive than LP-based gap-filling
-(:mod:`~raven_toolbox.gapfilling.fast_lp`) because it involves a MILP solve,
-but it optimises for objective feasibility rather than mere connectivity.
+The MILP solve makes this more expensive than LP-based gap-filling
+(:mod:`~raven_toolbox.gapfilling.fast_lp`). The result makes the objective
+feasible at ``min_growth``, which connectivity-based gap-filling does not require.
 It is the counterpart of RAVEN's ``gapFillMILP``; ``cobra.flux_analysis.gapfill``
 solves a similar problem.
 """
@@ -49,12 +47,12 @@ class MILPGapFillResult:
     added_reactions:
         Template reaction IDs selected by the MILP.
     model:
-        Draft model with *added_reactions* incorporated.
+        Draft model with ``added_reactions`` incorporated.
     exit_status:
-        Solver status string (e.g. ``"optimal"``, ``"infeasible"``), or
+        Solver status string (for example ``"optimal"``, ``"infeasible"``), or
         ``"not_restored"`` when the solver reported a solution but the
-        selected repairs do not bring the objective to *min_growth* in
-        *model*. The selection is still returned for inspection.
+        selected repairs do not bring the objective to ``min_growth`` in
+        ``model``. The selection is still returned for inspection.
     """
 
     added_reactions: list[str] = field(default_factory=list)
@@ -90,7 +88,7 @@ def fill_gaps_milp(
     """Gap-fill to make the model objective (biomass) >= min_growth.
 
     Solves a global MILP that selects the fewest template reactions that make
-    the model's objective (sum of coefficient times flux) reach *min_growth*. The
+    the model's objective (sum of coefficient times flux) reach ``min_growth``. The
     draft reactions keep their bounds. A template reaction with a positive lower
     bound is only forced to carry that flux when it is selected.
 

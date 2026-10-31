@@ -1,6 +1,6 @@
 """Generate fresh sequential identifiers in a model's existing numbering scheme.
 
-Ported from RAVEN MATLAB: manipulation/generateNewIds.m.
+Ported from RAVEN MATLAB: ``manipulation/generateNewIds.m``.
 """
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ def generate_new_ids(
     complex ``3+0i``), so ids with such suffixes are numbered differently by
     ``generateNewIds``. When no remainder counts, the width is the length of the last remainder
     in string order and numbering starts at 1. ``num_length`` applies only when no id has the
-    prefix. This is ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give ``r_11``, and
-    ``r_0003`` beside ``r_abc`` gives ``r_0004``.
+    prefix. The numbering follows ``generateNewIds.m``: ``r_9``, ``r_10`` and ``r_2`` give
+    ``r_11``, and ``r_0003`` beside ``r_abc`` gives ``r_0004``.
 
     Parameters
     ----------
@@ -47,18 +47,18 @@ def generate_new_ids(
         Which id namespace to look in and generate for: ``"reactions"`` or
         ``"metabolites"``.
     prefix
-        Prefix for all generated ids, e.g. ``"s_"`` or ``"r_"``.
+        Prefix for all generated ids, for example ``"s_"`` or ``"r_"``.
     quantity
         Number of new ids to generate.
     num_length
-        Width of the zero-padded numeric part, e.g. 4 gives ids like
+        Width of the zero-padded numeric part, for example 4 gives ids like
         ``r_0001``. Ignored in favour of the model's own existing width
         whenever at least one id with this prefix is already present.
 
     Returns
     -------
     list[str]
-        The generated ids, e.g. ``["r_0001", "r_0002"]``.
+        The generated ids, for example ``["r_0001", "r_0002"]``.
     """
     if entity_type not in _ENTITY_ATTR:
         raise ValueError(f"entity_type must be 'reactions' or 'metabolites', got {entity_type!r}")
@@ -79,9 +79,12 @@ def _str2double(text: str) -> float:
 
 
 def _suffix_number(text: str) -> float:
-    """The numeric value of an id suffix, or NaN when the suffix is not a finite whole number
-    (``inf``, ``1e400``, ``2.5``, ``1d2`` and text) or has an absolute value of 2**52 or more,
-    where a double no longer separates consecutive whole numbers (RAVEN uses ``flintmax/2``)."""
+    """The numeric value of an id suffix.
+
+    The value is NaN for ``inf``, ``1e400``, ``2.5``, ``1d2``, text and any other suffix that
+    is not a finite whole number, and for an absolute value of 2**52 or more, where a double no
+    longer separates consecutive whole numbers (RAVEN uses ``flintmax/2``).
+    """
     number = _str2double(text)
     if not math.isfinite(number) or number != math.floor(number) or abs(number) >= 2.0**52:
         return math.nan

@@ -1,4 +1,4 @@
-"""Flux sampling — RAVEN's ``randomSampling``.
+"""Flux sampling: RAVEN's ``randomSampling``.
 
 :func:`random_sampling` is the entry point for every sampling method and, like
 RAVEN's ``randomSampling``, dispatches on ``method``:
@@ -9,9 +9,9 @@ RAVEN's ``randomSampling``, dispatches on ``method``:
 * ``"random_objective"`` is the random-objective method of Bordel et al. (2010,
   PLoS Comput Biol, doi:10.1371/journal.pcbi.1000859), implemented here: each
   sample maximises a small random linear combination of reactions, so every
-  sample is an *extreme point* (vertex) of the flux polytope. cobrapy has no
-  equivalent. Use it for a spread of diverse optimal states, not for the
-  uniform flux distribution.
+  sample is an extreme point (vertex) of the flux polytope. cobrapy has no
+  equivalent. The method samples diverse optimal states; the uniform flux
+  distribution is sampled by ``"achr"`` and ``"chrr"``.
 
 Differences from RAVEN's random-objective method:
 
@@ -23,7 +23,7 @@ Differences from RAVEN's random-objective method:
 * **``replace_max_bound``** defaults to False; RAVEN's ``replaceBoundsWithInf``
   defaults to true.
 * **Output**: a ``samples`` DataFrame shaped samples × reactions (matching
-  ``cobra.sampling``), plus the reusable ``good_reactions`` list, instead of a
+  ``cobra.sampling``), plus the reusable ``good_reactions`` list. RAVEN returns a
   reactions × samples matrix and a vector of reaction indexes.
 
 ``seed`` and ``n_objectives`` (default 2) behave as RAVEN's ``seed`` and
@@ -74,23 +74,23 @@ def random_sampling(
     suppress_errors: bool = False,
     n_proc: int | None = None,
 ) -> FluxSamplingResult:
-    """Sample ``model``'s flux space — entry point for all sampling methods.
+    """Sample ``model``'s flux space with any of the sampling methods.
 
     Dispatches on ``method``:
 
-    * ``"achr"`` (default) — Artificially Centered Hit-and-Run; near-uniform MCMC
+    * ``"achr"`` (default): Artificially Centered Hit-and-Run; near-uniform MCMC
       sampling of the polytope interior (wraps :class:`cobra.sampling.ACHRSampler`).
-    * ``"chrr"`` — Coordinate Hit-and-Run with Rounding; near-uniform MCMC with
-      maximum-volume-ellipsoid rounding, for better mixing on thin/ill-conditioned
+    * ``"chrr"``: Coordinate Hit-and-Run with Rounding; near-uniform MCMC with
+      maximum-volume-ellipsoid rounding, for better mixing on thin or ill-conditioned
       polytopes such as enzyme-constrained models.
-    * ``"random_objective"`` — the random-objective vertex method of Bordel et al.
+    * ``"random_objective"``: the random-objective vertex method of Bordel et al.
       (2010): each sample maximises a small random objective, returning a polytope
       vertex.
 
-    The ``"achr"``/``"chrr"`` methods draw the (near-)uniform interior distribution;
-    ``"random_objective"`` draws diverse vertices. Set any constraints you want to
-    condition on (e.g. a biomass lower bound, measured fluxes, enzyme-usage bounds)
-    on the model before calling.
+    The ``"achr"`` and ``"chrr"`` methods draw the (near-)uniform interior distribution;
+    ``"random_objective"`` draws diverse vertices. The samples are conditioned on the
+    constraints set on the model before the call (for example a biomass lower bound, measured
+    fluxes, enzyme-usage bounds).
 
     Parameters
     ----------
@@ -99,46 +99,45 @@ def random_sampling(
     method:
         ``"achr"`` (default), ``"chrr"``, or ``"random_objective"``.
     seed:
-        Seed for reproducible chains/draws.
+        Seed for reproducible chains and draws.
     thinning:
-        ``achr``/``chrr`` — Markov-chain steps between recorded samples (default 100).
-        The default is calibrated for small models (~200–500 reactions). On genome-scale
+        ``achr`` and ``chrr``: Markov-chain steps between recorded samples (default 100).
+        The default is calibrated for small models (~200 to 500 reactions). On genome-scale
         models (>2000 reactions) lag-1 autocorrelation remains high even at thinning=100
-        (measured: 0.926 on yeast-GEM with 4102 reactions), giving roughly 12 effective
+        (measured: 0.926 on yeast-GEM with 4102 reactions), giving about 12 effective
         samples from 300 stored samples (ESS ≈ n × (1−ρ)/(1+ρ)). Independent chains at
-        these default settings also frequently fail to agree with each other: on
-        yeast-GEM, the *median* reaction fails the Gelman-Rubin R-hat>1.1 convergence
-        threshold across 4 independent chains (67.5% of reactions fail it; 96.5% fail
-        the stricter R-hat>1.01). Treat default-settings genome-scale output as
-        unconverged for most reactions, not a caveat for a minority of hard ones. For
-        genome-scale analyses either increase thinning substantially (≥1000), increase
-        n_samples to compensate, try ``method='chrr'`` (raven-toolbox's rounding-based
-        alternative, not wired into ACHR), or use an ESS/R-hat diagnostic to assess
-        sample quality (see the `sampling convergence calibration study
+        these default settings also fail to agree with each other: on
+        yeast-GEM, 67.5% of reactions fail the Gelman-Rubin R-hat>1.1 convergence
+        threshold across 4 independent chains (96.5% fail the stricter R-hat>1.01).
+        Default-settings genome-scale output is therefore unconverged for most
+        reactions. Options for genome-scale analyses are increasing thinning
+        substantially (≥1000), increasing n_samples to compensate, using
+        ``method='chrr'`` (raven-toolbox's rounding-based alternative to ACHR), or
+        assessing sample quality with an ESS or R-hat diagnostic (see the
+        `sampling convergence calibration study
         <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/sampling-convergence-calibration.md>`_
         on raven-docs).
     warmup:
-        ``chrr`` — burn-in steps discarded before the first recorded sample.
+        ``chrr``: burn-in steps discarded before the first recorded sample.
     fixed_width_tol:
-        ``chrr`` — a reaction whose FVA range is narrower than this is folded into
-        the equality system as fixed (keeps the reduced polytope full-dimensional).
+        ``chrr``: a reaction whose FVA range is narrower than this is added to
+        the equality system as fixed, which keeps the reduced polytope full-dimensional.
     n_objectives, good_reactions, loopless_good_reactions, exclude_reactions, max_attempts, suppress_errors:
-        ``random_objective`` only — see the method's parameters; ``good_reactions``
+        ``random_objective`` only: see the method's parameters; ``good_reactions``
         can be passed back from a previous result to skip the one-off FVA.
     replace_max_bound:
-        ``random_objective`` only — replace the largest finite bound with infinity
-        before sampling, so a reaction whose biological maximum exceeds the
-        model's arbitrary cap isn't pinned there. Off by default.
+        ``random_objective`` only: replace the largest upper bound with ``+inf`` and the
+        smallest negative lower bound with ``-inf`` before sampling, so a reaction whose
+        biological maximum exceeds the model's arbitrary cap is not pinned there. Off by default.
     min_flux:
-        ``random_objective`` only — re-solve each sample parsimoniously to
-        minimise total flux at the optimum, squeezing residual loop flux out.
+        ``random_objective`` only: re-solve each sample parsimoniously to
+        minimise total flux at the optimum, which removes residual loop flux.
     n_proc:
-        ``random_objective`` only — worker processes for drawing samples in
+        ``random_objective`` only: worker processes for drawing samples in
         parallel (each sample is an independent LP solve). Defaults to
-        ``cobra.Configuration().processes``; set to 1 to sample serially.
-        Reproducible for a given ``seed`` regardless of ``n_proc``: each
-        sample draws from its own independent RNG stream spawned from
-        ``seed``, not from one continuously-advancing generator.
+        ``cobra.Configuration().processes``; 1 draws the samples serially in this process.
+        The result is reproducible for a given ``seed`` regardless of ``n_proc``: each
+        sample draws from its own independent RNG stream spawned from ``seed``.
 
     Returns
     -------
@@ -186,15 +185,15 @@ def find_good_reactions(
     loopless: bool = True,
     exclude_reactions: Iterable[str] | None = None,
 ) -> list[str]:
-    """Reactions usable as random objectives: carry real (non-loop) flux.
+    """Reactions usable as random objectives: those that carry non-loop flux.
 
-    A reaction is kept if its FVA range spans more than ``flux_tol``. With
-    ``loopless`` (default) the FVA is loopless (``cycleFreeFlux``), so reactions
-    that can carry flux *only* through a thermodynamically-infeasible cycle have a
-    ~0 loopless range and are dropped — the right test for "loopy", unlike a fixed
-    bound threshold which wrongly drops legitimate reactions that simply reach the
-    model's default (e.g. 1000) bound. Pass ``loopless=False`` for a faster, looser
-    pass that keeps any flux-carrying reaction (loops included).
+    A reaction is kept if the larger of ``|minimum|`` and ``|maximum|`` of its FVA range
+    exceeds ``flux_tol``. With ``loopless`` (default) the FVA is loopless
+    (``cycleFreeFlux``), so reactions that can carry flux only through a
+    thermodynamically infeasible cycle have a ~0 loopless range and are dropped. A fixed
+    bound threshold would also drop legitimate reactions that reach the model's default
+    (for example 1000) bound. With ``loopless=False`` the FVA is faster and keeps any
+    flux-carrying reaction (loops included).
     """
     fva = flux_variability_analysis(
         model, fraction_of_optimum=0.0,
@@ -221,10 +220,9 @@ def _draw_one_sample(
 ) -> np.ndarray:
     """Draw one random-objective sample, retrying on a degenerate objective.
 
-    ``model``'s objective is mutated and re-solved in place -- callers must
-    give each concurrent caller its own model copy (``ProcessPool`` does this
-    for the parallel path; the serial path reuses one copy across samples,
-    same as before parallelization).
+    ``model``'s objective is modified and re-solved in place, so each concurrent
+    caller needs its own model copy (``ProcessPool`` provides one for the parallel
+    path; the serial path reuses one copy across samples).
     """
     rng = np.random.default_rng(seed_seq)
     for attempt in range(1, max_attempts + 1):
@@ -281,8 +279,8 @@ def _init_worker(
     max_attempts: int,
     suppress_errors: bool,
 ) -> None:
-    """Pool initializer: stash this worker's own model copy (deserialised by
-    ``ProcessPool``, not by us) and everything else needed to draw a sample."""
+    """Pool initialiser: store this worker's own model copy (deserialised by
+    ``ProcessPool``) and everything else needed to draw a sample."""
     global _WORKER_MODEL, _WORKER_GOOD_RXN_IDS, _WORKER_REACTION_IDS
     global _WORKER_N_OBJECTIVES, _WORKER_MIN_FLUX, _WORKER_MAX_ATTEMPTS, _WORKER_SUPPRESS_ERRORS
     _WORKER_MODEL = model
@@ -346,18 +344,18 @@ def _random_objective(
         RAVEN's ``replaceBoundsWithInf``: replace the largest upper bound with
         ``+inf`` (and the smallest negative lower bound with ``-inf``) before
         sampling, so a reaction whose biological maximum exceeds the model's
-        arbitrary cap is not pinned at it. **Off by default** — unlike RAVEN. It
+        arbitrary cap is not pinned at it. Off by default (RAVEN's default is true). It
         applies only to the sampling phase (``good_reactions`` is always found on
         the finite bounds), and it can open unbounded directions through loops
-        that show up as large fluxes in non-objective reactions; pair it with
-        ``min_flux`` if you enable it.
+        that show up as large fluxes in non-objective reactions; with ``min_flux`` the
+        loop flux is removed.
     min_flux
         After maximising the random objective, re-solve parsimoniously
-        (:func:`cobra.flux_analysis.pfba`) to minimise total flux at that optimum —
-        squeezes residual loops out of each individual sample.
+        (:func:`cobra.flux_analysis.pfba`) to minimise total flux at that optimum,
+        which removes residual loops from each sample.
     loopless_good_reactions, exclude_reactions
-        Forwarded to :func:`find_good_reactions` when it is invoked (loopless loop
-        detection is on by default).
+        Passed to :func:`find_good_reactions` when ``good_reactions`` is ``None``
+        (loopless loop detection is on by default).
     max_attempts, suppress_errors
         A sample is retried if the random objective is degenerate (zero flux). After
         ``max_attempts`` failures this raises, unless ``suppress_errors`` (then the
@@ -365,15 +363,15 @@ def _random_objective(
     seed
         Seed for reproducible objective draws. Sample ``i`` always draws from
         the ``i``-th child stream of ``numpy.random.SeedSequence(seed)``,
-        independent of every other sample and of ``n_proc`` — so a given seed
-        reproduces the same samples whether drawn serially or in parallel.
+        independent of every other sample and of ``n_proc``; a given seed
+        therefore reproduces the same samples whether drawn serially or in parallel.
     n_proc
         Worker processes for drawing samples in parallel. Defaults to
         ``cobra.Configuration().processes``; set to 1 to sample serially in
         this process. Each sample is an independent LP solve (a fresh random
-        objective, then optimize), so this parallelises via
-        ``cobra.util.ProcessPool`` — the same pool cobrapy's own
-        ``flux_variability_analysis``/``single_reaction_deletion`` use.
+        objective, then optimise), so this parallelises via
+        ``cobra.util.ProcessPool``, the same pool that cobrapy's own
+        ``flux_variability_analysis`` and ``single_reaction_deletion`` use.
 
     Returns
     -------

@@ -5,13 +5,13 @@ metabolites) using the reactions in a draft model. No solver is required:
 the computation is a pure graph traversal. It is inspired by the topological
 analysis used in Meneco (Prigent et al. 2017, PLoS Comput Biol).
 
-Typical use: run :func:`analyse_topology` before a solver-based gap-fill to
-(a) identify which metabolites are unreachable and (b) prune the candidate
-reaction pool to those relevant to each gap, reducing the solver burden.
+:func:`analyse_topology` can run before a solver-based gap-fill. It identifies the
+unreachable metabolites and lists, for each, the template reactions that produce it,
+which limits the candidate reaction pool of the gap-fill.
 
-Metabolite identifiers in *templates* must match those in *model* to be
-matched; if templates use a different namespace, align them first using
-:func:`~raven_toolbox.manipulation.transfer.add_reactions_from_model`.
+Metabolites are matched by identifier, so the identifiers in ``templates`` must equal
+those in ``model``. Templates in a different namespace need to be aligned first, for
+example with :func:`~raven_toolbox.manipulation.transfer.add_reactions_from_model`.
 """
 from __future__ import annotations
 
@@ -30,16 +30,16 @@ class TopologicalAnalysisResult:
     Parameters
     ----------
     reachable_metabolites:
-        Set of metabolite IDs that can be produced from seeds using
-        the draft reactions.
+        Metabolite IDs that can be produced from the seeds using the draft
+        reactions.
     blocked_metabolites:
-        Subset of *targets* that could not be reached from seeds.
+        Subset of ``targets`` that could not be reached from seeds.
     candidate_reactions:
-        Mapping of blocked metabolite ID → list of template reaction IDs
-        that produce that metabolite directly (matching by metabolite id).
+        Blocked metabolite ID mapped to the IDs of the template reactions that
+        produce that metabolite directly (matched by metabolite id).
     pruning_fraction:
-        Fraction of template reactions that are NOT candidates for any
-        blocked metabolite. Higher values mean the template was pruned more.
+        Fraction of template reactions (unique by id) that are not candidates
+        for any blocked metabolite.
     """
 
     reachable_metabolites: set[str] = field(default_factory=set)
@@ -53,11 +53,11 @@ def _as_models(templates: cobra.Model | Iterable[cobra.Model]) -> list[cobra.Mod
 
 
 def _compute_scope(model: cobra.Model, seed_ids: set[str]) -> set[str]:
-    """Fixed-point BFS: find all metabolites reachable from *seed_ids*.
+    """Fixed-point BFS: find all metabolites reachable from ``seed_ids``.
 
-    Uses a countdown approach: a reaction fires (forward) when all its
-    substrates are reachable; reversible reactions (lb < 0) can also fire in
-    reverse when all their products are reachable.
+    Each reaction counts its unreachable substrates. A reaction fires forward when
+    all its substrates are reachable; a reversible reaction (lb < 0) also fires in
+    reverse when all its products are reachable.
 
     Complexity: O(|metabolites| + |reactions|).
     """
@@ -136,9 +136,9 @@ def analyse_topology(
     """BFS metabolite-producibility analysis.
 
     Starting from seed metabolites (metabolites available in the medium),
-    identifies which metabolites in *model* cannot be produced using any
+    identifies which target metabolites in ``model`` cannot be produced by any
     sequence of draft reactions. For each unreachable target metabolite,
-    lists candidate template reactions that produce it directly.
+    lists the template reactions that produce it directly.
 
     Parameters
     ----------
@@ -146,17 +146,17 @@ def analyse_topology(
         Draft model to analyse.
     templates:
         Universal database model(s) containing candidate reactions.
-        Metabolite identifiers must match those in *model*.
+        Metabolite identifiers must match those in ``model``.
     seeds:
         Metabolite IDs available from the medium. Default: the metabolites of
         every exchange reaction whose bounds let it supply them, as RAVEN's
         ``gapFillTopological`` picks them: a reaction with only substrates
         (``met -->``) and ``lower_bound < 0``, or one with only products
         (``--> met``) and ``upper_bound > 0``. An exchange reaction may have
-        more than one metabolite. A :class:`UserWarning` is issued when there
-        is none.
+        more than one metabolite. A :class:`UserWarning` is issued when no
+        such reaction exists.
     targets:
-        Metabolite IDs that should be reachable. Default: every metabolite of
+        Metabolite IDs to test for reachability. Default: every metabolite of
         the first objective reaction (in model order), substrates and products,
         as in RAVEN's ``gapFillTopological``.
     verbose:
@@ -169,7 +169,7 @@ def analyse_topology(
     Raises
     ------
     ValueError
-        If *targets* is not given and the model has no objective reaction.
+        If ``targets`` is not given and the model has no objective reaction.
     """
     templates = _as_models(templates)
 

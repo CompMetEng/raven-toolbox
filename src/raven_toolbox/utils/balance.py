@@ -1,12 +1,11 @@
-"""Check the elemental balance of reactions, distinguishing *unbalanced* from
-*unknown* (missing formula).
+"""Check the elemental balance of reactions, distinguishing ``unbalanced`` from
+``unknown`` (missing formula).
 
-cobra's ``reaction.check_mass_balance()`` silently treats a missing formula as
-empty, so a reaction can look "unbalanced" — or even balanced — when the truth is
-that the data is incomplete. This module checks for missing formulas first and
-returns a graded status
-per reaction (``balanced`` / ``unbalanced`` / ``unknown``) plus the element
-imbalance — over a batch, as structured data.
+cobra's ``reaction.check_mass_balance()`` treats a missing formula as empty, so a
+reaction with missing data can be reported as unbalanced or as balanced. This module
+checks for missing formulas first and returns, for a batch of reactions, a status
+per reaction (``balanced``, ``unbalanced`` or ``unknown``) and the element imbalance
+as structured data.
 """
 from __future__ import annotations
 
@@ -24,13 +23,14 @@ class ElementalBalance:
     reaction_id
         ID of the reaction.
     status
-        ``"balanced"`` — elements balance;
-        ``"unbalanced"`` — they do not (see ``imbalance``);
-        ``"unknown"`` — at least one metabolite has no formula, or a formula cobra
-        cannot parse (e.g. the polymer ``(C5H8)n``), so it cannot be determined
-        (cobra would silently miscount the former and raise on the latter).
+        ``"balanced"``: the elements balance;
+        ``"unbalanced"``: they do not (see ``imbalance``);
+        ``"unknown"``: the reaction has no metabolites, at least one metabolite has no
+        formula, or a formula cobra cannot parse (for example the polymer ``(C5H8)n``),
+        so the balance cannot be determined (cobra treats a missing formula as empty
+        and raises ``ValueError`` for an unparsable one).
     imbalance
-        Element → net coefficient (products − reactants), only for
+        Element to net coefficient (products minus reactants), only for
         ``"unbalanced"``; empty otherwise. Charge is not included.
     """
 
@@ -47,9 +47,9 @@ def get_elemental_balance(
     Parameters
     ----------
     reactions
-        Reaction IDs/objects to check; default all reactions. (Boundary
-        reactions exchange mass with the environment and will read as
-        ``unbalanced`` — filter them out if that is not wanted.)
+        Reaction IDs or reaction objects to check; default all reactions. Boundary
+        reactions exchange mass with the environment and are reported as
+        ``unbalanced``.
 
     Returns
     -------

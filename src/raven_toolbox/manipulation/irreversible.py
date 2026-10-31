@@ -1,8 +1,4 @@
-"""Convert reversible reactions to an irreversible (forward + reverse) form.
-
-cobrapy's own ``convert_to_irreversible`` was removed, so this is a genuine
-implementation rather than a wrapper.
-"""
+"""Convert reversible reactions to an irreversible (forward and reverse) form."""
 from __future__ import annotations
 
 import copy
@@ -15,47 +11,43 @@ from raven_toolbox.utils.gpr import set_gene_rule
 def convert_to_irreversible(
     model: cobra.Model, rxns: list[str] | None = None
 ) -> list[str]:
-    """Split every reversible reaction into a forward + reverse pair.
-    For each reaction with ``lb < 0``, including exchange (boundary)
-    reactions -- MATLAB's ``convertToIrrev`` does not special-case them,
-    so neither does this:
+    """Split every reversible reaction into a forward and a reverse reaction.
+
+    The split applies to each reaction with ``lb < 0``, including exchange (boundary)
+    reactions, as in RAVEN's ``convertToIrrev``:
 
     - The original reaction is kept as the forward direction. Its
-      lower bound is clamped to 0.
+      lower bound is set to 0.
     - A new reaction with the same ID plus a ``_REV`` suffix is added,
       representing the reverse direction. Its stoichiometry is the
-      negation of the original, its bounds are ``(0, -original_lb)``,
-      and it inherits the name (with " (reversible)" appended), the
+      negation of the original and its bounds are ``(0, -original_lb)``.
+      It takes the name of the original (with " (reversible)" appended), the
       gene-protein rule, the subsystem, the annotations and the notes
-      of the original. MATLAB's ``convertToIrrev`` copies the same
-      per-reaction fields across (``eccodes``, ``rxnMiriams``,
-      ``subSystems``, ``rxnNotes``, ...); dropping them would, among
-      other things, leave the reverse reaction without an EC code and
-      so without a kcat downstream.
-    - If the original reaction's objective coefficient is negative, it
-      is moved onto the new reverse reaction (sign-flipped positive)
-      and zeroed on the forward reaction, so a reversible reaction
-      credited under the objective for *reverse*-direction flux still
-      gets that credit after splitting. A non-negative coefficient is
-      left on the forward reaction unchanged, and the reverse reaction's
-      is left at its default (0) -- matching MATLAB's ``convertToIrrev``.
+      of the original. RAVEN's ``convertToIrrev`` copies the same
+      per-reaction fields (``eccodes``, ``rxnMiriams``,
+      ``subSystems``, ``rxnNotes``, ...).
+    - If the objective coefficient of the original reaction is negative, it
+      is moved to the new reverse reaction (with the sign flipped to positive)
+      and set to 0 on the forward reaction, so that a reversible reaction
+      credited under the objective for reverse-direction flux keeps that credit after
+      splitting. A non-negative coefficient stays on the forward reaction, and the
+      objective coefficient of the reverse reaction is 0, as in RAVEN's ``convertToIrrev``.
 
     Parameters
     ----------
     model
-        A cobra.Model, mutated in place.
+        The ``cobra.Model``, modified in place.
     rxns
         Reaction IDs eligible for splitting. Reactions outside this set
-        are left untouched even if reversible. Defaults to every
-        reaction in the model, matching MATLAB's ``convertToIrrev``
-        default (its ``rxns`` name-value argument defaults to
-        ``model.rxns``).
+        are left unchanged even if reversible. Defaults to every
+        reaction in the model, as the ``rxns`` argument of RAVEN's
+        ``convertToIrrev`` defaults to ``model.rxns``.
 
     Returns
     -------
     list of str
         Sorted IDs of newly added reverse reactions (the ones ending in
-        ``_REV``). The forward reactions retain their original IDs.
+        ``_REV``). The forward reactions keep their original IDs.
     """
     eligible = None if rxns is None else set(rxns)
 

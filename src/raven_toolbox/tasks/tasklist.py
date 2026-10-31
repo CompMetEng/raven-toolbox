@@ -1,13 +1,14 @@
 """Parse a metabolic task list.
 
-A task list defines, per task, allowed inputs/outputs, optional extra reactions
-(equations), reaction-bound changes, and whether the task *should fail*. Tasks
+A task list defines, per task, allowed inputs and outputs, optional extra reactions
+(equations), reaction-bound changes, and whether the task should fail. Tasks
 are checked with :func:`raven_toolbox.tasks.check_tasks`.
 
-The file is tab-delimited (``.txt``/``.tsv``) or Excel (``.xlsx``, sheet ``TASKS``;
-needs the ``[excel]`` extra). Recognised columns (the only required one is ``ID``, which
-must not be the first column; the first column is reserved for comment markers, and a row with
-text in the first column is skipped, as in RAVEN's ``parseTaskList``):
+The file is tab-delimited (for example ``.txt`` or ``.tsv``) or Excel (``.xlsx`` or
+``.xlsm``, sheet ``TASKS``; needs the ``[excel]`` extra). Recognised columns (the only
+required one is ``ID``, which must not be the first column; the first column is reserved
+for comment markers, and a row with text in the first column is skipped, as in RAVEN's
+``parseTaskList``):
 
     ID · DESCRIPTION · IN · IN LB · IN UB · OUT · OUT LB · OUT UB ·
     EQU · EQU LB · EQU UB · CHANGED RXN · CHANGED LB · CHANGED UB ·
@@ -15,12 +16,13 @@ text in the first column is skipped, as in RAVEN's ``parseTaskList``):
 
 A task spans consecutive rows; only its first row carries an ID. Metabolites are
 written ``name[compartment]``; several in one cell are separated by ``;`` (sharing
-that row's bounds). ``IN``/``OUT`` default LB 0, UB 1000; ``EQU`` defaults LB
--1000 if reversible (``<=>``) else 0, UB 1000. An empty ``CHANGED LB``/``CHANGED UB``
-leaves that bound of the reaction unchanged. ``SHOULD FAIL``/``PRINT FLUX`` are false
-when empty or ``0``/``false``/``no`` (any case), true otherwise. The special tokens ``ALLMETS`` and
-``ALLMETSIN[comp]`` allow free uptake/excretion of all metabolites (only the upper
-bound is used).
+that row's bounds). ``IN`` and ``OUT`` default to LB 0 and UB 1000; ``EQU`` defaults to
+LB -1000 if reversible (``<=>``) else 0, and UB 1000. An empty ``CHANGED LB`` or
+``CHANGED UB`` leaves that bound of the reaction unchanged. ``SHOULD FAIL`` and
+``PRINT FLUX`` are false when empty or ``0``, ``false`` or ``no`` (any case), true
+otherwise. The special tokens ``ALLMETS`` and ``ALLMETSIN[comp]`` allow free uptake or
+excretion of all metabolites (only the upper bound is used). A row whose ID starts with
+``#`` is skipped.
 """
 from __future__ import annotations
 

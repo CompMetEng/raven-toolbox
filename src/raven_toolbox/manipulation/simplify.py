@@ -1,29 +1,30 @@
-"""Reduce a model by removing/merging reactions that cannot carry flux.
+"""Reduce a model by removing or merging reactions that cannot carry flux.
 
-Individual reduction modes (each removes a specific class of reaction, in place):
+Individual reduction modes (each acts in place):
 
-* ``remove_zero_interval_reactions`` — reactions locked at zero flux (``lb == ub == 0``);
+* ``remove_zero_interval_reactions``: removes reactions locked at zero flux (``lb == ub == 0``);
   RAVEN ``simplifyModel`` ``deleteZeroInterval``.
-* ``remove_dead_end_reactions`` — reactions touching a *topological* dead-end metabolite
-  (one that, given reaction directions, can only be produced or only consumed, or
-  participates in a single reaction); RAVEN ``deleteInaccessible``. Iterates to a fixpoint
-  and prunes orphaned metabolites.
-* ``remove_no_flux_reactions`` — reactions that cannot carry flux under the model's
-  bounds (exchange reactions opened by default), found by FVA (both min and max flux
-  zero); RAVEN ``deleteMinMax``. Catches blocked reactions that are not topological
-  dead-ends.
-* ``remove_duplicate_reactions`` — all-but-one of each set of reactions with identical
-  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``deleteDuplicates`` (detection-only: ``find_duplicate_reactions``).
-* ``constrain_reversible_reactions`` — does not remove reactions; tightens bounds, making
-  reversible reactions that can only carry flux one way irreversible (via FVA); RAVEN
+* ``remove_dead_end_reactions``: removes reactions that touch a topological dead-end metabolite
+  (one that, given the reaction directions, can only be produced or only be consumed, or
+  participates in a single reaction); RAVEN ``deleteInaccessible``. Repeats until no dead end
+  remains and removes orphaned metabolites.
+* ``remove_no_flux_reactions``: removes reactions that cannot carry flux under the bounds of the
+  model (exchange reactions are opened by default), found by FVA (minimum and maximum flux both
+  zero); RAVEN ``deleteMinMax``. It also removes blocked reactions that are not topological
+  dead ends.
+* ``remove_duplicate_reactions``: removes all but one of each set of reactions with identical
+  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``deleteDuplicates``
+  (detection only: ``find_duplicate_reactions``).
+* ``constrain_reversible_reactions``: does not remove reactions; it tightens bounds and makes
+  reversible reactions that can only carry flux in one direction irreversible (by FVA); RAVEN
   ``constrainReversible``.
-* ``group_linear_reactions`` — lossy fold of single-producer/single-consumer chains into
-  one reaction (drops gene rules); RAVEN ``mergeLinear``.
+* ``group_linear_reactions``: merges chains of single-producer, single-consumer reactions into
+  one reaction and drops the gene rules; RAVEN ``mergeLinear``.
 
-``simplify_model`` composes the above via RAVEN's ``simplifyModel`` boolean-flag interface,
-applying the selected modes in RAVEN's order. ``remove_dead_end_reactions`` and
-``remove_no_flux_reactions`` are complementary: the first is a cheap topological sweep, the
-second an exact FVA-based sweep that also removes flux-blocked reactions the first misses.
+``simplify_model`` combines these modes through the boolean-flag interface of RAVEN's
+``simplifyModel`` and applies the selected modes in the order of RAVEN.
+``remove_dead_end_reactions`` uses reaction directions only; ``remove_no_flux_reactions`` uses FVA
+and also removes flux-blocked reactions that the first function does not.
 """
 from __future__ import annotations
 
@@ -52,13 +53,13 @@ def _prune_orphan_metabolites(model: cobra.Model) -> list[str]:
 def _can_produce_and_consume(met) -> tuple[bool, bool]:
     """Whether the network can both produce and consume ``met``, by direction alone.
 
-    Purely topological, matching RAVEN ``deleteInaccessible``: a reaction's forward
-    direction always counts (regardless of its bounds), and its reverse direction
-    counts exactly when it is reversible (``lower_bound < 0``). This deliberately
-    ignores ``upper_bound`` and does not check whether a reaction can actually carry
-    flux — that bounds-aware check is ``remove_no_flux_reactions``'s job (RAVEN
-    ``deleteMinMax``, via FVA). A reaction locked at zero flux (``lb == ub == 0``)
-    therefore still counts as a producer/consumer here, as in RAVEN.
+    The check is topological, as RAVEN ``deleteInaccessible``: the forward direction of a
+    reaction always counts (whatever its bounds), and its reverse direction
+    counts when the reaction is reversible (``lower_bound < 0``). The check ignores
+    ``upper_bound`` and does not test whether a reaction can carry flux; the bounds-aware
+    test is ``remove_no_flux_reactions`` (RAVEN ``deleteMinMax``, by FVA). A reaction locked at
+    zero flux (``lb == ub == 0``) therefore still counts as a producer or consumer here, as in
+    RAVEN.
     """
     produce = consume = False
     for rxn in met.reactions:
@@ -78,10 +79,11 @@ def remove_dead_end_reactions(
 ) -> tuple[list[str], list[str]]:
     """Iteratively remove dead-end reactions and metabolites.
 
-    A metabolite is a dead end if it participates in only one reaction, or if (accounting for
-    reaction directionality) it can only be produced or only consumed — such metabolites cannot
-    carry steady-state flux, so the reactions touching them are removed. Repeats until stable.
-    ``reserved`` reaction ids are never removed, even if they touch a dead-end metabolite.
+    A metabolite is a dead end if it participates in only one reaction, or if (given the
+    reaction directions) it can only be produced or only be consumed. Such a metabolite cannot
+    carry steady-state flux, so the reactions that contain it are removed. The removal repeats
+    until no dead end remains. ``reserved`` reaction ids are never removed, even if they contain
+    a dead-end metabolite.
 
     Returns ``(removed_reaction_ids, removed_metabolite_ids)``.
     """
@@ -119,11 +121,11 @@ def remove_zero_interval_reactions(
 ) -> list[str]:
     """Remove reactions locked at zero flux (``lb == ub == 0``), pruning orphans.
 
-    RAVEN ``simplifyModel``'s ``deleteZeroInterval`` mode: such reactions can never
-    carry flux, so they only enlarge downstream problems. Every metabolite left without a
-    reaction is removed, including ones that were orphans before. Genes are kept, as in
-    RAVEN ``removeReactions`` with its defaults. ``reserved`` reaction ids are never
-    removed. Modifies in place; returns the removed reaction ids.
+    This is the ``deleteZeroInterval`` mode of RAVEN ``simplifyModel``. Such reactions cannot
+    carry flux. Every metabolite left without a reaction is removed, including metabolites that
+    had no reaction before. Genes are kept, as in RAVEN ``removeReactions`` with its defaults.
+    ``reserved`` reaction ids are never removed. The model is modified in place; the function
+    returns the removed reaction ids.
     """
     reserved = set(reserved or [])
     zero = [
@@ -144,17 +146,17 @@ def remove_no_flux_reactions(
 ) -> list[str]:
     """Remove reactions that cannot carry flux under the tested bounds (RAVEN ``deleteMinMax``).
 
-    Runs FVA and drops every reaction whose minimum and maximum flux are both zero.
+    Runs FVA and removes every reaction whose minimum and maximum flux are both zero.
     With ``open_exchanges`` (default) the reactions in ``model.exchanges`` are first
     opened to at least ``(-1000, 1000)``; sink and demand reactions and all internal
     bounds keep their current values, so a reaction blocked only by one of those is
-    still removed. With ``open_exchanges=False`` the current bounds are used, as RAVEN's
-    ``deleteMinMax`` does, which can remove more. A reaction that is blocked under these
-    bounds stays blocked under any tighter ones, so removing it before task discovery /
-    the merge is safe as long as no later step relaxes a sink, demand or internal
+    still removed. With ``open_exchanges=False`` the current bounds are used, as in RAVEN's
+    ``deleteMinMax``, which can remove more reactions. A reaction that is blocked under these
+    bounds stays blocked under any tighter bounds, so removing it before task discovery or
+    the merge holds as long as no later step relaxes a sink, demand or internal
     bound. ``reserved`` reaction ids are never removed. Every metabolite left without a
     reaction is removed; genes are kept, as in RAVEN ``removeReactions`` with its
-    defaults. Modifies in place; returns the removed reaction ids.
+    defaults. The model is modified in place; the function returns the removed reaction ids.
     """
     reserved = set(reserved or [])
     blocked = [
@@ -179,9 +181,9 @@ def _stoich_signature(rxn, *, ignore_direction: bool) -> frozenset:
     """Signature considering stoichiometry only (used by find_duplicate_reactions).
 
     When ``ignore_direction`` is True, ``A → B`` and ``B → A`` (the same
-    reaction with all coefficients negated) share a signature. Both
-    orientations are accumulated and the lexicographically smaller one
-    wins so the dict-key lookup is direction-symmetric.
+    reaction with all coefficients negated) share a signature. The
+    lexicographically smaller of the two orientations is used, so the signature
+    does not depend on the direction.
     """
     forward = frozenset((m.id, c) for m, c in rxn.metabolites.items())
     if not ignore_direction:
@@ -197,23 +199,22 @@ def find_duplicate_reactions(
 ) -> list[list[cobra.Reaction]]:
     """Return groups of reactions that share identical stoichiometry.
 
-    Detection-only counterpart to :func:`remove_duplicate_reactions`.
-    Bounds, objective coefficients, GPRs and annotations are ignored —
-    only stoichiometry is compared, mirroring the legacy yeast-GEM
-    ``findDuplicatedRxns`` and matching the typical curation use case
-    (find reactions that *could* be merged).
+    This is the detection-only counterpart to :func:`remove_duplicate_reactions`.
+    Only the stoichiometry is compared; bounds, objective coefficients, GPRs and annotations
+    are ignored, as in yeast-GEM ``findDuplicatedRxns``. The groups are reactions that could
+    be merged.
 
     Parameters
     ----------
     ignore_direction
         When True (default), ``A → B`` and ``B → A`` are treated as
-        duplicates (yeast-GEM's convention). Set ``False`` to require
-        identical orientation.
+        duplicates (the convention of yeast-GEM). If False, identical
+        orientation is required.
 
     Returns
     -------
-    A list of duplicate groups. Each group is itself a list with
-    ≥ 2 reactions sharing the same stoichiometry. Reactions that have
+    A list of duplicate groups. Each group is a list of
+    at least 2 reactions with the same stoichiometry. Reactions that have
     no duplicate are omitted.
     """
     groups: dict[frozenset, list[cobra.Reaction]] = {}
@@ -228,7 +229,7 @@ def remove_duplicate_reactions(
     *,
     restrict_to_metabolites: Iterable[cobra.Metabolite] | None = None,
 ) -> list[str]:
-    """Remove all-but-one of each set of duplicate reactions.
+    """Remove all but one of each set of duplicate reactions.
 
     Reactions are duplicates when they have identical stoichiometry and the same
     reversibility, as in RAVEN ``contractModel``: reversible reactions are compared in the
@@ -236,27 +237,25 @@ def remove_duplicate_reactions(
     are duplicates. Bounds and objective coefficients may differ; the survivor takes the
     lowest lower bound, the highest upper bound and the highest objective coefficient of its
     group, with a warning where they differ (the values are taken as stored, not mirrored for
-    a reaction written in the opposite direction). One of each set is kept; there is no
+    a reaction written in the opposite direction). One reaction of each set is kept; there is no
     reserved-reaction option, as in ``contractModel``. Returns the removed reaction IDs.
 
-    The survivor is the first-encountered reaction in ``model.reactions`` order
-    (matching RAVEN's ``contractModel``). Its ``gene_reaction_rule`` becomes the
-    union of every duplicate's top-level OR-clauses, deduplicated, rather than
-    just its own — an isozyme relationship recorded on a *different* duplicate
-    would otherwise be silently dropped, and ``contractModel`` merges this way.
-    If every reaction in the group shares an ``_EXP_<digits>`` suffix
-    (:func:`~raven_toolbox.manipulation.expand.expand_model`'s naming), the model
-    is assumed to have gone through ``expand_model``, and the suffix is stripped
-    from the survivor's id — so an expand-then-remove-duplicates round trip
-    returns the original reaction id, not an arbitrarily-numbered expansion copy.
+    The survivor is the first reaction of the set in ``model.reactions`` order
+    (as in RAVEN's ``contractModel``). Its ``gene_reaction_rule`` becomes the
+    union of the top-level OR-clauses of every duplicate, without repeated clauses, as
+    in ``contractModel``; an isozyme recorded on another duplicate is therefore kept.
+    If every reaction in the set has an ``_EXP_<digits>`` suffix
+    (the naming of :func:`~raven_toolbox.manipulation.expand.expand_model`), the suffix is removed
+    from the id of the survivor, so that ``expand_model`` followed by ``remove_duplicate_reactions``
+    restores the original reaction id.
 
     Parameters
     ----------
     restrict_to_metabolites:
-        If given, only reactions touching at least one of these metabolites
-        are checked for duplicates; every other reaction is left alone even
-        if it is already a duplicate of another (matching ``contractModel``'s
-        ``mets`` argument, used internally by ``replace_metabolite``).
+        If given, only reactions that contain at least one of these metabolites
+        are checked for duplicates; every other reaction is left unchanged even
+        if it is a duplicate of another reaction (as the ``mets`` argument of ``contractModel``;
+        ``replace_metabolite`` uses it).
     """
     touching = (
         {r for m in restrict_to_metabolites for r in m.reactions}
@@ -304,12 +303,11 @@ def _merge_bounds_and_objective(keep: cobra.Reaction, group: list[cobra.Reaction
 
 
 def _top_level_or_clauses(gpr: cobra.core.gene.GPR) -> list[str]:
-    """The top-level OR-clauses of a GPR, as strings, via cobra's own AST.
+    """The top-level OR-clauses of a GPR, as strings, from the syntax tree of cobra.
 
-    A clause containing "and" is parenthesised for readability when rejoined
-    with " or " — not required for correctness (Python's own operator
-    precedence already makes "A and B or C" parse as "(A and B) or C"), but
-    matches how a human, and RAVEN's own ``contractModel``, would write it.
+    A clause that contains "and" is parenthesised when rejoined with " or ". The parentheses
+    are not required (the operator precedence of Python already parses "A and B or C" as
+    "(A and B) or C"); they follow the form that RAVEN's ``contractModel`` writes.
     """
     body = gpr.body
     if body is None:
@@ -326,7 +324,7 @@ def _top_level_or_clauses(gpr: cobra.core.gene.GPR) -> list[str]:
 
 
 def _merge_gene_reaction_rules(keep: cobra.Reaction, group: list[cobra.Reaction]) -> None:
-    """Set ``keep``'s GPR to the union of every reaction in ``group``'s OR-clauses."""
+    """Set the GPR of ``keep`` to the union of the OR-clauses of every reaction in ``group``."""
     clauses: list[str] = []
     seen: set[str] = set()
     for rxn in group:
@@ -341,20 +339,21 @@ def _merge_gene_reaction_rules(keep: cobra.Reaction, group: list[cobra.Reaction]
 def constrain_reversible_reactions(
     model: cobra.Model, *, eps: float = 1e-10
 ) -> list[str]:
-    """Constrain reversible reactions that can only carry flux one way.
+    """Constrain reversible reactions that can only carry flux in one direction.
 
-    Runs FVA on
-    each reversible reaction; if it can only carry forward flux its lower bound
-    is set to 0, and if it can only carry reverse flux it is flipped to a forward
-    reaction (stoichiometry, bounds, and objective negated). Returns the changed
-    reaction IDs.
+    Runs FVA on each reversible reaction. If a reaction can only carry forward flux, its lower bound
+    is set to 0. If it can only carry reverse flux, it is turned into a forward reaction: the
+    stoichiometry and the objective coefficient are negated and the bounds become ``(0,
+    -lower_bound)``. Returns the IDs of the changed reactions. A bound counts as zero when ``|flux|
+    < eps`` (default 1e-10, the threshold of RAVEN ``simplifyModel`` ``constrainReversible``). A
+    reaction with an infinite FVA range is not changed. Raises ``RuntimeError`` if the FVA fails or
+    returns NaN ranges (an infeasible model).
 
-    Matches RAVEN ``simplifyModel``'s ``constrainReversible``: it classifies a bound as
-    zero at ``|flux| < 1e-10`` and runs its FVA (``getAllowedBounds`` → ``solveLP``) at
-    ``FeasibilityTol = 1e-9``. We set the same feasibility tolerance on the solver so the
-    FVA min/max are trustworthy at that 1e-10 threshold (at Gurobi's looser 1e-6 default a
-    reaction with tiny one-way flux is mis-classified, changing its reversibility and, in
-    turn, how ``group_linear_reactions`` merges it).
+    RAVEN runs its FVA (``getAllowedBounds`` → ``solveLP``) at ``FeasibilityTol = 1e-9``. The
+    function sets the same feasibility tolerance, and the same optimality tolerance, on the solver
+    when the solver exposes these Gurobi parameters. At the Gurobi default of 1e-6, a reaction with
+    a tiny one-way flux is misclassified, which changes its reversibility and how
+    ``group_linear_reactions`` merges it.
     """
     revs = [r for r in model.reactions if r.lower_bound < 0 < r.upper_bound]
     if not revs:
@@ -414,13 +413,12 @@ def group_linear_reactions(
 ) -> None:
     """Merge linear (single-producer, single-consumer) reaction chains.
 
-    **Lossy**: gene-reaction associations are discarded (RAVEN does the same), since merged
-    reactions have no meaningful combined GPR. The model is first made irreversible, then any
-    metabolite that is produced by exactly one reaction and consumed by exactly one reaction is
-    eliminated by merging the two reactions. Metabolites are visited in model order and the
-    reaction with the lower index survives a merge, as in RAVEN's ``groupLinear``, so the
-    survivor of a chain is its first reaction. ``reserved`` reaction ids are never merged
-    away. Mutates in place.
+    All gene-reaction rules are cleared and all genes are removed from the model, as in RAVEN. The
+    model is first made irreversible, then any metabolite that is produced by exactly one reaction
+    and consumed by exactly one reaction is eliminated by merging the two reactions. Metabolites are
+    visited in model order and the reaction with the lower index survives a merge, as in RAVEN's
+    ``groupLinear``, so the survivor of a chain is its first reaction. ``reserved`` reaction ids are
+    never merged away. The model is modified in place.
     """
     reserved = set(reserved or [])
 
@@ -491,20 +489,23 @@ def simplify_model(
 ) -> None:
     """Reduce a model by the selected simplification modes (RAVEN ``simplifyModel``).
 
-    A single entry point mirroring RAVEN's ``simplifyModel`` boolean-flag interface, so a
-    caller composes a simplification the same way RAVEN does (e.g. ftINIT's first
-    simplification = ``delete_zero_interval + delete_dead_end + delete_no_flux``; its
-    second = ``constrain_reversible``). Modes run in RAVEN's order: duplicates, zero-interval,
+    The function has the boolean-flag interface of RAVEN's ``simplifyModel``, so a simplification
+    is composed as in RAVEN (for example the first simplification of ftINIT is
+    ``delete_zero_interval + delete_dead_end + delete_no_flux``, and the second is
+    ``constrain_reversible``). Modes run in the order of RAVEN: duplicates, zero-interval,
     topological dead-end, no-flux (FVA ``deleteMinMax``), constrain-reversible, then linear
     grouping, so reversible reactions that carry flux in one direction only are made
-    irreversible before they are grouped. Each mode delegates to the dedicated function in
-    this module. All operate in place. ``reserved`` reaction ids are never removed by the
+    irreversible before they are grouped. Each mode delegates to the function of this module with
+    the same name. All modes operate in place. ``reserved`` reaction ids are never removed by the
     zero-interval, dead-end, no-flux and group-linear modes (the duplicates mode ignores them, as
-    in RAVEN); ``open_exchanges``
-    is forwarded to the no-flux pass.
+    in RAVEN); ``open_exchanges`` is passed to the no-flux mode.
 
-    RAVEN's ``deleteUnconstrained`` (boundary-metabolite removal) has no analogue here:
-    cobra models use explicit boundary reactions rather than an ``unconstrained`` field.
+    ``delete_duplicates`` runs :func:`remove_duplicate_reactions` on the whole model.
+    ``group_linear`` runs :func:`group_linear_reactions`, which clears all gene-reaction rules and
+    removes all genes.
+
+    RAVEN's ``deleteUnconstrained`` (boundary-metabolite removal) has no analogue here: cobra
+    models have explicit boundary reactions and no ``unconstrained`` field.
     """
     if delete_duplicates:
         remove_duplicate_reactions(model)

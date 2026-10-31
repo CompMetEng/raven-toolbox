@@ -1,23 +1,22 @@
-"""Build a draft model for a KEGG species from the reference artefacts (step 3b.4).
+"""Build a draft model for a KEGG species from the reference artefacts.
 
 Ports the **organism-ID** path of RAVEN ``getKEGGModelForOrganism`` (the branch
-taken when no FASTA file is given). For an organism already annotated in KEGG it
-needs no homology search: take the organism's gene↔KO assignments, map KO→reaction
-against the gene-free reference model, OR-join the organism's genes into each
-reaction's GPR, and keep the reactions that end up with genes (plus spontaneous
-reactions, optionally). The HMM/FASTA path is step 3b.5 (:mod:`.query`).
+taken when no FASTA file is given). An organism already annotated in KEGG needs no
+homology search: the function takes the gene and KO assignments of the organism, maps
+KOs to reactions against the gene-free reference model, OR-joins the organism's genes
+into each reaction's GPR, and keeps the reactions that have genes (and optionally
+spontaneous reactions). The HMM and FASTA path is in :mod:`.query`.
 
-Consumes the 3b.2 artefacts: the gene-free reference ``cobra.Model`` plus the
-``ko_reaction``, ``organism_gene_ko`` and ``rxn_flags`` tables. The KO→reaction
-mapping is taken from the ``ko_reaction`` table (a lossless published artefact)
-rather than from the reference model's annotations, so it does not depend on KEGG
-annotations surviving an SBML round-trip.
+Consumes the reference artefacts: the gene-free reference ``cobra.Model`` plus the
+``ko_reaction``, ``organism_gene_ko`` and ``rxn_flags`` tables. The mapping of KOs
+to reactions comes from the ``ko_reaction`` table, so it does not depend on KEGG
+annotations of the reference model surviving an SBML round trip.
 
-Domain mode (``organism_id`` = ``"eukaryotes"``/``"prokaryotes"``) keeps the genes
+Domain mode (``organism_id`` ``"eukaryotes"`` or ``"prokaryotes"``) keeps the genes
 of every organism in that domain; it needs the KEGG ``taxonomy`` file. Unlike
-RAVEN, this uses the domain classification directly rather than the full
-``getPhylDist`` distance matrix — the matrix existed for per-organism HMM
-subsampling, which our fixed prok90/euk90 libraries (3b.3) make unnecessary.
+RAVEN, it uses the domain classification directly and does not compute the
+``getPhylDist`` distance matrix, which RAVEN uses for per-organism HMM
+subsampling; the fixed prok90 and euk90 libraries need no subsampling.
 """
 from __future__ import annotations
 
@@ -52,8 +51,8 @@ def get_kegg_model_for_organism(
     Parameters
     ----------
     organism_id
-        Three/four-letter KEGG organism code (e.g. ``"eco"``), or
-        ``"eukaryotes"``/``"prokaryotes"`` for a whole-domain model (requires
+        Three- or four-letter KEGG organism code (for example ``"eco"``), or
+        ``"eukaryotes"`` or ``"prokaryotes"`` for a whole-domain model (requires
         ``taxonomy``). Matched case-insensitively.
     reference_model
         The gene-free KEGG reference model (from :func:`build_reference_model`).
@@ -61,11 +60,11 @@ def get_kegg_model_for_organism(
         The relational tables from :func:`build_kegg_tables` (or read back with
         :func:`read_kegg_table`).
     taxonomy
-        Path to the KEGG ``taxonomy`` file; required only for domain mode.
+        Path to the KEGG ``taxonomy`` file; required in domain mode.
     keep_spontaneous, keep_undefined_stoich, keep_incomplete, keep_general
         Quality filters (RAVEN's ``keep*``). A reaction flagged in ``rxn_flags``
         is dropped unless its keep flag is set; this takes precedence over having
-        genes. Spontaneous reactions are additionally kept *without* genes when
+        genes. Spontaneous reactions without genes are also kept when
         ``keep_spontaneous`` is true.
 
     Returns
@@ -128,18 +127,18 @@ def get_kegg_model_for_organism_from_artefacts(
     taxonomy: str | Path | None = None,
     **kwargs,
 ) -> cobra.Model:
-    """Load the published 3b.2 artefacts from ``artefact_dir`` and build the model.
+    """Load the published reference artefacts from ``artefact_dir`` and build the model.
 
-    Reads ``reference_model.yml.gz`` and the ``ko_reaction``/``organism_gene_ko``/
-    ``rxn_flags`` gzipped-TSV tables, then calls :func:`get_kegg_model_for_organism`.
-    If ``artefact_dir`` is ``None`` the published artefacts are fetched/cached via
+    Reads ``reference_model.yml.gz`` and the gzipped TSV tables ``ko_reaction``,
+    ``organism_gene_ko`` and ``rxn_flags``, then calls :func:`get_kegg_model_for_organism`.
+    If ``artefact_dir`` is ``None``, the published artefacts are fetched and cached via
     :func:`raven_toolbox.data.ensure_kegg_data` (``version`` selects the release).
+    Remaining keyword arguments go to :func:`get_kegg_model_for_organism`.
 
-    For a whole-domain model (``organism_id`` = ``"prokaryotes"``/``"eukaryotes"``)
-    the KEGG ``taxonomy`` artefact is resolved automatically — from ``artefact_dir``
-    if present, otherwise fetched via :func:`raven_toolbox.data.ensure_kegg_taxonomy`
-    (it is a separate artefact, not part of the core set) — unless an explicit
-    ``taxonomy`` path is given.
+    For a whole-domain model (``organism_id`` ``"prokaryotes"`` or ``"eukaryotes"``)
+    the KEGG ``taxonomy`` artefact is taken from ``artefact_dir`` if present, otherwise
+    fetched via :func:`raven_toolbox.data.ensure_kegg_taxonomy`, because it is a separate
+    artefact outside the core set. An explicit ``taxonomy`` path takes precedence.
     """
     if artefact_dir is None:
         from raven_toolbox.data import ensure_kegg_data

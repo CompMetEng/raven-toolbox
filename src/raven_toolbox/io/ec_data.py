@@ -1,24 +1,23 @@
 """Typed enzyme-constrained ecModel substructure (``model.ec``).
 
-Aligned with MATLAB GECKO's ``model.ec`` struct. Holds the per-reaction and
+Follows the layout of MATLAB GECKO's ``model.ec`` struct. Holds the per-reaction and
 per-enzyme arrays that the GECKO toolbox attaches to a metabolic model when
 making it enzyme-constrained: kcat values, enzyme molecular weights, the
-sparse reaction-to-enzyme coupling matrix, and assorted bookkeeping
-(provenance source tags, free-text notes, EC numbers, sequences).
+sparse reaction-to-enzyme coupling matrix, and the provenance source tags,
+free-text notes, EC numbers and sequences.
 
-This module owns:
+This module contains:
 
 - the ``EcData`` dataclass (in-memory shape),
-- the YAML schema for the ``ec-rxns`` / ``ec-enzymes`` / ``gecko_light``
+- the YAML schema for the ``ec-rxns``, ``ec-enzymes`` and ``gecko_light``
   top-level sections,
 - the (de)serialisation helpers `ec_data_from_yaml_sections` and
   `ec_data_to_yaml_sections`.
 
-It does NOT touch the cobra-shaped portion of the document — that stays
-with ``raven_toolbox.io.yaml``, which calls into here when ec sections are
-present. The split mirrors RAVEN MATLAB: ``readYAMLmodel.m`` populates
-``model.ec`` whenever the YAML defines it; downstream consumers
-(geckopy / GECKO) operate on the populated struct.
+The cobra-shaped portion of the document is handled by ``raven_toolbox.io.yaml``,
+which calls into this module when ec sections are present. The same division
+exists in RAVEN MATLAB: ``readYAMLmodel.m`` populates ``model.ec`` whenever the
+YAML defines it.
 
 YAML schema (one entry per row):
 
@@ -58,21 +57,20 @@ class EcData:
     """Typed enzyme-constrained ecModel substructure attached as ``model.ec``.
 
     Field semantics match MATLAB GECKO's ``model.ec`` struct one-to-one.
-    Two parallel index spaces:
+    The fields form two parallel index spaces:
 
     - per-reaction arrays (``rxns``, ``kcat``, ``source``, ``notes``,
       ``eccodes``) of length ``n_rxns``;
     - per-enzyme arrays (``genes``, ``enzymes``, ``mw``, ``sequence``,
       ``concs``) of length ``n_enzymes``.
 
-    Connected by the sparse ``rxn_enz_mat`` of shape ``(n_rxns, n_enzymes)``
-    whose ``[i, j]`` entry is the subunit count of enzyme j in reaction i
-    (typically 0 or 1; >1 for heteromeric complexes).
+    The sparse ``rxn_enz_mat`` of shape ``(n_rxns, n_enzymes)`` connects the two spaces.
+    Its ``[i, j]`` entry is the subunit count of enzyme j in reaction i (0 or 1 for
+    single enzymes, above 1 for heteromeric complexes).
 
-    Sentinels (mirror MATLAB GECKO):
+    Sentinels (as in MATLAB GECKO):
 
-    - ``kcat == 0`` means "no kcat assigned" (zero is the unset state;
-      real turnover numbers are always positive).
+    - ``kcat == 0`` means "no kcat assigned" (real turnover numbers are positive).
     - ``mw == nan`` means "MW unknown" (the writer omits NaN mw entries).
     - ``concs == nan`` means "not measured" (the writer omits NaN concs).
     - empty strings in ``source`` / ``notes`` / ``eccodes`` / ``sequence``
@@ -80,10 +78,10 @@ class EcData:
 
     ``gecko_light`` marks the gecko-light layout: cobra reactions stay
     singular, ec.rxns carries one entry per isozyme distinguished by a
-    ``###_`` counter prefix, and per-enzyme ``prot_<id>`` / usage reactions
-    are skipped in favour of the shared protein pool. ``False`` is the
-    default (full layout, where ``ec.rxns`` matches cobra reactions
-    one-to-one after isozyme expansion).
+    ``###_`` counter prefix, and the per-enzyme ``prot_<id>`` and usage reactions
+    are omitted in favour of the shared protein pool. ``False`` (default) is the
+    full layout, where ``ec.rxns`` matches cobra reactions
+    one-to-one after isozyme expansion.
     """
     gecko_light: bool = False
     rxns: list[str] = field(default_factory=list)
@@ -111,10 +109,8 @@ class EcData:
     def validate(self) -> None:
         """Raise ``ValueError`` if internal field lengths are inconsistent.
 
-        Cheap sanity check: catches accidental drift between the per-rxn
-        arrays, the per-enzyme arrays, and the coupling matrix shape.
-        Called by pipeline stages after they mutate the data, and by the
-        YAML loader after construction.
+        Compares the lengths of the per-reaction arrays, the lengths of the per-enzyme
+        arrays and the shape of the coupling matrix with ``n_rxns`` and ``n_enzymes``.
         """
         n_r, n_e = self.n_rxns, self.n_enzymes
 
@@ -155,15 +151,14 @@ class EcData:
     @staticmethod
     def empty(n_rxns: int, n_enzymes: int = 0, *,
               gecko_light: bool = False) -> EcData:
-        """Preallocate an ``EcData`` with the canonical sentinel values.
+        """Preallocate an ``EcData`` with the sentinel values.
 
-        Per-rxn fields get empty strings; per-enzyme fields get empty
-        strings and NaN arrays. ``kcat`` starts at 0 (0 marks "no kcat
-        assigned"). ``mw`` and ``concs`` start at NaN, since their
-        physical default is "unknown" rather than zero.
+        Per-reaction string fields are empty strings; per-enzyme string fields are
+        empty strings. ``kcat`` starts at 0 (0 marks "no kcat assigned"). ``mw`` and
+        ``concs`` start at NaN (unknown). ``rxn_enz_mat`` is all-zero.
 
-        Used by makeEcModel-style builders that allocate the structure
-        up-front, then fill it row by row.
+        Builders in the style of makeEcModel allocate the structure with this method
+        and then fill it row by row.
         """
         return EcData(
             gecko_light=gecko_light,
@@ -190,10 +185,9 @@ class EcData:
 def ec_data_from_yaml_sections(sections: dict) -> EcData | None:
     """Build an ``EcData`` from the ec-* top-level YAML sections.
 
-    Returns ``None`` when ``ec-rxns`` and ``ec-enzymes`` are both absent —
-    the caller treats that as "this YAML is not an ec-model" and leaves
-    ``model.ec = None``. If exactly one of the two is present, the YAML
-    is malformed: raise ValueError.
+    Returns ``None`` when ``ec-rxns`` and ``ec-enzymes`` are both absent; the
+    caller then leaves ``model.ec = None``. Raises ``ValueError`` when exactly one
+    of the two is present.
 
     ``sections`` is the dict of foreign top-level keys captured by the YAML
     loader. ``gecko_light`` defaults to ``False`` when the key is absent.
@@ -224,11 +218,10 @@ def _build_ec_data(
 ) -> EcData:
     """Construct an ``EcData`` from the parsed YAML lists.
 
-    Missing optional fields are filled with sentinels (NaN for mw/concs,
-    empty string for source/notes/eccodes/sequence, 0.0 for kcat).
-    Validates that every enzyme referenced from an ec-rxns row exists in
-    ec-enzymes; raises ValueError otherwise (catches a common authoring
-    bug where the two sections drifted out of sync).
+    Missing optional fields are filled with sentinels (NaN for ``mw`` and ``concs``,
+    empty string for ``source``, ``notes``, ``eccodes`` and ``sequence``, 0.0 for ``kcat``).
+    Raises ``ValueError`` when an ec-rxns row references an enzyme that is absent
+    from ec-enzymes. Warns when ec-rxns has entries but no row references an enzyme.
     """
     n_e = len(ec_enzymes_raw)
     genes = [str(e["genes"]) for e in ec_enzymes_raw]
@@ -297,11 +290,10 @@ def ec_data_to_yaml_sections(ec: EcData) -> dict[str, Any]:
 
     Returns a fresh dict with three keys: ``gecko_light`` (bool),
     ``ec-rxns`` (list of mappings), ``ec-enzymes`` (list of mappings).
-    Values are native Python primitives — no numpy/ruamel scalars — so
-    the YAML writer can dump them directly without further coercion.
+    Values are native Python primitives (no numpy or ruamel scalars), so the YAML
+    writer can dump them directly.
 
-    Empty optional fields are omitted to keep the file compact; the
-    loader fills them back in.
+    Empty optional fields are omitted; the loader restores them.
     """
     return {
         "gecko_light": bool(ec.gecko_light),
@@ -311,7 +303,7 @@ def ec_data_to_yaml_sections(ec: EcData) -> dict[str, Any]:
 
 
 def _build_ec_rxns_list(ec: EcData) -> list[dict[str, Any]]:
-    """Translate per-rxn ec fields + ``rxn_enz_mat`` rows to the
+    """Translate the per-reaction ec fields and the ``rxn_enz_mat`` rows to the
     list-of-mappings YAML form.
 
     Empty ``source`` / ``notes`` / ``eccodes`` strings are omitted.
@@ -370,11 +362,11 @@ def _build_ec_enzymes_list(ec: EcData) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 def _canonicalize_eccodes(value) -> str:
-    """Coerce an EC-codes field to a single `;`-joined string.
+    """Convert an EC-codes field to a single `;`-joined string.
 
-    The schema accepts either a scalar string (`"1.1.1.1"`) or a list of
-    strings (`["1.1.1.1", "1.1.99.40"]`); both round-trip to the same
-    internal representation.
+    The schema accepts a scalar string (`"1.1.1.1"`) or a list of
+    strings (`["1.1.1.1", "1.1.99.40"]`); a scalar is returned unchanged and a list
+    is joined with `;`. `None` gives an empty string.
     """
     if value is None:
         return ""

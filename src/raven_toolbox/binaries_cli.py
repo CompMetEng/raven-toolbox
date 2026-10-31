@@ -1,8 +1,8 @@
-"""``raven-toolbox-binaries`` — provision the external command-line tools.
+"""``raven-toolbox-binaries``: provision the external command-line tools.
 
 raven-toolbox does not download binaries during ``pip install`` (pip can only
-pull PyPI wheels, and BLAST/DIAMOND/HMMER/MAFFT/CD-HIT are not on PyPI). Instead,
-after installing, run this once to fetch the version-pinned, SHA256-verified
+pull PyPI wheels, and BLAST, DIAMOND, HMMER, MAFFT and CD-HIT are not on PyPI).
+After installing, running this command once fetches the version-pinned, SHA256-verified
 bundles for the current platform::
 
     raven-toolbox-binaries --set runtime   # end users: blast, diamond, hmmsearch
@@ -11,8 +11,8 @@ bundles for the current platform::
 
 Tools already on ``PATH`` (or pointed at by ``RAVEN_PYTHON_*``) are left as-is
 unless ``--force-download`` is given. Tools with no bundle for this OS/arch
-(e.g. MAFFT/CD-HIT on native Windows) are reported as unavailable with a
-conda/WSL2 hint — see
+(for example MAFFT and CD-HIT on native Windows) are reported as unavailable with a
+conda or WSL2 hint; see
 https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/maintaining_binaries.md.
 """
 from __future__ import annotations
@@ -36,8 +36,9 @@ def _print_sets() -> None:
 def main(argv: list[str] | None = None) -> int:
     """Parse CLI arguments and provision the requested binaries.
 
-    Prints a per-tool status line and returns the process exit code: ``0`` if
-    every tool ended up present or downloaded, ``1`` if any download failed.
+    Prints a per-tool status line and returns the process exit code: ``1`` if any
+    download failed, otherwise ``0`` (tools reported as unavailable do not change the
+    exit code).
     """
     parser = argparse.ArgumentParser(
         prog="raven-toolbox-binaries",

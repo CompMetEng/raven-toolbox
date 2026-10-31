@@ -1,5 +1,4 @@
-"""Shared helpers — GPR linting, elemental balance, formula inference, model
-curation checks, id generation and sorting."""
+"""Shared helpers for GPR linting, elemental balance, formulas, model checks, ids and sorting."""
 from raven_toolbox.utils.balance import ElementalBalance, get_elemental_balance
 from raven_toolbox.utils.composition import GuessCompositionResult, guess_composition
 from raven_toolbox.utils.gpr import GPRIssue, find_non_dnf_grrules, is_dnf, parse_gr_rule

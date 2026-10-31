@@ -1,14 +1,15 @@
-"""Human Protein Atlas (HPA) parsers + gene-scoring adapters.
+"""Human Protein Atlas (HPA) parsers and gene-scoring adapters.
 
-HPA publishes two datasets per release: a **proteomics** table (``normal_tissue.tsv``)
-with per-tissue / per-cell-type *categorical* expression levels (High/Medium/Low/Not
-detected) plus reliability flags, and an **RNA-seq** table (``rna_tissue_consensus.tsv``
-/ ``rna_tissue_gtex.tsv``) with per-tissue *TPM* values. Both are returned as tidy
-:class:`pandas.DataFrame`\\ s; the scoring adapters delegate the GPR walk to
-:func:`raven_toolbox.init.score.score_reactions_from_genes` so there is one source of truth
-for reaction scoring.
+HPA publishes two datasets per release: a proteomics table (``normal_tissue.tsv``)
+with per-tissue and per-cell-type categorical expression levels (High, Medium, Low, Not
+detected) plus reliability flags, and an RNA-seq table (``rna_tissue_consensus.tsv``
+or ``rna_tissue_gtex.tsv``) with per-tissue TPM values. The parsers return
+:class:`HPAData` and :class:`HPARnaData`, which hold the data as a tidy
+:class:`pandas.DataFrame` in ``df``. The scoring adapters return gene scores, and
+:func:`raven_toolbox.init.score.score_reactions_from_genes` converts them to reaction
+scores.
 
-Pipeline (typical (f)tINIT entry):
+Pipeline for proteomics data:
 
 .. code-block:: python
 
@@ -17,7 +18,7 @@ Pipeline (typical (f)tINIT entry):
     rxn_scores  = score_reactions_from_genes(model, gene_scores)
     # → ftinit(prep, rxn_scores=rxn_scores, gene_scores=gene_scores, ...)
 
-or for RNA-seq:
+and for RNA-seq data:
 
 .. code-block:: python
 
@@ -54,8 +55,8 @@ class HPAData:
     """Tidy HPA proteomics data: one row per (gene, tissue, cell type).
 
     :attr:`df` columns: ``gene_id``, ``gene_name``, ``tissue``, ``celltype``, ``level``,
-    ``reliability``. ``level`` is the categorical string from HPA; map it to numbers via
-    :func:`hpa_gene_scores` (or pass a custom ``level_scores``).
+    ``reliability``. ``level`` is the categorical string from HPA; :func:`hpa_gene_scores`
+    maps it to numbers (a custom ``level_scores`` table can be passed to it).
     """
 
     df: pd.DataFrame
@@ -80,17 +81,19 @@ class HPARnaData:
         return sorted(self.df["tissue"].unique())
 
     def expression(self, tissue: str) -> dict[str, float]:
-        """{gene_id: TPM} for ``tissue``. Use this directly with
-        :func:`raven_toolbox.init.score.gene_scores_from_expression`."""
+        """Mapping of ``gene_id`` to TPM for ``tissue``, as input of
+        :func:`raven_toolbox.init.score.gene_scores_from_expression`.
+        """
         sub = self.df.loc[self.df["tissue"] == tissue, ["gene_id", "tpm"]]
         return dict(zip(sub["gene_id"], sub["tpm"], strict=True))
 
 
 def parse_hpa(path: str | Path) -> HPAData:
-    """Parse an HPA proteomics dump (``normal_tissue.tsv``; version ≥17 format).
+    """Parse an HPA proteomics dump (``normal_tissue.tsv``; version 17 or later format).
 
-    Expected columns (any reasonable delimiter; HPA ships tab-separated):
-    ``Gene  Gene name  Tissue  Cell type  Level  Reliability``. Returns an
+    The delimiter is detected automatically (HPA ships tab-separated files). The expected
+    columns are ``Gene``, ``Gene name``, ``Tissue``, ``Cell type``, ``Level`` and
+    ``Reliability``; a missing column raises :class:`ValueError`. Returns an
     :class:`HPAData` with one row per (gene, tissue, cell type).
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
@@ -109,7 +112,7 @@ def parse_hpa_rna(path: str | Path) -> HPARnaData:
     value column is ``TPM`` (v19) or ``Value`` (v18); ``Gene`` and ``Gene name`` are required.
     A file without a tissue or value column (for example one TPM column per tissue) raises
     ``ValueError``. When a gene and tissue occur more than once, the last row is kept and a
-    warning is issued. Values that are not numbers are dropped.
+    warning is issued. Rows whose value is not a number are dropped.
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
     for col in ("Gene", "Gene name"):
@@ -137,7 +140,10 @@ def parse_hpa_rna(path: str | Path) -> HPARnaData:
 
 
 def level_score_table(level_scores: Mapping[str, float]) -> dict[str, float]:
-    """Level scores keyed by upper-cased name; the first of names that differ only in case wins."""
+    """Level scores keyed by upper-cased name.
+
+    The first of the names that differ only in case is used.
+    """
     table: dict[str, float] = {}
     for name, value in level_scores.items():
         table.setdefault(str(name).upper(), value)
@@ -167,18 +173,19 @@ def hpa_gene_scores(
 ) -> dict[str, float]:
     """Numeric gene scores from HPA levels for one ``tissue`` (optionally one ``celltype``).
 
-    Maps HPA's categorical levels to numbers via ``level_scores`` (default
+    Maps the categorical HPA levels to numbers via ``level_scores`` (default
     :data:`HPA_LEVEL_SCORES`). As in RAVEN's ``scoreModel``, level names, tissue and cell type
     are compared case-insensitively, and when the table has several names that differ only in
-    case the first one is used. Genes absent from the tissue are omitted from the output
-    (downstream :func:`score_reactions_from_genes` then falls back to ``no_gene_score`` for any
-    reaction whose genes are all absent). A level that occurs anywhere in ``hpa`` and is not in
-    the score table raises :class:`ValueError`, whichever tissue is scored. A tissue or cell type
-    that ``hpa`` does not contain gives an empty result; RAVEN raises only when neither the HPA
-    nor the RNA data contain it, a check that needs both data sets and is not made here.
+    case, the first one is used. Genes absent from the tissue are omitted from the output;
+    :func:`score_reactions_from_genes` then assigns ``no_gene_score`` to a reaction whose genes
+    are all absent. A level that occurs anywhere in ``hpa`` and is not in the score table raises
+    :class:`ValueError`, whichever tissue is scored. A tissue or cell type that ``hpa`` does not
+    contain gives an empty result. RAVEN raises only when neither the HPA nor the RNA data
+    contain it; that check needs both data sets and is not made here.
 
-    When several cell types per tissue carry the gene, ``multiple_celltype`` chooses
-    between ``"best"`` (max score, RAVEN default) and ``"average"`` (mean across cell types).
+    When several cell types of a tissue carry the gene, ``multiple_celltype`` selects
+    ``"best"`` (maximum score, RAVEN default) or ``"average"`` (mean over the cell types).
+    Any other value raises :class:`ValueError`.
     """
     if multiple_celltype not in ("best", "average"):
         raise ValueError(f"multiple_celltype must be 'best' or 'average'; got {multiple_celltype!r}")
@@ -206,13 +213,14 @@ def rna_gene_scores(
 ) -> dict[str, float]:
     """Numeric gene scores from HPA RNA-seq TPM for one ``tissue``.
 
-    Thin wrapper over :func:`raven_toolbox.init.score.gene_scores_from_expression` (the same
-    ``5·ln(TPM/reference)``-clamped scoring used elsewhere): selects the tissue, derives
-    a reference if none is given (per-gene mean TPM across all tissues — RAVEN's default
-    for ``arrayData.threshold``), and returns ``{gene_id: score}``.
+    Wrapper around :func:`raven_toolbox.init.score.gene_scores_from_expression` (the same
+    ``5·ln(TPM/reference)`` scoring with clamping that is used elsewhere). The function selects
+    the tissue, derives a reference if none is given (the per-gene mean TPM over all tissues,
+    RAVEN's default for ``arrayData.threshold``), and returns ``{gene_id: score}``. A tissue that
+    is not in ``rna`` raises :class:`ValueError`.
 
-    ``factor`` scales how fast the score moves away from 0 as TPM diverges from
-    ``reference``; ``max_score``/``min_score`` clamp the result to that range.
+    ``factor`` multiplies ``ln(TPM/reference)``; ``max_score`` and ``min_score`` clamp the
+    result to that range.
     """
     if tissue not in set(rna.df["tissue"]):
         raise ValueError(f"tissue {tissue!r} not in dataset (tissues: {rna.tissues()})")

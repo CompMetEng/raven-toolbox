@@ -1,9 +1,9 @@
-"""Persist scalar annotations (Gibbs free energy, etc.) as a side-car CSV.
+"""Persist scalar annotations such as the Gibbs free energy as a companion CSV.
 
-The committed SBML standard has no slot for thermodynamic ΔG values, so
-projects like yeast-GEM keep them in a paired CSV instead. This module
-provides the generic load / save round-trip — the file format is a two
-column table ``<id>, <value>`` — and exposes the per-call schema so
+The SBML standard has no slot for thermodynamic ΔG values, so
+projects like yeast-GEM keep them in a paired CSV. This module
+provides the generic load and save round trip (the file format is a two
+column table ``<id>, <value>``) and exposes the per-call schema so
 existing projects can configure their conventions.
 
 The functions operate on cobra ``.notes`` (string round-tripped through
@@ -30,12 +30,11 @@ def load_delta_g_csv(
 ) -> int:
     """Record ``note_key`` on each entity from a CSV of ``id → value``.
 
-    Every matched value is recorded exactly as it appears in the CSV,
+    Every matched value is recorded as the string of the value read from the CSV,
     including yeast-GEM's own "no measurement" placeholder (``10000000.0``,
-    on 777 of its 4102 reaction rows) -- this function does not interpret
-    CSV values, matching RAVEN's own ``loadDeltaGCSV``. Callers that need to
-    treat a particular value as absent should filter it themselves after
-    loading.
+    on 777 of its 4102 reaction rows). This function does not interpret
+    CSV values, matching RAVEN's own ``loadDeltaGCSV``; a caller that treats
+    a particular value as absent filters it after loading.
 
     Parameters
     ----------
@@ -45,7 +44,7 @@ def load_delta_g_csv(
         Path to the CSV.
     id_column, value_column
         Column labels in the CSV. Defaults match the yeast-GEM
-        convention (``Var1`` / ``Var2`` from MATLAB's ``array2table``).
+        convention (``Var1`` and ``Var2`` from MATLAB's ``array2table``).
     note_key
         Key under which the value is stored on ``entity.notes``.
         Default ``"deltaG"``.
@@ -54,8 +53,9 @@ def load_delta_g_csv(
 
     Returns
     -------
-    The number of entities that were recorded (i.e. matched the CSV and
-    carried a value).
+    int
+        The number of entities that were recorded (that is, matched the CSV and
+        carried a value).
     """
     df = pd.read_csv(path)
     if id_column not in df.columns or value_column not in df.columns:
@@ -93,13 +93,15 @@ def save_delta_g_csv(
 ) -> int:
     """Dump ``entity.notes[note_key]`` for each entity to a CSV.
 
-    Entities without ``note_key`` set get ``NaN`` written, preserving
-    one-row-per-entity ordering (mirrors MATLAB's ``array2table([ids,
-    values])`` behaviour).
+    Entities without ``note_key`` set, or with a string value that cannot be converted to a
+    float, get ``NaN`` written, which keeps one row per entity in entity order (mirrors MATLAB's
+    ``array2table([ids, values])`` behaviour). A value of another type that ``float`` rejects
+    (for example a list) raises :class:`TypeError`.
 
     Returns
     -------
-    The number of rows written (= number of entities).
+    int
+        The number of rows written (the number of entities).
     """
     rows: list[tuple[str, float]] = []
     for entity in entities:

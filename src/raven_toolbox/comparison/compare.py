@@ -1,20 +1,19 @@
 """N-model structural and functional comparison.
 
-Compare two or more models — typically context-specific models extracted from the same
-template — on their reactions, metabolites, genes, EC-codes, metabolite names, reaction
+Compare two or more models (for example context-specific models extracted from the same
+template) on their reactions, metabolites, genes, EC-codes, metabolite names, reaction
 equations (with and without compartments), subsystems, and (optionally) which metabolic
-tasks they perform. Returns tidy :class:`pandas.DataFrame`\\ s suitable for downstream
-plotting (heatmaps, tSNE/MDS, …) in seaborn / scikit-learn; plotting is intentionally not
-in this function so it stays usable inside pipelines.
+tasks they perform. Returns :class:`pandas.DataFrame`\\ s that can be passed to plotting
+libraries such as seaborn and scikit-learn (heatmaps, tSNE and MDS). The function does
+not plot.
 
-All matrices use the union of ids/values across the input models as the row index, so
-missing entries are unambiguously ``0`` / ``False`` rather than ``NaN``.
+All matrices use the union of ids or values across the input models as the row index.
+Missing entries are ``0`` or ``False``, never ``NaN``.
 
-The ``ec_codes``/``metabolite_names``/``equations``/``equations_no_compartments`` matrices
-are the only ones that compare models by something other than identifier — the useful case
-when two models of the same organism do not share an id convention. RAVEN split this out
-into a separate function, ``compareRxnsGenesMetsComps``; here it is one function, matching
-RAVEN's own later merge of the two into ``compareMultipleModels``.
+The ``ec_codes``, ``metabolite_names``, ``equations`` and ``equations_no_compartments``
+matrices compare models by content, not by identifier, which applies when two models of
+the same organism do not share an id convention. ``compare_models`` covers the comparisons
+of RAVEN's ``compareMultipleModels``.
 """
 from __future__ import annotations
 
@@ -34,19 +33,20 @@ from raven_toolbox.utils.parse import subsystem_to_str
 class ModelComparison:
     """Tabular result of :func:`compare_models`.
 
-    All matrices are indexed by id/value (reactions/metabolites/genes/ec_codes/
-    metabolite_names/equations/equations_no_compartments/subsystems) with one column per
-    model. ``presence`` matrices are 0/1; ``subsystems`` is the per-model reaction count
+    All matrices (``reactions``, ``metabolites``, ``genes``, ``ec_codes``,
+    ``metabolite_names``, ``equations``, ``equations_no_compartments`` and
+    ``subsystems``) are indexed by id or value with one column per model. The
+    presence matrices are 0/1; ``subsystems`` is the per-model reaction count
     per subsystem. ``similarity`` is the model × model Jaccard on the reaction set
-    (1 = identical, 0 = disjoint). ``tasks`` is the per-model task pass/fail matrix
+    (1 = identical, 0 = disjoint). ``tasks`` is the per-model task pass-or-fail matrix
     (``None`` unless task checking was requested); ``failed_tasks`` maps each model id to
     the failure messages for the tasks it did not pass.
 
-    ``equations``/``equations_no_compartments`` key each reaction by a canonical string
+    ``equations`` and ``equations_no_compartments`` key each reaction by a canonical string
     built from its metabolites and stoichiometry: sides are sorted, and for a reversible
-    reaction the side containing the lexicographically-first metabolite is written as the
-    reactant side, so two reactions that are the same up to metabolite order or arbitrary
-    reversible-direction compare equal. ``equations`` keeps compartments in each
+    reaction the side whose first sorted entry is lexicographically smaller is written as
+    the reactant side. Two reactions that differ only in metabolite order or, for
+    reversible reactions, in direction compare equal. ``equations`` keeps compartments in each
     metabolite id; ``equations_no_compartments`` strips them.
     """
 
@@ -121,11 +121,10 @@ def _canonical_equation(rxn: cobra.Reaction, *, use_compartments: bool) -> str:
     """A reaction-identity string independent of metabolite order and, for reversible
     reactions, of which arbitrary direction it was written in.
 
-    This is an approximation of RAVEN's ``constructEquations(sortRevRxns=True,
-    sortMetNames=True, useComps=use_compartments)``, not a byte-identical port: it
-    canonicalizes direction only for genuinely reversible reactions (irreversible
-    reactions keep the stored stoichiometry sign, matching the common case where an
-    irreversible reaction is also written forward).
+    This approximates RAVEN's ``constructEquations(sortRevRxns=True,
+    sortMetNames=True, useComps=use_compartments)`` and does not reproduce its output
+    byte for byte. The direction is canonicalised only for reversible reactions;
+    irreversible reactions keep the stored stoichiometry sign.
     """
     left_pairs = [(_met_key(m, use_compartments=use_compartments), c)
                   for m, c in rxn.metabolites.items() if c < 0]
@@ -168,15 +167,15 @@ def compare_models(
     *,
     tasks: str | Iterable[Task] | None = None,
 ) -> ModelComparison:
-    """Compare N cobra models on their reactions / metabolites / genes / ec_codes /
-    metabolite_names / equations / equations_no_compartments / subsystems (and tasks, if
+    """Compare N cobra models on their reactions, metabolites, genes, ec_codes,
+    metabolite_names, equations, equations_no_compartments and subsystems (and tasks, if
     provided).
 
-    ``tasks`` is forwarded to :func:`raven_toolbox.tasks.check_tasks` on each model; pass a
-    file path or a parsed task list. When omitted, ``ModelComparison.tasks`` is ``None``.
+    ``tasks`` is passed to :func:`raven_toolbox.tasks.check_tasks` for each model; it is
+    a file path or a parsed task list. When omitted, ``ModelComparison.tasks`` is ``None``.
 
-    Models are identified by ``model.id`` (with a fallback to ``model_<i>`` if missing
-    or duplicated).
+    Models are identified by ``model.id``. A missing or blank id becomes ``model_<i>``
+    and a repeated id gets the suffix ``__<n>`` (``__2`` for the second occurrence).
     """
     models_list = list(models)
     if len(models_list) < 2:

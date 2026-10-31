@@ -11,37 +11,37 @@ from typing import Literal
 #: ``"mw"``                 multiply each substrate coefficient by the
 #:                          molecular weight derived from its
 #:                          ``formula`` (g/mol), divide by 1000 to get
-#:                          g/gDW. Suits carbohydrate / ion / cofactor.
+#:                          g/gDW. Used for carbohydrate, ion and cofactor.
 #: ``"mw_minus_2h"``        as ``"mw"`` but with each MW reduced by
 #:                          2.016 g/mol (two protons released per
 #:                          charged tRNA on protein-pseudoreaction
 #:                          substrates).
 #: ``"mw_minus_water"``     as ``"mw"`` but with each MW reduced by
 #:                          18.015 g/mol (one water released per
-#:                          polymerisation step; RNA / DNA).
+#:                          polymerisation step; RNA and DNA).
 #: ``"grams"``              substrate coefficients are already in
 #:                          g/gDW (e.g. the lipid-backbone
-#:                          pseudoreaction). No MW lookup needed.
+#:                          pseudoreaction). No MW lookup takes place.
 MassStrategy = Literal["mw", "mw_minus_2h", "mw_minus_water", "grams"]
 
 
 @dataclass(frozen=True)
 class BiomassComponent:
-    """One component of the biomass equation (protein, carbohydrate, …).
+    """One component of the biomass equation (protein, carbohydrate, and so on).
 
     Attributes
     ----------
     name
-        Canonical short name — also the ``model.metabolites`` name of
-        the metabolite that the pseudoreaction *produces*. Used by
-        :func:`rescale_pseudoreaction` to identify the product side.
+        Short name of the component. It is also the ``model.metabolites`` name of
+        the metabolite that the pseudoreaction produces, which
+        :func:`rescale_pseudoreaction` uses to identify the product.
     pseudoreaction_name
-        ``model.reactions[*].name`` of the pseudoreaction.
-        cobrapy reactions are looked up by ``name`` (not ``id``)
-        because that is how the yeast-GEM convention names them.
+        ``model.reactions[*].name`` of the pseudoreaction. The reaction is
+        looked up by ``name``, not by ``id``, following the yeast-GEM naming
+        convention.
     mass_strategy
         How to convert the pseudoreaction's substrates into a mass
-        fraction. See :data:`MassStrategy` for the choices and their
+        fraction. :data:`MassStrategy` lists the choices and their
         offsets.
     """
 
@@ -60,9 +60,9 @@ class BiomassConfig:
         ``model.reactions[*].id`` of the top-level biomass
         pseudoreaction (the one whose flux is the growth rate).
     proton_met
-        ``model.metabolites[*].id`` of the cytosolic H+ metabolite —
-        used by :func:`rescale_pseudoreaction` to keep each
-        pseudoreaction charge-balanced after rescaling.
+        ``model.metabolites[*].id`` of the cytosolic H+ metabolite.
+        :func:`rescale_pseudoreaction` sets its coefficient so that each
+        pseudoreaction is charge-balanced after rescaling.
     components
         Ordered tuple of :class:`BiomassComponent` describing every
         non-top-level pseudoreaction that contributes to mass.
@@ -84,13 +84,14 @@ class BiomassConfig:
         proton_met: str,
         components: Iterable[BiomassComponent],
     ) -> BiomassConfig:
-        """Alternate constructor: build a :class:`BiomassConfig` from any iterable
-        of components (equivalent to calling the class directly)."""
+        """Build a :class:`BiomassConfig` from any iterable of components.
+
+        The result equals the one from calling the class directly."""
         return cls(biomass_rxn=biomass_rxn, proton_met=proton_met,
                    components=tuple(components))
 
     def get(self, component_name: str) -> BiomassComponent:
-        """Look up a component by name (raises ``KeyError`` if missing)."""
+        """Return the component with the given name; raise ``KeyError`` if there is none."""
         for c in self.components:
             if c.name == component_name:
                 return c

@@ -1,15 +1,16 @@
 """ftINIT step schedule.
 
-ftINIT runs as a short sequence of MILP steps instead of one big MILP. Each step
-(:class:`InitStep`) chooses which reaction categories to hold out of the problem
-(``ignore_mask``, an 8-bit pattern over :class:`raven_toolbox.init.ReactionMasks`), whether
-to drop positive reversibles and allow metabolite secretion, and how to treat the
-reactions turned on by previous steps (``'ignore'`` for the first step, ``'essential'``
-to fix them on). :func:`get_init_steps` builds the standard schedules.
+ftINIT runs a short sequence of MILP steps. Each step (:class:`InitStep`) chooses which
+reaction categories to hold out of the problem (``ignore_mask``, an 8-bit pattern over
+:class:`raven_toolbox.init.ReactionMasks`), whether to drop positive reversibles and allow
+metabolite secretion, and how to treat the reactions turned on by previous steps
+(``'ignore'`` for the first step, ``'essential'`` to fix them on).
+:func:`get_init_steps` builds the standard schedules.
 
-The default ``'1+1'`` is two steps: step 1 decides only the GPR-associated reactions
-(everything GPR-less is held out); step 2 brings the GPR-less transport / extracellular
-reactions in with step-1 reactions fixed as essential. ``'full'`` is the single-MILP
+The default ``'1+1'`` has two steps. Step 1 holds out the exchange, import, transport,
+spontaneous, extracellular and custom categories, so it decides the GPR-associated reactions
+and the remaining GPR-less reactions. Step 2 holds out only the exchange and spontaneous
+reactions, with the step-1 reactions fixed as essential. ``'full'`` is the single-MILP
 classic-tINIT variant (nothing held out).
 """
 from __future__ import annotations
@@ -59,10 +60,12 @@ class InitStep:
 def get_init_steps(series: str = "1+1", *, mets_to_ignore: Sequence[str] = ()) -> list[InitStep]:
     """Return the step schedule for a named ftINIT ``series`` (RAVEN ``getINITSteps``).
 
-    ``'1+1'`` (default, step 1+2 merged), ``'2+1'`` (3-step), ``'1+0'``/``'2+0'``
-    (skip the final GPR-less step), ``'full'`` (single MILP). ``mets_to_ignore`` are
-    metabolite names removed from the stoichiometry in each step (e.g. H2O, H+); the
-    ``'full'`` series ignores none, as RAVEN's ``getINITSteps`` does.
+    ``'1+1'`` (default) has two steps; ``'2+1'`` has three steps, the first with positive
+    reversibles dropped and metabolite secretion allowed; ``'1+0'`` and ``'2+0'`` omit the
+    final step, which brings in the held-out GPR-less reactions; ``'full'`` is a single MILP.
+    ``mets_to_ignore`` are metabolite names removed from the stoichiometry in each step (for
+    example H2O and H+); the ``'full'`` series ignores none, as RAVEN's ``getINITSteps`` does.
+    An unknown ``series`` raises :class:`ValueError`.
     """
     m = tuple(mets_to_ignore)
     s1 = InitStep("ignore", _ALL_NO_GPR_KEPT, mets_to_ignore=m, milp_runs=_STEP_RUNS)

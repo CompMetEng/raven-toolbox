@@ -1,9 +1,9 @@
 """SBO term assignment.
 
 Port of the generic core of yeast-GEM's ``code/missingFields/addSBOterms.m``.
-Defaults reproduce the yeast-GEM behaviour; overrides parameterise the
-pseudo-metabolite / pseudo-reaction name conventions, the transport
-detector, and a yeast-specific bug-compat flag.
+Defaults reproduce the yeast-GEM behaviour. Arguments set the pseudo-metabolite and
+pseudo-reaction name conventions, the transport detector, and a yeast-specific
+bug-compatibility flag.
 """
 from __future__ import annotations
 
@@ -36,42 +36,39 @@ def add_sbo_terms(
 
     - SBO:0000649 (Biomass) for metabolites whose ``name`` is in
       ``biomass_met_names`` or ends with any of ``biomass_met_suffixes``
-      (default: ``" backbone"`` / ``" chain"``).
-    - SBO:0000247 (Simple chemical) otherwise.
+      (default: ``" backbone"`` and ``" chain"``).
+    - SBO:0000247 (simple chemical) otherwise.
 
     **Reaction SBO assignment**
 
-    - SBO:0000176 (Metabolic reaction) default.
-    - Single-reactant reactions (exchange / sink / demand):
-        * extracellular → SBO:0000627 (exchange)
-        * coefficient < 0 → SBO:0000632 (sink)
-        * else → SBO:0000628 (demand)
-    - Transport reactions → SBO:0000655 (default detector: same
-      metabolite name appearing in ≥ 2 compartments).
-    - The reaction whose ``name`` matches ``biomass_rxn_name`` → SBO:0000629.
-    - The reaction whose ``name`` matches ``ngam_rxn_name`` → SBO:0000630.
-    - Other reactions whose ``name`` contains any ``pseudoreaction_name_substrings``
-      → SBO:0000395.
+    - SBO:0000176 (metabolic reaction) by default.
+    - Single-metabolite reactions (exchange, sink or demand):
+        * extracellular: SBO:0000627 (exchange)
+        * coefficient < 0: SBO:0000632 (sink)
+        * otherwise: SBO:0000628 (demand)
+    - Transport reactions: SBO:0000655 (default detector: the same
+      metabolite name appears in at least 2 compartments).
+    - The reaction whose ``name`` matches ``biomass_rxn_name``: SBO:0000629.
+    - The reaction whose ``name`` matches ``ngam_rxn_name``: SBO:0000630.
+    - Other reactions whose ``name`` contains any of ``pseudoreaction_name_substrings``:
+      SBO:0000395.
 
-    "fill" semantic: SBO is written to ``annotation['sbo']`` only when that key is
-    missing or empty — mirrors RAVEN's ``editMiriam(..., 'fill')`` mode.
+    The SBO term is written to ``annotation['sbo']`` only when that key is missing or
+    empty, as in RAVEN's ``editMiriam(..., 'fill')`` mode.
 
     Parameters
     ----------
     transport_detector
         Optional callable that takes the model and returns the set of
         reaction ids classified as transport. When ``None``, the default
-        same-met-name-in-two-compartments heuristic is used. Pass a
-        custom detector to use a different convention (e.g. RAVEN's
-        ``getTransportRxns`` via the MATLAB engine).
+        heuristic is used: a reaction is transport when one metabolite name
+        occurs in at least 2 compartments. A custom detector replaces this
+        convention (for example RAVEN's ``getTransportRxns`` via the MATLAB
+        engine).
     only_last_reaction_for_pseudo
-        **Bug-compatibility flag**, off by default. The legacy yeast-GEM
-        MATLAB ``addSBOterms.m`` contains a typo (``for i = numel(...)``
-        rather than ``for i = 1:numel(...)``) that causes the pseudo-
-        reaction SBO assignments to run only on the very last reaction
-        in the model. When ``True``, this flag replicates that bug so
-        callers can migrate without altering the committed model. Leave
-        ``False`` for new uses.
+        If True, the biomass, NGAM and pseudoreaction terms are assigned to the last
+        reaction only, as in yeast-GEM's ``addSBOterms.m``, whose loop header
+        ``for i = numel(...)`` lacks ``1:``. Default False.
     """
     biomass_met_names = frozenset(biomass_met_names)
     biomass_met_suffixes = tuple(biomass_met_suffixes)
@@ -115,9 +112,9 @@ def _assign_reaction_sbo(
     transport_detector: Callable[[cobra.Model], set[str]],
     only_last_reaction_for_pseudo: bool,
 ) -> None:
-    """Compute the SBO for each reaction via successive overrides, then
-    fill into the model in a single pass — mirrors the MATLAB
-    ``rxnSBO``-array + ``editMiriam(..., 'fill')`` two-step.
+    """Compute the SBO term of each reaction by successive overrides, then
+    fill the terms into the model in a single pass, as the MATLAB ``rxnSBO``
+    array and ``editMiriam(..., 'fill')`` do.
     """
     transport_set = transport_detector(model)
     rxns = list(model.reactions)
@@ -164,10 +161,10 @@ def _fill_sbo(entity, sbo: str) -> None:
 
 
 def _default_transport_detector(model: cobra.Model) -> set[str]:
-    """Same-met-name-in-two-compartments heuristic for transport detection.
+    """Return the ids of reactions with one metabolite name in at least 2 compartments.
 
-    Cheap analogue of RAVEN's ``getTransportRxns``. Pass a custom
-    callable to :func:`add_sbo_terms` to override.
+    Approximates RAVEN's ``getTransportRxns``. :func:`add_sbo_terms` accepts a custom
+    callable in its place.
     """
     out: set[str] = set()
     for rxn in model.reactions:

@@ -1,11 +1,10 @@
-"""Compartment manipulation — merge all compartments into one, or copy reactions to a
-new compartment (ports of RAVEN's ``mergeCompartments`` and ``copyToComps``).
+"""Compartment manipulation: merge all compartments, or copy reactions to a new compartment.
 
-Both functions are useful **independently of** :func:`raven_toolbox.localization.predict_localization`:
-``merge_compartments`` flattens a multi-compartment model for a simplified analysis
-(e.g. checking whether the network can in principle make a metabolite, with no
-compartment topology in the way); ``copy_to_compartment`` is a building block for
-constructing dual-localised pathways. cobra has no equivalents.
+The functions port RAVEN's ``mergeCompartments`` and ``copyToComps``. Both work independently of
+:func:`raven_toolbox.localization.predict_localization`. ``merge_compartments`` flattens a
+multi-compartment model for a simplified analysis (for example checking whether the network can make
+a metabolite when no compartment topology is involved); ``copy_to_compartment`` creates the
+compartment copy needed to construct dual-localised pathways. cobra has no equivalents.
 """
 from __future__ import annotations
 
@@ -36,44 +35,44 @@ def merge_compartments(
 ) -> tuple[cobra.Model, list[str], list[str]]:
     """Merge every metabolite of ``model`` into one ``merged_id`` compartment.
 
-    Returns ``(model_copy, deleted_single_met_reactions, deduplicated_reactions)``. The
-    returned model is a deep copy of the input. Use cases:
+    Returns ``(merged_model, deleted_single_met_reactions, deduplicated_reactions)``. The input
+    model is not modified. Use cases:
 
-    * Check whether the network can produce/consume a metabolite at all (compartment
-      topology is often what makes a model look blocked).
-    * Simplify a model for visualisation or an analysis that doesn't care about
-      compartments.
-    * As a pre-step for localisation when the user does want RAVEN's
-      "start from scratch" workflow (call :func:`merge_compartments` then
+    * Check whether the network can produce or consume a metabolite at all, without
+      compartment topology.
+    * Simplify a model for visualisation or for an analysis that ignores compartments.
+    * Prepare a localisation from scratch (call :func:`merge_compartments`, then
       :func:`raven_toolbox.localization.predict_localization` or
       :func:`raven_toolbox.localization.assign_compartments` with the full reaction list).
 
-    ``base_metabolite`` maps a metabolite to the **compartment-agnostic key** that decides
-    which metabolites are the same species (so two compartment copies collapse into one). The
-    default strips a trailing ``_<compartment>`` id suffix (``glc__D_c`` and ``glc__D_e`` both
-    → ``glc__D``). Models that key the same species to a *different id per compartment* — e.g.
-    yeast-GEM's ``s_####`` ids — need ``base_metabolite=lambda m: m.name`` (or an annotation
-    key) so the compartments actually unify; pass the same callable to
-    :func:`~raven_toolbox.localization.assign_compartments`. The key **only decides grouping**. The
-    merged metabolite keeps the id, name, formula, charge, annotation and notes of one of its copies,
-    never an id minted from the key: the copy already in ``merged_id`` if there is one, otherwise
-    the copy whose id sorts first (``ACCOA_c`` before ``ACCOA_m``); among several copies in
-    ``merged_id`` the one whose id sorts first. RAVEN's ``mergeCompartments`` applies the same rule. The id can therefore name a
-    compartment that no longer exists. A name-based key like ``"1-acyl-sn-glycerol 3-phosphate (16:0)"``
-    unifies the copies while the merged id stays the model's own, already solver/SBML-safe identifier.
+    ``base_metabolite`` maps a metabolite to the compartment-independent key that decides which
+    metabolites are the same species (two compartment copies with one key become one metabolite).
+    The default removes a trailing ``_<compartment>`` suffix from the id (``glc__D_c`` and
+    ``glc__D_e`` both give ``glc__D``). A model that uses a different id per compartment for the
+    same species, for example the ``s_####`` ids of yeast-GEM, needs ``base_metabolite=lambda m:
+    m.name`` (or an annotation key) to merge the compartments; the same callable is passed to
+    :func:`~raven_toolbox.localization.assign_compartments`. The key decides the grouping only. The
+    merged metabolite keeps the id, name, formula, charge, annotation and notes of one of its copies
+    and never gets an id built from the key. The copy is the one already in ``merged_id`` if there
+    is one, otherwise the copy whose id sorts first (``ACCOA_c`` before ``ACCOA_m``); among several
+    copies in ``merged_id``, the one whose id sorts first. RAVEN's ``mergeCompartments`` applies the
+    same rule. The id can therefore name a compartment that no longer exists. A name-based key such
+    as ``"1-acyl-sn-glycerol 3-phosphate (16:0)"`` merges the copies, and the merged id is
+    still the id of one of them, so the characters of the key do not enter the id.
 
-    Metabolites that share a key collapse into one entity in the merged compartment; their
+    Metabolites that share a key become one metabolite in the merged compartment, and their
     stoichiometric contributions are summed per reaction. A reaction whose metabolites all cancel
     (``A[c] → A[m]`` becomes ``A → A``) is always deleted. With
     ``drop_single_metabolite_reactions=True`` (RAVEN's ``deleteRxnsWithOneMet``; default ``False``
-    on both sides) a reaction reduced to one metabolite by the merge is deleted too. A reaction that
-    already had a single metabolite before merging is an exchange (``=> glucose``) and is always
-    kept, as in RAVEN; dropping those would remove the model's medium and its biomass reaction.
-    Reactions that become identical after merging are deduplicated (one survives). The
-    objective is carried over to the returned model. ``deleted_single_met_reactions`` lists the
-    reactions whose metabolites all cancelled and, with ``drop_single_metabolite_reactions=True``,
-    those reduced to one metabolite. RAVEN's ``deletedRxns`` lists only the latter, so it is empty
-    with ``deleteRxnsWithOneMet`` off.
+    in both) a reaction that the merge reduces to one metabolite is deleted as well. A reaction with
+    a single metabolite before the merge is an exchange (``=> glucose``) and is always kept, as in
+    RAVEN, because dropping these reactions would remove the medium and the biomass reaction of
+    the model. With ``deduplicate_reactions=True`` (default), reactions that are identical after the
+    merge (same stoichiometry and same reversibility) are reduced to the first one. The objective is
+    carried over to the returned model. ``deleted_single_met_reactions`` lists the reactions whose
+    metabolites all cancelled and, with ``drop_single_metabolite_reactions=True``, those reduced to
+    one metabolite. RAVEN's ``deletedRxns`` lists only the latter, so it is empty with
+    ``deleteRxnsWithOneMet`` off.
 
     Each merged metabolite stores its base id in ``notes["merged_base_id"]``
     (:data:`MERGED_BASE_ID_NOTE`): the id of the kept copy without the suffix of the compartment it
@@ -82,19 +81,19 @@ def merge_compartments(
     :func:`~raven_toolbox.localization.apply_assignment`,
     :func:`~raven_toolbox.localization.relocate_reactions` and
     :func:`~raven_toolbox.localization.curation_priority` reads it, so the merged ``ACCOA_c`` in
-    ``s`` and ``ACCOA_m`` of a universal model are the same species there. When two merged
+    compartment ``s`` and ``ACCOA_m`` of a universal model are the same species there. When two merged
     metabolites would get the same base id (a ``base_metabolite`` that keeps ``X_c`` and ``X_m``
-    apart), both store their own id instead, so they stay distinct species. The note survives
+    apart), both store their own id, so they remain distinct species. The note is kept by
     ``model.copy()``, cobra's JSON and SBML files and :func:`~raven_toolbox.io.write_yaml_model`
     with :func:`~raven_toolbox.io.read_yaml_model`. RAVEN's ``readYAMLmodel`` shows it in
     ``metNotes``, for example ``merged_base_id: ACCOA note: free text note`` for a metabolite
     that also has the free-text note ``free text note``; no RAVEN function uses it. A round trip
-    through RAVEN YAML (``readYAMLmodel`` and ``writeYAMLmodel``) or through a .mat file loses
-    it: RAVEN joins the key and the free text into one string, which
+    through RAVEN YAML (``readYAMLmodel`` and ``writeYAMLmodel``) or through a .mat file does not
+    preserve the note: RAVEN joins the key and the free text into one string, which
     :func:`~raven_toolbox.io.read_yaml_model` reads back as the free-text note, and
     :func:`~raven_toolbox.io.write_matlab_model` and :func:`~raven_toolbox.io.read_matlab_model`
-    carry no metabolite notes. The localization functions then key the metabolite by its id
-    without the suffix of its own compartment, so a merged ``ACCOA_c`` in ``s`` gets the key
+    carry no metabolite notes. The localisation functions then key the metabolite by its id
+    without the suffix of its own compartment, so a merged ``ACCOA_c`` in compartment ``s`` gets the key
     ``ACCOA_c``, and no error is raised.
     """
     out = model.copy()
@@ -210,18 +209,21 @@ def copy_to_compartment(
     delete_original: bool = False,
     id_suffix: str | None = None,
 ) -> tuple[cobra.Model, list[str], list[str]]:
-    """Copy a set of reactions into ``target_compartment``. RAVEN's ``copyToComps``.
+    """Copy a set of reactions into ``target_compartment`` (RAVEN's ``copyToComps``).
 
-    Returns ``(model_copy, new_reaction_ids, new_metabolite_ids)``. Use cases:
+    Returns ``(model_copy, new_reaction_ids, new_metabolite_ids)``. The input model is not modified.
+    Use cases:
 
-    * Build a dual-localised pathway (e.g. duplicate glycolysis into a peroxisome).
-    * Mirror a curated subsystem into an additional compartment as a draft to refine.
-    * Set up the input for a flux comparison between alternate compartmentalisations.
+    * Build a dual-localised pathway (for example duplicate glycolysis into a peroxisome).
+    * Copy a curated subsystem into an additional compartment as a draft to refine.
+    * Prepare the input for a flux comparison between alternative compartmentalisations.
 
-    Each copied reaction is given the id ``"<orig_id>_<id_suffix>"`` (default
-    ``id_suffix=target_compartment``); each metabolite it touches is mapped to (or
-    created in) ``target_compartment`` with the same suffix convention. ``delete_original=True``
-    moves the reactions instead of copying.
+    Each copied reaction gets the id ``"<orig_id>_<id_suffix>"`` (default
+    ``id_suffix=target_compartment``). Each metabolite of the reaction maps to its copy in
+    ``target_compartment``, which is created with the same suffix convention when it does not exist;
+    a metabolite that is already in ``target_compartment`` is used unchanged. A reaction whose copy
+    id is already in the model is skipped. ``delete_original=True`` removes the original reactions
+    after copying (the reactions are moved); their metabolites remain in the model.
     """
     out = model.copy()
     suffix = id_suffix if id_suffix is not None else target_compartment
@@ -277,10 +279,10 @@ def _base_id(m: cobra.Metabolite) -> str:
 
 def _met_in_compartment(model: cobra.Model, source: cobra.Metabolite,
                         compartment: str, *, suffix: str | None = None) -> cobra.Metabolite:
-    """Return (creating if needed) the copy of ``source`` in ``compartment``.
+    """Return the copy of ``source`` in ``compartment``, creating it when it does not exist.
 
     The new metabolite id is ``"<base>_<suffix>"`` (default ``suffix=compartment``).
-    Already-existing copies are reused.
+    An existing metabolite with that id is returned unchanged.
     """
     if source.compartment == compartment:
         return source

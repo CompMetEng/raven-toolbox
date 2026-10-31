@@ -2,12 +2,11 @@
 
 Writes the model in several formats into the Standard-GEM folder structure (a
 ``model/`` directory with one subfolder per format), ready to commit to a
-Git-maintained model repository (Metabolic Atlas / Human-GEM / yeast-GEM style),
-plus a ``dependencies.txt`` recording tool versions.
+Git-maintained model repository (Metabolic Atlas, Human-GEM and yeast-GEM style),
+and a ``dependencies.txt`` that records tool versions.
 
-Thin orchestration over the writers raven_toolbox already exposes: ``write_yaml_model``,
-cobra's ``write_sbml_model``, ``write_matlab_model``, ``export_to_excel``, plus a
-single-file reaction table (txt).
+The module calls the existing writers ``write_yaml_model``, cobra's ``write_sbml_model``,
+``write_matlab_model`` and ``export_to_excel``, and adds a single-file reaction table (txt).
 """
 from __future__ import annotations
 
@@ -55,14 +54,14 @@ _SBML_NOTE_LABELS = {
 def _for_sbml(model: cobra.Model) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
 
-    Two things are lost otherwise, both silently:
+    Two kinds of information would be missing from the SBML file otherwise:
 
     * **subSystems.** RAVEN reads them from the SBML groups package, which
       cobra writes from ``model.groups``. A model read with read_yaml_model
-      carries its subsystems on the reaction instead, so without groups the
-      SBML has no subsystem information at all.
-    * **rxnNotes / rxnReferences / rxnConfidenceScores.** Present in the
-      file, but under cobra's key names rather than the labels RAVEN parses.
+      carries its subsystems on the reaction, so without groups the
+      SBML has no subsystem information.
+    * **rxnNotes, rxnReferences and rxnConfidenceScores.** The file contains them under
+      cobra's key names, while RAVEN parses other labels.
 
     The model passed in is not changed.
     """
@@ -150,9 +149,9 @@ def _write_sbml(model: cobra.Model, path: Path) -> None:
 
 
 def _shortest(value: float) -> str:
-    """The shortest text that reads back as exactly ``value`` (1/3 is 0.3333333333333333).
+    """The shortest text that reads back as ``value`` (1/3 is 0.3333333333333333).
 
-    The same rule as RAVEN's exportForGit, so a bound is never rounded in the file.
+    The rule is the same as in RAVEN's exportForGit. A bound is not rounded in the file.
     """
     if math.isinf(value):
         return "Inf" if value > 0 else "-Inf"
@@ -263,8 +262,9 @@ def export_for_git(
         Which formats to write; any of ``"yml"``, ``"xml"``, ``"mat"``,
         ``"xlsx"``, ``"txt"`` (default: all five, as RAVEN's ``exportForGit``).
     main_branch_flag
-        A ``bool``. If True, raise ``RuntimeError`` when raven_toolbox runs from a git checkout that is not
-        on ``main`` or ``master`` (default False), as RAVEN's ``mainBranchFlag``. The check
+        A ``bool``. If True, raise ``RuntimeError`` when raven_toolbox runs from a git
+        checkout that is not on ``main`` or ``master`` (default False), as RAVEN's
+        ``mainBranchFlag``. The check
         passes when the package is not in a raven_toolbox checkout (for example a pip
         installation) and when git is missing or refuses the checkout (``OSError`` or a
         failing ``git`` call such as ``safe.directory``). GECKO is not checked.
@@ -274,11 +274,11 @@ def export_for_git(
     varname
         Variable name for the MATLAB (``.mat``) struct. ``None`` (default) lets
         cobra use its own default (the model id); set it when a repository pins a
-        specific name (e.g. Human-GEM's ``humanGEM``).
+        specific name (for example Human-GEM's ``humanGEM``).
     version, date
         Stamped into the exported copy's metadata (see
         :func:`raven_toolbox.io.set_model_metadata`); the model passed in is not changed.
-        Left out, the model's own version and date are written.
+        When not given, the model's own version and date are written.
 
     Returns
     -------

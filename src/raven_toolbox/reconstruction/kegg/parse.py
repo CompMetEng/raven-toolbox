@@ -1,25 +1,24 @@
-"""Parse a local KEGG flat-file dump into a reference model + relational tables.
+"""Parse a local KEGG flat-file dump into a reference model and relational tables.
 
-Maintainer-side, build-time tooling. Produces the published raven_toolbox KEGG artefacts:
+Maintainer-side build-time tooling. Produces the published raven_toolbox KEGG artefacts:
 
-* a **gene-free reference GEM** (reactions + metabolites only) as a ``cobra.Model``;
-* minimal **relational tables** (``pandas.DataFrame``) written as gzipped TSV —
-  ``ko_reaction``, ``ko_names``, ``organism_gene_ko`` (the large one), and
-  ``rxn_flags`` (spontaneous / undefined-stoich / incomplete / general).
+* a **gene-free reference GEM** (reactions and metabolites only) as a ``cobra.Model``;
+* minimal **relational tables** (``pandas.DataFrame``) written as gzipped TSV:
+  ``ko_reaction``, ``ko_names``, ``organism_gene_ko`` (the largest), and
+  ``rxn_flags`` (flags spontaneous, undefined_stoich, incomplete and general).
 
 Genes live only in ``organism_gene_ko``; per-organism GPRs are built at runtime
-(3b.4/3b.5), so the reference model stays small.
+(:mod:`.organism` and :mod:`.query`), so the reference model stays small.
 
-Diverges from the RAVEN port in three ways:
+Differences from RAVEN:
 
-* equations are read from each reaction entry's own ``EQUATION`` field, not
-  from ``reaction.lst``, whose line order would otherwise have to exactly
-  match ``reaction``;
+* equations are read from the ``EQUATION`` field of each reaction entry and not
+  from ``reaction.lst``, whose line order would have to match ``reaction``;
 * undefined-stoichiometry terms (``n C00001``, ``(n+1) C00002``) keep their
-  real compound id with coefficient 1 and the reaction is *flagged*, rather
-  than minting ``"n C00001"`` pseudo-metabolites renamed ``undefined_N``;
-* quality labels are a tidy boolean ``rxn_flags`` table instead of free-text
-  appended to ``rxnNotes``.
+  compound id with coefficient 1 and the reaction is flagged; RAVEN creates
+  ``"n C00001"`` pseudo-metabolites renamed ``undefined_N``;
+* quality labels are a boolean ``rxn_flags`` table; RAVEN appends free text to
+  ``rxnNotes``.
 
 The KEGG flat-file format: each entry is a block of lines terminated by ``///``;
 a field label occupies columns 1-12, continuation lines are indented 12 spaces.
@@ -59,11 +58,11 @@ def _iter_entries(
 ) -> Iterator[dict[str, list[str]]]:
     """Yield one ``{field_label: [value_lines]}`` dict per ``///``-delimited entry.
 
-    Field labels (columns 1-12) key a list of their value lines in file order;
+    Field labels (columns 1-12) map to a list of their value lines in file order;
     continuation lines (12 leading spaces) append to the current field.
 
     When ``progress_desc`` is set, a tqdm byte-progress bar (total = file size)
-    advances as the file is read — used for the large ``ko`` pass.
+    advances as the file is read; it is used for the ``ko`` pass.
     """
     entry: dict[str, list[str]] = {}
     current: str | None = None
@@ -175,7 +174,7 @@ def parse_kegg_reactions(kegg_dir: str | Path) -> list[KeggReaction]:
     """Parse ``<kegg_dir>/reaction`` into :class:`KeggReaction` records.
 
     Reversibility is taken from the equation arrow and, when
-    ``reaction_mapformula.lst`` is present, refined to mark reactions that are
+    ``reaction_mapformula.lst`` is present, set to irreversible for reactions that are
     irreversible across all KEGG maps (see :func:`_irreversible_from_mapformula`).
     """
     kegg_dir = Path(kegg_dir)
@@ -209,14 +208,14 @@ def parse_kegg_reactions(kegg_dir: str | Path) -> list[KeggReaction]:
 
 
 def _irreversible_from_mapformula(path: str | Path) -> set[str]:
-    """Reaction ids that are irreversible in *every* KEGG map they appear in.
+    """Reaction ids that are irreversible in every KEGG map they appear in.
 
     ``reaction_mapformula.lst`` lines look like ``R00005: 00330: C01010 => C00011``.
     A reaction is considered irreversible only if no map lists it as ``<=>`` and
-    every map draws it in the same direction. Direction (substrate/product order)
-    is not propagated back into the model stoichiometry — a documented
-    simplification of RAVEN's column-flipping logic, which only affects the small
-    set of map-directional reactions.
+    every map draws it in the same direction. The direction (substrate and product
+    order) is not propagated back into the model stoichiometry. This is a simplification:
+    RAVEN also flips the stoichiometric column to the map direction. The difference affects
+    only the reactions that have a map direction.
     """
     path = Path(path)
     if not path.is_file():
@@ -263,7 +262,7 @@ class KeggCompound:
 
 
 def parse_kegg_compounds(kegg_dir: str | Path) -> list[KeggCompound]:
-    """Parse ``<kegg_dir>/compound`` (+ optional ``compound.inchi``) into records."""
+    """Parse ``<kegg_dir>/compound`` and the optional ``compound.inchi`` into records."""
     kegg_dir = Path(kegg_dir)
     compounds: list[KeggCompound] = []
     for entry in _iter_entries(kegg_dir / "compound"):
@@ -317,11 +316,10 @@ class KeggKO:
 
 
 def parse_kegg_kos(kegg_dir: str | Path, *, keep: set[str] | None = None) -> list[KeggKO]:
-    """Parse ``<kegg_dir>/ko`` into :class:`KeggKO` records (name + organism genes).
+    """Parse ``<kegg_dir>/ko`` into :class:`KeggKO` records (name and organism genes).
 
-    ``keep`` limits parsing to those KO ids (e.g. only KOs linked to reactions),
-    mirroring RAVEN's ``koList`` argument — the gene lists are huge, so this is
-    the usual call.
+    ``keep`` limits parsing to those KO ids (for example only KOs linked to reactions),
+    as RAVEN's ``koList`` argument does; the gene lists are large.
     """
     ko_records: list[KeggKO] = []
     for entry in _iter_entries(Path(kegg_dir) / "ko"):
@@ -339,10 +337,10 @@ def parse_kegg_kos(kegg_dir: str | Path, *, keep: set[str] | None = None) -> lis
 def _parse_gene_lines(lines: list[str]) -> Iterator[tuple[str, str]]:
     """Yield ``(organism, gene)`` pairs from a KO entry's GENES block.
 
-    Lines look like ``BSU: BSU31050(gbsB) BSU31060`` — an upper-case organism
-    code, a colon, then space-separated gene ids (with an optional ``(name)``
-    suffix that we strip). Organism codes are lower-cased to match KEGG's protein
-    sequence files (as RAVEN does).
+    Lines look like ``BSU: BSU31050(gbsB) BSU31060``: an upper-case organism
+    code, a colon, then space-separated gene ids with an optional ``(name)``
+    suffix, which is removed. Organism codes are lower-cased to match KEGG's protein
+    sequence files, as in RAVEN.
     """
     for line in lines:
         org, sep, rest = line.partition(":")
@@ -366,10 +364,10 @@ def build_reference_model(
 ) -> cobra.Model:
     """Assemble the gene-free KEGG reference model from parsed records.
 
-    Only metabolites actually used by a reaction are added. Reactions carry KEGG
-    annotations (reaction id, KO ids, EC codes, pathways) but **no genes/GPRs**.
-    Bounds are ``(-1000, 1000)`` for reversible reactions and ``(0, 1000)``
-    otherwise.
+    Only metabolites used by a reaction are added. Reactions carry KEGG
+    annotations (reaction id, KO ids, EC codes, pathways) and no genes or GPRs.
+    Reactions with empty stoichiometry are skipped. Bounds are ``(-1000, 1000)``
+    for reversible reactions and ``(0, 1000)`` otherwise.
     """
     model = cobra.Model("KEGG")
     model.name = "Automatically generated from KEGG database"
@@ -427,7 +425,7 @@ def build_kegg_tables(
 ) -> dict[str, pd.DataFrame]:
     """Build the minimal relational tables from parsed records.
 
-    Returns a dict of ``DataFrame``s keyed by table name: ``ko_reaction``,
+    Returns a dict of ``DataFrame`` objects keyed by table name: ``ko_reaction``,
     ``ko_names``, ``organism_gene_ko``, ``rxn_flags``.
     """
     ko_reaction = pd.DataFrame(
@@ -465,10 +463,9 @@ def write_kegg_tables(
 ) -> list[Path]:
     """Write each table as a gzipped TSV (``<prefix><name>.tsv.gz``) into ``out_dir``.
 
-    Gzipped TSV is the dependency-free cross-language format shared with MATLAB
-    RAVEN (see docs/kegg_data_format.md) — readable by MATLAB's built-in ``gunzip``
-    with no external tool. ``prefix`` version-tags the filenames (e.g.
-    ``kegg116_``). Returns the written paths.
+    Gzipped TSV is the format shared with MATLAB RAVEN; MATLAB's built-in ``gunzip``
+    reads it without an external tool. ``prefix`` version-tags the filenames (for
+    example ``kegg116_``). Returns the written paths.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -482,12 +479,11 @@ def write_kegg_tables(
 
 
 def read_kegg_table(path: str | Path) -> pd.DataFrame:
-    """Read a KEGG table written by :func:`write_kegg_tables` or
-    :func:`stream_organism_gene_ko`.
+    """Read a KEGG table from :func:`write_kegg_tables` or :func:`stream_organism_gene_ko`.
 
-    Compression is inferred from the suffix; all published tables are gzipped TSV
-    (``.tsv.gz``), and a version-prefixed name (``kegg116_<name>.tsv.gz``) reads
-    just the same.
+    Compression is inferred from the file suffix. The published tables are gzipped TSV
+    (``.tsv.gz``), including those with a version prefix (``kegg116_<name>.tsv.gz``).
+    All columns are read as strings, and empty fields stay empty strings.
     """
     return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
 
@@ -496,7 +492,7 @@ def _resolve_artefact(directory: str | Path, base: str) -> Path:
     """Locate an artefact file by its base name, tolerating a version prefix.
 
     Returns ``directory/base`` if it exists, else the single version-prefixed
-    match ``directory/<version>_<base>`` (the published asset name, e.g.
+    match ``directory/<version>_<base>`` (the published asset name, for example
     ``kegg116_ko_reaction.tsv.gz``). This lets one reader consume both a user's own
     unprefixed build directory and the version-pinned download cache.
     """
@@ -539,21 +535,22 @@ def stream_organism_gene_ko(
 ) -> pd.DataFrame:
     """Stream the ``ko`` file to a sorted, gzipped ``organism_gene_ko.tsv.gz``.
 
-    ``keep`` restricts output to that set of KO ids (e.g. only KOs linked to
+    ``keep`` restricts output to that set of KO ids (for example only KOs linked to
     reactions), mirroring ``keep`` on :func:`parse_kegg_kos`.
 
-    Real KEGG has ~9M gene↔KO associations — far too many to hold in memory as a
+    KEGG has ~9M gene and KO associations, which are too many to hold in memory as a
     DataFrame. Rows are sorted by ``(organism, gene)`` before writing: gene IDs
     from one organism share long common prefixes (locus tags, numeric runs), so
-    sorting makes them adjacent and helps the compressor; the order also matches
-    the by-organism query pattern in :func:`get_kegg_model_for_organism`. Gzip
-    (not xz) keeps the table readable by MATLAB's built-in ``gunzip`` with no
-    external tool, at a modestly larger size.
+    sorting makes them adjacent and improves compression; the order also matches
+    the by-organism query pattern in :func:`get_kegg_model_for_organism`. The table is
+    compressed with gzip, which MATLAB's built-in ``gunzip`` reads without an external
+    tool; xz would give a smaller file.
 
-    The sort is an **external merge sort** bounded to ``chunk_rows`` rows in
-    memory at a time (sorted runs spooled to gzipped temp files, then merged with
-    :func:`heapq.merge`), so peak memory stays flat regardless of KEGG size. Only
-    the small ``ko_names`` table (one row per KO) is held in full and returned.
+    The sort is an **external merge sort** that holds at most ``chunk_rows`` rows in
+    memory at a time (sorted runs are written to gzipped temporary files and merged with
+    :func:`heapq.merge`), so peak memory does not grow with the size of KEGG. Only
+    the ``ko_names`` table (one row per KO) is held in full; it is returned with the
+    columns ``ko`` and ``name``.
 
     ``progress`` shows a tqdm byte-progress bar over the (large) ``ko`` read pass.
     """
@@ -600,19 +597,18 @@ def parse_kegg_dump(
 ) -> dict[str, Path]:
     """Parse a full KEGG dump into the reference model + tables and write them out.
 
-    Writes ``reference_model.yml.gz`` (gzipped RAVEN/cobra YAML) plus the
-    gzipped-TSV tables into ``out_dir`` and returns ``{name: path}`` for
-    everything written. The large
-    ``organism_gene_ko`` table is streamed to disk (see
-    :func:`stream_organism_gene_ko`) rather than built in memory, so this scales
-    to the full KEGG database; the small derived tables are built in memory.
+    Writes ``reference_model.yml.gz`` (gzipped RAVEN or cobra YAML) plus the
+    gzipped TSV tables into ``out_dir`` and returns ``{name: path}`` for
+    everything written. The ``organism_gene_ko`` table is streamed to disk (see
+    :func:`stream_organism_gene_ko`) and not built in memory, so the full KEGG database
+    can be processed; the other tables are built in memory.
 
-    When ``version`` is given (e.g. ``"kegg116"``) the output filenames are
-    version-prefixed (``<version>_<name>``), matching the published release
-    assets; the returned dict keys stay the logical table names.
+    When ``version`` is given (for example ``"kegg116"``), the output filenames are
+    version-prefixed (``<version>_<name>``), as in the published release
+    assets; the keys of the returned dict are the logical table names.
 
     ``progress`` reports each stage and shows a byte-progress bar over the
-    dominant ``organism_gene_ko`` (ko) streaming pass.
+    ``organism_gene_ko`` streaming pass, the longest stage.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

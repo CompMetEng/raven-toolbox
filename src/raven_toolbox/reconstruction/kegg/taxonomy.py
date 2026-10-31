@@ -1,15 +1,17 @@
-"""Parse the KEGG ``taxonomy`` file into lineages, domains, and phylogenetic distances.
+"""Parse the KEGG ``taxonomy`` file into lineages, domains and phylogenetic distances.
 
 Ports RAVEN ``getPhylDist``: the file-reading half (per-organism category lineages and
-the domain split) **and** the distance-matrix half (:func:`phyl_dist`). The ``taxonomy`` file is an indented tree: ``#``-prefixed lines name a
-category, the number of leading ``#`` giving its depth; organism lines are tab-separated
+the domain split) and the distance-matrix half (:func:`phyl_dist`). The ``taxonomy``
+file is an indented tree: ``#``-prefixed lines name a category, the number of leading
+``#`` giving its depth; organism lines are tab-separated
 ``T-number<tab>org_id<tab>T-number<tab>name``. Each organism inherits the stack of
-categories above it, the first of which is its domain (``Prokaryotes`` / ``Eukaryotes``).
+categories above it, the first of which is its domain (``Prokaryotes`` or ``Eukaryotes``).
 
-Used by 3b.3 to split genes into the prok/euk HMM libraries, by 3b.4 domain mode, and by
-:func:`phyl_dist` to regenerate the KEGG phylogenetic distance matrix (RAVEN's
-``keggPhylDist``) that GECKO uses to pick the closest organism for kcat assignment — so
-that capability needs no MATLAB ``.mat`` file, only the published ``taxonomy`` artefact.
+:mod:`.hmm` uses it to split genes into the prokaryote and eukaryote HMM libraries,
+:mod:`.organism` uses it in domain mode, and :func:`phyl_dist` uses it to regenerate the KEGG
+phylogenetic distance matrix (RAVEN's ``keggPhylDist``) that GECKO uses to select the
+closest organism for kcat assignment. This needs no MATLAB ``.mat`` file, only the
+published ``taxonomy`` artefact.
 """
 from __future__ import annotations
 
@@ -33,9 +35,9 @@ def parse_taxonomy_records(path: str | Path) -> list[tuple[str, str, list[str]]]
     """Return ``[(organism_id, name, [category, ...]), ...]`` in file order.
 
     ``name`` is the organism's scientific name with any trailing KEGG parenthetical
-    kept (e.g. ``"Homo sapiens (human)"``), matching RAVEN ``getPhylDist``; the category
+    kept (for example ``"Homo sapiens (human)"``), matching RAVEN ``getPhylDist``; the category
     list is the lineage from outermost (domain) to innermost. Order is preserved so it
-    aligns with the rows/columns of :func:`phyl_dist`.
+    aligns with the rows and columns of :func:`phyl_dist`.
     """
     records: list[tuple[str, str, list[str]]] = []
     stack: list[str] = []
@@ -105,14 +107,15 @@ def organisms_in_domain(path: str | Path, domain: str) -> set[str]:
 
 @dataclass
 class PhylDist:
-    """KEGG phylogenetic distance structure — RAVEN ``getPhylDist`` / ``keggPhylDist``.
+    """KEGG phylogenetic distance structure of RAVEN ``getPhylDist`` and ``keggPhylDist``.
 
-    ``ids``/``names`` are the KEGG organism ids and scientific names (names keep RAVEN's
-    trailing parenthetical; consumers that need them cleaned, e.g. geckopy, strip it).
-    ``dist_matrix[i, j]`` is RAVEN's distance from ``ids[i]`` to ``ids[j]``. It is a
-    faithful reproduction of RAVEN's metric, which is **asymmetric and may be negative**;
-    GECKO consumes it only by taking the closest (minimum-distance) organism, so the exact
-    values matter for parity with MATLAB but the sign/asymmetry are harmless there.
+    ``ids`` and ``names`` are the KEGG organism ids and scientific names (names keep the
+    trailing parenthetical of RAVEN; consumers that need them without it, for example
+    geckopy, strip it). ``dist_matrix[i, j]`` is RAVEN's distance from ``ids[i]`` to
+    ``ids[j]``. It reproduces RAVEN's metric, which is asymmetric and may be negative;
+    GECKO uses it only to select the closest (minimum-distance) organism, so the exact
+    values matter for parity with MATLAB, and the sign and asymmetry do not affect that
+    selection.
     """
 
     ids: list[str] = field(default_factory=list)
@@ -123,18 +126,17 @@ class PhylDist:
 def phyl_dist(path: str | Path, *, only_in_kingdom: bool = False) -> PhylDist:
     """Compute the KEGG phylogenetic distance matrix from the ``taxonomy`` file.
 
-    Faithful port of RAVEN ``getPhylDist``. For organisms ``i`` and ``j`` with category
+    Port of RAVEN ``getPhylDist``. For organisms ``i`` and ``j`` with category
     lineages of lengths ``Li, Lj``, the distance is ``(Li - Lj) + min(Li, Lj) - k`` where
     ``k`` is the deepest level (within the shorter lineage, comparing position by position
-    from the root) at which the two categories coincide — ``1`` if none coincide. This
-    reproduces RAVEN's exact values (including their asymmetry and occasional negatives)
-    so the output matches MATLAB ``keggPhylDist`` that GECKO was built against.
+    from the root) at which the two categories coincide, or ``1`` if none coincide. This
+    reproduces the values of RAVEN, including their asymmetry and negative values, so the
+    output matches MATLAB ``keggPhylDist``, which GECKO uses.
 
     ``only_in_kingdom`` sets the distance to ``+inf`` between organisms in different
     domains (RAVEN's ``onlyInKingdom`` variant); the matrix is then returned as ``float``.
 
-    Cost is ``O(N²)`` in time and memory (``N`` = number of KEGG organisms, ~10⁴), so this
-    is a maintainer/GECKO-side generation step; persist the result rather than rebuilding.
+    Time and memory use are ``O(N²)``, with ``N`` the number of KEGG organisms (~10⁴).
     """
     records = parse_taxonomy_records(path)
     ids = [r[0] for r in records]

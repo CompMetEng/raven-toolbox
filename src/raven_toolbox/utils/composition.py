@@ -2,9 +2,9 @@
 
 Port of RAVEN's ``guessComposition``. Where a reaction has exactly one
 participant with an unknown formula and every other participant's formula is
-known, the unknown one's elemental composition can be recovered from the
-reaction's own mass balance. This is repeated to a fixed point, since
-resolving one metabolite can unlock others.
+known, the elemental composition of the unknown one follows from the mass
+balance of the reaction. This is repeated to a fixed point, since resolving
+one metabolite can make others resolvable.
 """
 from __future__ import annotations
 
@@ -39,9 +39,10 @@ class GuessCompositionResult:
 
 
 def _normalize_atoms(atoms: dict[str, float]) -> dict[str, int | float]:
-    """Round whole-number atom counts to int, so e.g. 4.0 renders as "H4"
-    rather than "H4.0" (a genuinely fractional count, e.g. 0.5, stays a
-    float)."""
+    """Round whole-number atom counts to int; 4.0 renders as "H4" and not as "H4.0".
+
+    A fractional count, for example 0.5, stays a float.
+    """
     normalized: dict[str, int | float] = {}
     for element, count in atoms.items():
         rounded = round(count)
@@ -65,7 +66,7 @@ def guess_composition(
     """Infer missing metabolite formulas from elemental mass balance.
 
     Modifies ``model`` in place: resolved metabolites get their ``formula``
-    (and ``elements``) set. Metabolites sharing a name (e.g. the same
+    (and ``elements``) set. Metabolites sharing a name (for example the same
     compound in different compartments) are resolved and assigned together,
     since composition does not depend on compartment.
 
@@ -82,11 +83,11 @@ def guess_composition(
 
     Notes
     -----
-    Requires that the existing formulas and reactions are correct, and warns
-    if a metabolite would need inconsistent compositions from different
-    reactions -- so it can also be used to check a model for such errors.
-    Successful completion does not guarantee correctness if the pre-existing
-    formulas were themselves wrong.
+    The result is correct only if the existing formulas and reactions are
+    correct. A warning is issued if a metabolite would need inconsistent
+    compositions from different reactions, so the function can also check a
+    model for such errors. Wrong pre-existing formulas are not detected by a
+    successful completion.
 
     Each pass resolves formulas using a snapshot of what was already known
     at the start of that pass: a metabolite resolved earlier in the same
@@ -94,8 +95,8 @@ def guess_composition(
     the original algorithm's own once-per-pass formula parsing.
 
     A metabolite instance that does not participate in any reaction
-    contributes nothing either way -- it neither resolves the name nor
-    blocks a resolution reached through a different compartment instance.
+    contributes nothing either way: it does not resolve the name and does not
+    block a resolution reached through a different compartment instance.
     """
     rxn_index = {rxn.id: i for i, rxn in enumerate(model.reactions)}
     met_index = {met.id: i for i, met in enumerate(model.metabolites)}

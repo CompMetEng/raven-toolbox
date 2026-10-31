@@ -27,12 +27,18 @@ _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]*)(\d*)")
 
 
 def sum_biomass(model: cobra.Model, config: BiomassConfig) -> dict[str, float]:
-    """Mass-fraction (g/gDW) per biomass component plus the total.
+    """Return the mass fraction (g/gDW) of each biomass component and the total.
 
-    Mirrors yeast-GEM's ``sumBioMass.m``. Returns a dict keyed by each
-    :class:`BiomassComponent` name plus ``"total"``. Components whose
-    pseudoreaction is missing from the model contribute 0 (logged as a
-    warning).
+    Mirrors yeast-GEM's ``sumBioMass.m``. The dict has one key per
+    :class:`BiomassComponent` name and the key ``"total"``. Components whose
+    pseudoreaction is missing from the model contribute 0.
+
+    Raises
+    ------
+    ValueError
+        If a substrate of a component whose mass strategy is not ``"grams"`` has an
+        empty formula or a formula with an element missing from the atomic-weight
+        table.
     """
     fractions: dict[str, float] = {}
     total = 0.0
@@ -53,19 +59,19 @@ def rescale_pseudoreaction(
     """Multiply the substrate coefficients of one component pseudoreaction
     by ``factor`` and rebalance H+ to preserve charge neutrality.
 
-    Ports ``rescalePseudoReaction.m``. "Substrate" here means any
-    metabolite whose ``name`` is not the component's product name; the
-    component's own metabolite (e.g. ``protein`` for the protein
-    pseudoreaction) is left untouched. After the rescaling the
-    coefficient of ``config.proton_met`` is recomputed so the
-    reaction's total ionic charge sums to zero.
+    Ports ``rescalePseudoReaction.m``. A substrate is any
+    metabolite whose ``name`` differs from the component's product name; the
+    component's own metabolite (for example ``protein`` for the protein
+    pseudoreaction) keeps its coefficient. After the rescaling the
+    coefficient of ``config.proton_met`` is recomputed so that the
+    total ionic charge of the reaction is zero.
 
     Raises
     ------
     ValueError
         If a metabolite of the reaction other than the proton has no charge
-        (``charge is None``), because the charge balance is then unknown rather than
-        zero. Nothing is changed in that case.
+        (``charge is None``), because the charge balance is then unknown. Nothing is
+        changed in that case.
     KeyError
         If the pseudoreaction or the proton metabolite is not in the model.
     """
@@ -108,26 +114,23 @@ def scale_biomass(
     balance_out: str | None = None,
     target_total: float = 1.0,
 ) -> None:
-    """Rescale a component to a new mass fraction, optionally balancing
-    out a second component so the biomass total becomes ``target_total``
-    g/gDW.
+    """Rescale a component to a new mass fraction and optionally rescale a
+    second component so that the biomass total becomes ``target_total`` g/gDW.
 
     Ports ``scaleBioMass.m``. The rescaling factor is derived from
-    :func:`sum_biomass` on the *current* model state, so call this with
-    an in-place ``model`` mutation, not on a stale snapshot.
+    :func:`sum_biomass` on the current state of ``model``, which is modified in place.
 
     With ``balance_out``, that component is rescaled so the components sum
     to ``target_total`` g/gDW (default 1), whatever the total was before.
     The sum equals ``target_total`` when the rescaled pseudoreaction needs
     no change of its H+ coefficient; otherwise the H+ rebalance adds to its
-    fraction and the total exceeds ``target_total`` by that amount. The
-    balancing component must be large enough to absorb the difference: a
-    ``ValueError`` is raised, before the model is changed, when its
-    fraction is 0 or would become 0 or negative. ``target_total`` has no
-    effect without ``balance_out``. Both rescalings are tried on a scratch copy
-    of the pseudoreactions first, so an error leaves the model unchanged. The
-    scratch copy is needed because the H+ rebalance adds to the fractions, which
-    are therefore not linear in the scaling factor.
+    fraction and the total exceeds ``target_total`` by that amount. A
+    ``ValueError`` is raised, before the model is changed, when the current
+    fraction of the component or of ``balance_out`` is 0, or when the
+    fraction of ``balance_out`` would become 0 or negative. ``target_total`` has no
+    effect without ``balance_out``. Both rescalings are first applied to a scratch
+    copy of the pseudoreactions, so an error leaves the model unchanged. The
+    H+ rebalance adds to the fractions, so they are not linear in the scaling factor.
     """
     fractions = sum_biomass(model, config)
     current = fractions[component_name]
@@ -271,7 +274,7 @@ def _find_pseudoreaction(model: cobra.Model, comp: BiomassComponent) -> cobra.Re
 
 
 def _set_coefficient(rxn: cobra.Reaction, met: cobra.Metabolite, value: float) -> None:
-    """Land on ``S[met, rxn] = value`` via cobra's combine=True API."""
+    """Set ``S[met, rxn] = value`` via cobra's combine=True API."""
     current = rxn.metabolites.get(met, 0.0)
     delta = float(value) - current
     if delta != 0:

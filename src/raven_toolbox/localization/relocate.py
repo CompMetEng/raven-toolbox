@@ -1,22 +1,25 @@
-"""Apply a curator's firm compartment decision and repair the model to keep it consistent.
+"""Apply a curator's compartment decision and repair the model to keep it consistent.
 
-:func:`relocate_reactions` takes a curated map ``{reaction_id: compartment}`` — the curator asserting
-"this reaction belongs *here*" — and produces a new :class:`~raven_toolbox.localization.AssignmentProposal`
-that honours those pins **and makes the consequential changes** needed for the new localisation to work:
+:func:`relocate_reactions` takes a curated map ``{reaction_id: compartment}`` (the curator asserts
+that a reaction belongs in a compartment) and produces a new
+:class:`~raven_toolbox.localization.AssignmentProposal` that keeps those pins and makes the
+changes that the new localisation needs:
 
-* **gene consistency** — an enzyme localises to one compartment, so other reactions fully explained by
-  the moved genes are co-moved with it (reported, and disableable);
-* **transports added** — a moved reaction's metabolites are bridged into/out of the new compartment
-  where they now must cross a membrane;
-* **transports removed** — transports that only served the reaction's *old* compartment and are now
-  orphaned (no reaction touches that species there any more) are dropped;
-* **re-certification** — the repaired model is materialised and its growth checked, so a decision that
-  breaks functionality is reported rather than silently shipped.
+* **gene consistency**: an enzyme localises to one compartment, so other reactions fully explained
+  by the moved genes are moved with it (reported; ``move_gene_siblings=False`` disables this);
+* **transports added**: a transport between the default compartment and the new compartment is added
+  for a metabolite of a moved reaction when the new compartment is not the default compartment,
+  the species occurs in at least two compartments under the new layout and no such transport exists
+  yet;
+* **transports removed**: transports that served only the old compartment of a moved reaction and
+  are orphaned (no reaction touches that species there any more) are dropped;
+* **re-certification**: the repaired model is materialised and its growth is checked, so a decision
+  that breaks functionality is reported in the result.
 
-The transport repair is deliberately **surgical**: only species touched by the moved reactions are
-reconsidered, so the diff is attributable to the curator's edit and unrelated placements are never
-churned (unlike a full re-solve). It reuses :func:`assign_compartments`'s materialisation and the same
-star-topology hub, so the result feeds straight back into :func:`apply_assignment`.
+The transport repair reconsiders only the species touched by the moved reactions, so the changes
+follow from the curator's edit and unrelated placements stay as they are (a full re-solve can change
+them). It uses the materialisation and the star-topology hub of :func:`assign_compartments`, so the
+result is accepted by :func:`apply_assignment`.
 """
 from __future__ import annotations
 
@@ -38,13 +41,15 @@ __all__ = ["RelocationResult", "relocate_reactions"]
 
 @dataclass
 class RelocationResult:
-    """Outcome of :func:`relocate_reactions`: the repaired proposal plus a log of every change.
+    """Outcome of :func:`relocate_reactions`: the repaired proposal and a log of every change.
 
-    ``moved`` maps every relocated reaction id to ``(from_compartment, to_compartment)`` (the curator's
-    pins and any gene-linked co-moves); ``co_moved`` lists just the reactions moved as a gene-consistency
-    consequence. ``transports_added``/``transports_removed`` are ``(metabolite_base, compartment)``
-    tuples. ``growth_before``/``growth_after`` are the materialised model's objective value before and
-    after; ``certified`` is True when the relocated model still meets the growth floor.
+    ``moved`` maps every relocated reaction id to ``(from_compartment, to_compartment)`` (the
+    curator's pins and any gene-linked co-moves); ``from_compartment`` joins several compartments
+    with ``+``. ``co_moved`` lists the reactions moved as a gene-consistency consequence.
+    ``transports_added`` and ``transports_removed`` are ``(metabolite_base, compartment)`` tuples.
+    ``growth_before`` and ``growth_after`` are the objective value of the materialised model before
+    and after; ``certified`` is True when ``growth_after`` is above 1e-9 and reaches ``min_growth``
+    (within 1e-9).
     """
 
     proposal: AssignmentProposal
@@ -68,8 +73,7 @@ class RelocationResult:
                                 base_metabolite=base_metabolite, universal=universal)
 
     def summary(self) -> str:
-        """Human-readable report of the relocation: reactions moved, transports changed, and the
-        growth outcome."""
+        """Report the relocation: reactions moved, transports changed and the growth outcome."""
         lines = [f"relocated {len(self.moved)} reaction(s) "
                  f"({len(self.co_moved)} co-moved for gene consistency)"]
         for rid, (frm, to) in self.moved.items():
@@ -103,19 +107,22 @@ def relocate_reactions(
     move_gene_siblings: bool = True,
     prune_orphan_transports: bool = True,
 ) -> RelocationResult:
-    """Firmly place reactions in curator-chosen compartments and repair the model around the decision.
+    """Place reactions in curator-chosen compartments and repair the model around the decision.
 
     ``decisions`` maps reaction ids to the compartment the curator wants them in. Returns a
     :class:`RelocationResult` with the repaired proposal and a log of every secondary change
-    (gene-linked co-moves, transports added/removed, and the growth certificate). ``model`` and
+    (gene-linked co-moves, transports added and removed, and the growth certificate). ``model`` and
     ``proposal`` are the draft and its current assignment (as returned by
-    :func:`assign_compartments`); pass the same ``base_metabolite``/``universal``.
+    :func:`assign_compartments`); ``base_metabolite`` and ``universal`` are the same as in that
+    call.
 
-    ``move_gene_siblings`` (default True) co-moves any *other* reaction whose entire gene set now points
-    to a single moved-to compartment — enforcing "one enzyme, one compartment" — and reports them;
-    isozyme-shared reactions (genes split across compartments) are left in place. ``prune_orphan_transports``
-    removes a transport of species ``b`` at a reaction's old compartment when nothing else uses ``b``
-    there any more. The transport repair only touches species of the moved reactions.
+    ``move_gene_siblings`` (default True) moves every other reaction whose genes all belong to moved
+    reactions and all point to the same moved-to compartment ("one enzyme, one compartment"), and
+    reports them. A reaction is left in place when one of its genes does not belong to a moved
+    reaction, when its genes point to different compartments, or when its placement has more than
+    one compartment. ``prune_orphan_transports`` (default True) removes a transport of species ``b``
+    at the old compartment of a moved reaction when no other reaction uses ``b`` there. The
+    transport repair only changes species of the moved reactions.
     """
     base = base_metabolite if base_metabolite is not None else _base_met
     _check_unique_keys(model.metabolites, base)

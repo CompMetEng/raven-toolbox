@@ -1,14 +1,14 @@
-"""ftINIT preprocessing — once-per-template work shared by every sample on a model.
+"""ftINIT preprocessing: the once-per-template work shared by every sample on a model.
 
-ftINIT does all omics-independent work once: classify reactions into the categories
-the staged MILP may *ignore* (leave in, never remove), discover task-essential
-reactions, linearly merge, and scale. The result (:class:`PrepData`) is reused across
-every sample.
+ftINIT does all omics-independent work once: it classifies reactions into the categories
+the staged MILP may ignore (leave in, never remove), discovers task-essential
+reactions, merges linear chains and scales the stoichiometry. The result
+(:class:`PrepData`) is reused across every sample.
 
-:func:`classify_reactions` is the reaction taxonomy: exchange, GPR-less
-import / simple / advanced transport, spontaneous, GPR-less extracellular, custom, and
-"any without a GPR". The staged schedule (:func:`raven_toolbox.init.get_init_steps`) selects
-which categories to keep out of each MILP step via an 8-bit pattern.
+:func:`classify_reactions` is the reaction taxonomy: exchange, GPR-less import, simple
+transport and advanced transport, spontaneous, GPR-less extracellular, custom, and any
+reaction without a GPR. The staged schedule (:func:`raven_toolbox.init.get_init_steps`) uses
+an 8-bit pattern to select which categories each MILP step holds out.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from raven_toolbox.tasks import Task, find_task_essential_reactions
 class ReactionMasks:
     """Reaction-category id sets (RAVEN's ``toIgnore*``), in 8-bit-pattern order.
 
-    ``ignored(pattern)`` returns the union of the categories whose bit is set — the
-    reactions held out of (left untouched by) that MILP step.
+    ``ignored(pattern)`` returns the union of the categories whose bit is set, the
+    reactions held out of that MILP step (they get score 0 and stay in the model).
     """
 
     exchange: set[str] = field(default_factory=set)            # b1
@@ -53,12 +53,12 @@ class ReactionMasks:
 
 
 def _is_exchange_reaction(rxn: cobra.Reaction) -> bool:
-    """One-sided reaction: all metabolites are on the same side (RAVEN ``getExchangeRxns``).
+    """Whether all metabolites of ``rxn`` are on one side (RAVEN ``getExchangeRxns``).
 
     RAVEN's ``getExchangeRxns`` (default ``'all'``) flags every reaction with no products
-    *or* no substrates — i.e. whose non-zero stoichiometry is all one sign. That is broader
-    than cobra's ``Reaction.boundary`` (single metabolite only): it also catches
-    multi-metabolite sink / pool reactions, which ftINIT force-keeps.
+    or no substrates, that is, whose non-zero stoichiometry has one sign. cobra's
+    ``Reaction.boundary`` covers a single metabolite only; this test also covers
+    multi-metabolite sink and pool reactions, which ftINIT keeps.
     """
     coeffs = list(rxn.metabolites.values())
     if not coeffs:
@@ -67,7 +67,10 @@ def _is_exchange_reaction(rxn: cobra.Reaction) -> bool:
 
 
 def _is_advanced_transport(rxn: cobra.Reaction) -> bool:
-    """Even number (>2) of mets pairing up by name across compartments with canceling stoich."""
+    """Whether ``rxn`` has an even number (more than 2) of metabolites that pair up by name.
+
+    The pairs lie in different compartments and have cancelling stoichiometry.
+    """
     mets = list(rxn.metabolites.items())
     if len(mets) <= 2 or len(mets) % 2 != 0:
         return False
@@ -93,8 +96,8 @@ def classify_reactions(
 ) -> ReactionMasks:
     """Classify reactions into the ftINIT ``toIgnore`` categories (``prepINITModel``).
 
-    ``ext_comp`` is the extracellular compartment. ``spontaneous``/``custom`` are
-    reaction-id lists. A reaction is "GPR-less" when its gene rule is empty.
+    ``ext_comp`` is the extracellular compartment. ``spontaneous`` and ``custom`` are
+    iterables of reaction ids. A reaction is "GPR-less" when its gene rule is empty.
     """
     spont, cust = set(spontaneous), set(custom)
     masks = ReactionMasks(
@@ -130,7 +133,7 @@ class PrepData:
     ``ref_model`` (the reference after the first simplification; the orientation of the
     essential reactions and the tightening of reversibility are undone on it after the merge,
     so its bounds and stoichiometry are the template's). ``essential_rxns`` are in
-    **merged** ids and pre-oriented irreversibly (so the MILP forces flux *forward*).
+    merged ids and pre-oriented irreversibly (so the MILP forces flux forward).
     ``masks`` is on ``ref_model`` (= original) ids.
     """
 
@@ -152,13 +155,13 @@ class PrepData:
 def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
     """Compress each reaction's stoichiometric dynamic range.
 
-    Large spreads in stoichiometric coefficients (e.g. a biomass/pool reaction with
-    coefficients from 1e-3 to 1e2) force correspondingly extreme flux magnitudes, so no
-    single MILP big-M fits all reactions. RAVEN, per reaction: caps every ``|coeff|`` at
-    ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole reaction so its
-    mean ``|coeff|`` is 1. Bounds are not changed. Modifies ``model`` in
-    place; only the merged MILP model is scaled (the final output maps back to the
-    unscaled ``ref_model`` by reaction id, so reaction *selection* is unaffected).
+    A large spread of stoichiometric coefficients (for example a biomass or pool reaction with
+    coefficients from 1e-3 to 1e2) forces correspondingly extreme flux magnitudes, so no
+    single MILP big-M fits all reactions. As RAVEN, for each reaction the function caps every
+    ``|coeff|`` at ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole
+    reaction so that its mean ``|coeff|`` is 1. Bounds are not changed. The function modifies
+    ``model`` in place; only the merged MILP model is scaled, and the final output maps back
+    to the unscaled ``ref_model`` by reaction id.
     """
     for rxn in model.reactions:
         items = list(rxn.metabolites.items())
@@ -225,9 +228,9 @@ def _orient_forward(rxn: cobra.Reaction, direction: int) -> None:
     """Make ``rxn`` carry flux only in its forced direction (irreversible forward).
 
     Matches RAVEN ``prepINITModel``: reverse the reactions whose forced direction is
-    negative (``reverseRxns``), then set ``lb = 0`` for every essential — unconditionally,
-    even where ``lb`` was already positive (RAVEN ``minModel1.lb(selInd) = 0``). The MILP
-    re-forces essential flux later, so relaxing ``lb`` to 0 here is intended.
+    negative (``reverseRxns``), then set ``lb = 0`` for every essential reaction,
+    unconditionally, even where ``lb`` was already positive (RAVEN
+    ``minModel1.lb(selInd) = 0``). The MILP forces the essential flux again later.
     """
     if direction < 0:  # flip so the forced (reverse) direction becomes forward
         rxn.add_metabolites({m: -2 * c for m, c in rxn.metabolites.items()})
@@ -248,36 +251,40 @@ def prep_init_model(
     verbose: bool = False,
     processes: int = 1,
 ) -> PrepData:
-    """Build :class:`PrepData` from a template model — the once-per-template work shared
-    by every ftINIT sample on this model.
+    """Build :class:`PrepData` from a template model, the work done once per template.
+
+    The result is shared by every ftINIT sample on this model.
 
     With ``tasks``, discovers the task-essential reactions (kept regardless of score),
     orients them irreversibly in their required direction, and drops tasks that are
     infeasible. Then classifies reactions into the omics-independent categories, linearly
     merges, and (unless ``scale=False``) rescales the merged model's stoichiometry
-    (:func:`rescale_for_init`) so a single MILP big-M is valid across all reactions —
-    without this, genome-scale ftINIT is infeasible / intractable. ``simplify=False``
-    skips RAVEN's dead-end/FVA-blocked removal and reversibility-tightening passes,
+    (:func:`rescale_for_init`) so that a single MILP big-M is valid across all reactions.
+    In the INIT parameter calibration study on raven-docs (Human-GEM, one cell line), the
+    full ftINIT pipeline without scaling was feasible at ``big_m`` 1000 and took 157 s
+    against 83 s with scaling, and it was infeasible at ``big_m`` 100. ``simplify=False``
+    skips RAVEN's dead-end and FVA-blocked removal and its reversibility-tightening passes,
     leaving a larger merged model that may reach a different extraction optimum.
 
-    ``essential_cache_path`` makes the (slow, genome-scale) essential-reaction discovery
-    **resumable** across interruptions — see :func:`find_task_essential_reactions`.
+    ``essential_cache_path`` makes the essential-reaction discovery resumable across
+    interruptions: the accumulated results are written to this path; see
+    :func:`find_task_essential_reactions`.
 
-    Task-essential discovery runs with ``close_boundaries=True``, matching RAVEN's
-    ``prepINITModel`` (which calls ``closeModel`` first), rather than
-    :func:`find_task_essential_reactions`'s own additive default — see the comment at the
-    call site for why the two callers differ.
+    Task-essential discovery runs with ``close_boundaries=True``, as RAVEN's
+    ``prepINITModel`` (which calls ``closeModel`` first), and the default of
+    :func:`find_task_essential_reactions` is additive. With ``close_boundaries=True`` the
+    task file defines the whole boundary of the model during the discovery.
 
-    ``verbose`` prints one line per phase (matching ``prepINITModel``'s numbered steps in
-    spirit) plus per-task progress during essential-reaction discovery; silent by default.
+    ``verbose`` prints one line per phase plus per-task progress during essential-reaction
+    discovery (default False).
 
-    ``processes`` (default 1) parallelises task-essential discovery across tasks — see
-    :func:`find_task_essential_reactions`. It does not affect the two ``simplify_model``
-    passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
-    (set that separately if you want them faster too).
+    ``processes`` (default 1) parallelises task-essential discovery across tasks; see
+    :func:`find_task_essential_reactions`. The two ``simplify_model`` passes are parallelised
+    by cobra's own ``cobra.Configuration().processes``.
 
     The first simplification removes reactions only; every metabolite stays in the reference model
-    while the tasks are checked, so a task names a metabolite whatever its letter case. Afterwards
+    while the tasks are checked, so a task can name any metabolite of the template, including
+    ones whose names differ only in letter case. Afterwards
     the metabolites without a reaction are removed, except the ones that tasks name (inputs,
     outputs and equations, matched by exact ``name[compartment]``, failed tasks included; when
     several metabolites share a ``name[compartment]``, only the first in model order is kept).

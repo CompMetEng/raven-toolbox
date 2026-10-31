@@ -1,17 +1,21 @@
-"""ChEBI-ontology substrate matching — the substrate-specific layer of evidence-aware transport scoring.
+"""ChEBI-ontology substrate matching, the substrate-specific layer of transport scoring.
 
-Two curated toolbox-assets artefacts underlie this (built by ``scripts/build_transporter_data.py``):
+Two curated toolbox-assets artefacts underlie this layer (built by
+``scripts/build_transporter_data.py``):
 
-* ``tcdb_substrates.tsv`` — TCDB's curated ``TC-ID -> substrate ChEBI(s)`` table;
-* ``chebi_relations.tsv.gz`` — the ChEBI ``is_a`` graph plus the protonation/tautomer bridges.
+* ``tcdb_substrates.tsv``: the curated TCDB ``TC-ID -> substrate ChEBI(s)`` table;
+* ``chebi_relations.tsv.gz``: the ChEBI ``is_a`` graph plus the protonation and tautomer bridges.
 
-Together they let a model metabolite's ChEBI be matched to the *specific* substrate a transporter is
-curated to carry — a graded, distance-decayed refinement of the coarse family→class match. A metabolite
-that **is** the curated substrate scores 1.0; a near subtype or protonation/tautomer variant scores a
-little less; a far, generic relative (everything is eventually ``is_a`` "organic anion") falls outside
-the hop budget and scores 0, so the coarse class layer takes over. This lifts *recall* — it evidences
-metabolites the name-keyword classifier (:func:`~.transport_evidence.default_substrate_of`) misses —
-without the coarse layer's promiscuity.
+Together they match the ChEBI of a model metabolite to the specific substrate that a transporter is
+curated to carry. The match is graded and decays with graph distance, and it refines the coarse
+family-to-class match. A metabolite that is the curated substrate scores 1.0. A near subtype, or a
+protonation or tautomer variant, scores less. A distant, generic relative scores 0 and the coarse
+class layer applies instead: almost every metabolite reaches a generic ancestor such as "organic
+anion" within a few ``is_a`` steps, so a relative that is only linked through such an ancestor lies
+outside the hop budget. The graded match is stricter than the coarse class match, which pairs a
+transporter with every metabolite of the same broad class: it gives evidence only to metabolites
+that are close to a curated substrate. The layer increases recall: metabolites that the
+name-keyword classifier (:func:`~.transport_evidence.default_substrate_of`) misses receive evidence.
 """
 from __future__ import annotations
 
@@ -37,14 +41,17 @@ _MAX_HOPS = len(_WEIGHT_BY_HOP) - 1
 def _sibling_decay(dist: int) -> float:
     """Weight for two ChEBIs meeting ``dist`` hops apart through their nearest common ancestor.
 
-    Used only for the optional sibling credit: unlike a direct roll-up (where the substrate *is* an
-    ancestor of the metabolite), a sibling path climbs to a shared ancestor and back down, so it decays
-    over the combined distance (min 2, for two 1-hop children of one parent) and stays gentle."""
+    Used for the optional sibling credit only. A direct roll-up ends at a substrate that is an
+    ancestor of the metabolite. A sibling path climbs to a shared ancestor and back down, so the
+    weight decays over the combined distance (minimum 2, for two children of one parent at 1 hop
+    each)."""
     return max(0.0, 1.0 - (dist - 1) / (2 * _MAX_HOPS))
 
 
 def load_tc_substrates(path: str | Path | None = None) -> dict[str, frozenset[str]]:
-    """Load ``tcdb_substrates.tsv`` -> ``{TC-ID: frozenset(ChEBI)}`` (auto-downloaded if ``path`` is None)."""
+    """Load ``tcdb_substrates.tsv`` as ``{TC-ID: frozenset(ChEBI)}``.
+
+    The file is downloaded if ``path`` is None."""
     path = ensure_data_file("transporters", "tcdb_substrates.tsv") if path is None else Path(path)
     out: dict[str, frozenset[str]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -55,11 +62,11 @@ def load_tc_substrates(path: str | Path | None = None) -> dict[str, frozenset[st
 
 
 class SubstrateOntology:
-    """The ChEBI graph + TCDB substrate table, with a graded metabolite→substrate match.
+    """The ChEBI graph and the TCDB substrate table, with a graded metabolite-to-substrate match.
 
-    Build one with :meth:`load` (downloads/caches both artefacts) and pass it to
-    :func:`~.transport_evidence.evidence_aware_transport_cost`. Reachability closures are memoised, so
-    scoring a whole model reuses each metabolite ChEBI's roll-up.
+    Build an instance with :meth:`load` (downloads and caches both artefacts) and pass it to
+    :func:`~.transport_evidence.evidence_aware_transport_cost`. Reachability closures are memoised,
+    so scoring a whole model reuses the roll-up of each metabolite ChEBI.
     """
 
     def __init__(self, edges: dict[str, set[str]], tc_substrates: dict[str, frozenset[str]],
@@ -76,9 +83,10 @@ class SubstrateOntology:
         relations_path: str | Path | None = None,
         substrates_path: str | Path | None = None,
     ) -> SubstrateOntology:
-        """Build a :class:`SubstrateOntology` from the ChEBI relations graph and the TCDB substrate
-        table, auto-downloading/caching each (the packaged toolbox-assets artefacts) when its path is
-        left as ``None``."""
+        """Build a :class:`SubstrateOntology` from the ChEBI relations and TCDB substrates.
+
+        Each toolbox-assets artefact is downloaded and cached when its path is ``None``.
+        """
         relations_path = (relations_path if relations_path is not None
                           else ensure_data_file("transporters", "chebi_relations.tsv.gz"))
         edges: dict[str, set[str]] = defaultdict(set)
@@ -101,14 +109,16 @@ class SubstrateOntology:
         return cls(dict(edges), load_tc_substrates(substrates_path), alt)
 
     def substrates_of(self, tc_ids: Iterable[str]) -> frozenset[str]:
-        """Union of curated substrate ChEBIs over a set of (full 5-level) TCDB TC-IDs."""
+        """Union of the curated substrate ChEBIs over a set of full (5-level) TCDB TC-IDs."""
         out: set[str] = set()
         for tc in tc_ids:
             out |= self._tc.get(tc, frozenset())
         return frozenset(out)
 
     def _reach(self, chebi: str) -> dict[str, int]:
-        """``{reachable ChEBI: min hop}`` within the hop budget (self at hop 0), memoised."""
+        """``{reachable ChEBI: minimum hop}`` within the hop budget (the ChEBI itself at hop 0).
+
+        The result is memoised."""
         chebi = self._alt.get(chebi, chebi)  # normalise a secondary id onto its connected primary
         cached = self._reach_cache.get(chebi)
         if cached is not None:
@@ -127,14 +137,16 @@ class SubstrateOntology:
 
     def match(self, metabolite_chebis: Iterable[str], substrate_chebis: Iterable[str],
               *, sibling_weight: float = 0.0) -> float:
-        """Graded [0, 1] match from a metabolite's ChEBI(s) to a transporter's curated substrate ChEBIs.
+        """Graded [0, 1] match from the ChEBI(s) of a metabolite to the curated substrate ChEBIs
+        of a transporter.
 
-        The **direct** score rolls the metabolite up its is_a / protonation ancestry to a curated
-        substrate (or the substrate itself): 1.0 for an exact hit, decaying by hop distance. With
-        ``sibling_weight > 0`` a metabolite that is under *no* substrate but shares a near common
-        ancestor with one — a chemical *relative* of the cargo (fructose to a glucose-only carrier) —
-        also earns ``sibling_weight`` scaled by that meeting distance, always capped below a direct hit
-        (it trades specificity for recall, so it is opt-in). 0 when nothing connects in the hop budget.
+        The direct score rolls the metabolite up its ``is_a`` and protonation ancestry to a curated
+        substrate (or the substrate itself): 1.0 for an identical ChEBI, decaying with hop distance.
+        With ``sibling_weight > 0``, a metabolite that is below no substrate but shares a near
+        common ancestor with one (a chemical relative of the cargo, such as fructose for a
+        glucose-only carrier) also scores ``sibling_weight`` multiplied by a decay in the meeting
+        distance. The sibling credit increases recall and lowers specificity, and is therefore
+        opt-in. The result is 0 when nothing connects within the hop budget.
         """
         subs = frozenset(self._alt.get(s, s) for s in substrate_chebis)  # normalise secondary ids
         if not subs:

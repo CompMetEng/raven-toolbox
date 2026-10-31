@@ -1,13 +1,13 @@
 """Context-specific model extraction (ftINIT).
 
-* :func:`run_ftinit` — the single-step ftINIT MILP (continuous indicators for
-  positive-score reactions; binaries only on negatives).
-* :func:`ftinit` — the full pipeline (``prep_init_model`` → staged ``run_ftinit`` →
-  ``fill_tasks`` → ``remove_low_score_genes``).
-* :func:`score_reactions_from_genes` / :func:`gene_scores_from_expression` —
-  gene → reaction scoring (RNA-seq is the common upstream).
-* :mod:`raven_toolbox.init.hpa` — HPA proteomics/RNA-seq parsing and gene-scoring
-  adapters, the typical (f)tINIT entry point for tissue-specific runs.
+* :func:`run_ftinit`: the single-step ftINIT MILP (continuous indicators for
+  positive-score reactions, binaries for negative-score reactions).
+* :func:`ftinit`: the full pipeline (``prep_init_model``, staged ``run_ftinit``,
+  ``fill_tasks``, ``remove_low_score_genes``).
+* :func:`score_reactions_from_genes` and :func:`gene_scores_from_expression`:
+  gene to reaction scoring.
+* :mod:`raven_toolbox.init.hpa`: HPA proteomics and RNA-seq parsing and gene-scoring
+  adapters.
 """
 from raven_toolbox.init.ftinit import FtInitResult, ftinit, run_ftinit
 from raven_toolbox.init.genes import remove_low_score_genes

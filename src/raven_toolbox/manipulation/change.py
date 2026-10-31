@@ -1,15 +1,14 @@
 """Change the stoichiometry of existing reactions from equation strings.
 
-Editing the same ``Reaction`` object changes only its stoichiometry — its id, name,
-bounds, GPR, subsystem, and position are preserved automatically by cobra.
+Editing the ``Reaction`` object in place changes its stoichiometry only; cobra keeps its id,
+name, bounds, GPR, subsystem and position.
 
-So this port simply re-parses the equation (reusing the same metabolite
-matching as :func:`~raven_toolbox.manipulation.add.add_reactions_from_equations`,
-including name and ``name[comp]`` modes that cobra lacks) and swaps the
-metabolites in place.
+The equation is parsed with the metabolite matching of
+:func:`~raven_toolbox.manipulation.add.add_reactions_from_equations` (including the name and
+``name[comp]`` modes that cobra lacks), and the metabolites of the reaction are replaced.
 
-Like RAVEN, **bounds are left unchanged** even if the new equation's arrow
-implies a different reversibility — use a bounds setter for that.
+Bounds are left unchanged, even if the arrow of the new equation implies a different
+reversibility; the bounds are set separately.
 """
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ def change_reaction_equations(
         Target ``cobra.Model``, mutated in place.
     equations
         Mapping of ``reaction_id -> equation string``. Every ID must already
-        exist in the model. Equation syntax is identical to
+        exist in the model. The equation syntax is that of
         :func:`~raven_toolbox.manipulation.add.add_reactions_from_equations`.
     mets_by, compartment, allow_new_mets, new_met_prefix
         Metabolite-matching options, as in ``add_reactions_from_equations``.
@@ -53,9 +52,8 @@ def change_reaction_equations(
 
     Notes
     -----
-    Bounds are **not** modified, matching RAVEN. Changing an equation from
-    ``-->`` to ``<=>`` does not by itself make the reaction reversible; adjust
-    the bounds separately.
+    Bounds are not modified, as in RAVEN. Changing an equation from
+    ``-->`` to ``<=>`` leaves the reaction irreversible until the bounds are set.
     """
     if mets_by not in ("id", "name"):
         raise ValueError(f"mets_by must be 'id' or 'name', got {mets_by!r}")
@@ -93,7 +91,7 @@ def change_gene_reaction_rules(
     """Set or append gene-reaction rules on existing reactions.
 
     Rules are read with :func:`~raven_toolbox.utils.parse_gr_rule`, the grammar of RAVEN's
-    ``parseGrRule`` (``G1&G2`` is one gene id); a rule that grammar refuses is read with
+    ``parseGrRule`` (``G1&G2`` is one gene id); a rule that the grammar does not accept is read with
     cobra's parser. New genes are created in the model. ``replace=False`` appends the rule
     as an isozyme, as RAVEN's ``changeGrRules`` with ``replace`` false does.
 
@@ -105,7 +103,7 @@ def change_gene_reaction_rules(
         Mapping of ``reaction_id -> GPR string``. Every ID must already exist.
     replace
         If True (default), overwrite the existing GPR. If False, append the new
-        rule as an isozyme: ``(old) or (new)`` (just ``new`` if the reaction had
+        rule as an isozyme: ``(old) or (new)`` (``new`` if the reaction has
         no GPR).
 
     Returns

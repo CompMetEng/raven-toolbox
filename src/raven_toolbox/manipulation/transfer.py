@@ -1,13 +1,12 @@
 """Copy reactions (with their metabolites and genes) from another model.
 
-cobra's ``Model.merge`` / ``add_reactions`` match metabolites strictly by id. This
-transfers a chosen set of reactions from a *source* model into a draft, matching
-metabolites by **name[compartment]** instead — so a compound present in both models
-under different ids is reused rather than duplicated, and only genuinely new
-metabolites are created (copying the source's id, formula,
-charge, and annotation). New genes are auto-created by cobra when the GPR is set.
-This is the post-``getModelFromHomology`` "copy a few more reactions across"
-workflow.
+cobra's ``Model.merge`` and ``add_reactions`` match metabolites by id. This module transfers a
+chosen set of reactions from a source model into a draft model and matches metabolites by
+name and compartment (``name[compartment]``) instead. A compound present in both models under
+different ids is reused, and only metabolites without a match are created (with the id, formula,
+charge and annotation of the source). New genes are created by cobra when the GPR is set. The
+function is meant for use after ``getModelFromHomology``, to copy additional reactions into the
+draft.
 """
 from __future__ import annotations
 
@@ -39,21 +38,22 @@ def add_reactions_from_model(
     Parameters
     ----------
     model
-        Draft model to copy into (mutated in place).
+        Draft model to copy into (modified in place).
     source_model
         Model to copy reactions from.
     reactions
         Reaction ID(s) in ``source_model``. Reactions already present in
-        ``model`` (by ID) are skipped.
+        ``model`` (by ID) are skipped. A new metabolite keeps the id of the source metabolite
+        unless that id is in use, in which case it gets an automatic ID ``m<N>``.
     genes
         ``False`` (default): add reactions without GPRs. ``True``: copy each
         reaction's GPR from the source. A string: use it as the GPR for every
         added reaction. A list: per-reaction GPRs (matching the reactions that
-        are actually added). New genes are created automatically.
+        are added). New genes are created automatically.
     note
-        Stored in each added reaction's ``notes['note']`` (set ``None`` to skip).
+        Stored in the ``notes['note']`` of each added reaction (``None`` stores no note).
     confidence
-        If given, stored in each added reaction's ``notes['confidence_score']``.
+        If given, stored in the ``notes['confidence_score']`` of each added reaction.
 
     Returns
     -------
