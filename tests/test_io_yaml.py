@@ -81,6 +81,13 @@ def test_standard_content(yaml_file):
     assert r.gene_reaction_rule == "G1"
 
 
+def test_read_model_has_raven_solver_tolerance(yaml_file):
+    model = read_yaml_model(yaml_file)
+    assert model.tolerance == 1e-9
+    model.solver = "glpk"
+    assert model.tolerance == 1e-9
+
+
 def test_annotation_owned_by_cobra(yaml_file):
     # smiles / ec-code / miriam live in the annotation block (cobra reads them)
     model = read_yaml_model(yaml_file)

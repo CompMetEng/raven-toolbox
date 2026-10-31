@@ -62,6 +62,7 @@ from raven_toolbox.io.ec_data import (
     ec_data_to_yaml_sections,
 )
 from raven_toolbox.utils.gpr import set_gene_rule
+from raven_toolbox.utils.solver import set_raven_tolerance
 
 # A dedicated instance for *writing* only (reading uses _read_yaml below).
 # Mutating cobra's own YAML instance would change its width for
@@ -447,7 +448,7 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     if foreign:
         model.notes["_yaml_sections"] = foreign
 
-    return model
+    return set_raven_tolerance(model)
 
 
 # --------------------------------------------------------------------------- #
