@@ -396,3 +396,8 @@ def test_build_ko_hmm_empty_fasta_raises(tmp_path):
     fasta.write_text("")
     with pytest.raises(ValueError, match="no sequences"):
         build_ko_hmm(fasta, tmp_path / "empty.hmm")
+
+
+def test_organisms_in_domain_empty_domain_raises(kegg_dump):
+    with pytest.raises(ValueError, match="must not be empty"):
+        organisms_in_domain(kegg_dump / "taxonomy", "")

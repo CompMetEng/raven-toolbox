@@ -66,6 +66,15 @@ def get_init_steps(series: str = "1+1", *, mets_to_ignore: Sequence[str] = ()) -
     ``mets_to_ignore`` are metabolite names removed from the stoichiometry in each step (for
     example H2O and H+); the ``'full'`` series ignores none, as RAVEN's ``getINITSteps`` does.
     An unknown ``series`` raises :class:`ValueError`.
+
+    Parameters
+    ----------
+    series : str
+        Name of the schedule, default ``"1+1"``. One of ``"1+1"``, ``"2+1"``, ``"1+0"``,
+        ``"2+0"`` and ``"full"``; any other value raises :class:`ValueError`.
+    mets_to_ignore : Sequence[str]
+        Keyword-only; default empty. Names of the metabolites removed from the stoichiometry
+        in each step. The ``"full"`` series ignores none, whatever the value.
     """
     m = tuple(mets_to_ignore)
     s1 = InitStep("ignore", _ALL_NO_GPR_KEPT, mets_to_ignore=m, milp_runs=_STEP_RUNS)

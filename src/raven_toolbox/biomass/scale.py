@@ -33,6 +33,13 @@ def sum_biomass(model: cobra.Model, config: BiomassConfig) -> dict[str, float]:
     :class:`BiomassComponent` name and the key ``"total"``. Components whose
     pseudoreaction is missing from the model contribute 0.
 
+    Parameters
+    ----------
+    model : cobra.Model
+        Model that holds the biomass pseudoreactions. It is not modified.
+    config : BiomassConfig
+        Biomass components, their pseudoreaction names and their mass strategies.
+
     Raises
     ------
     ValueError
@@ -65,6 +72,19 @@ def rescale_pseudoreaction(
     pseudoreaction) keeps its coefficient. After the rescaling the
     coefficient of ``config.proton_met`` is recomputed so that the
     total ionic charge of the reaction is zero.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model that holds the pseudoreaction. It is modified in place.
+    config : BiomassConfig
+        Biomass components and the id of the proton metabolite (``config.proton_met``).
+    component_name : str
+        Name of the component in ``config`` whose pseudoreaction is rescaled. A name that is
+        not in ``config`` raises :class:`KeyError`.
+    factor : float
+        Multiplier for the coefficients of the substrates. A factor of 1 leaves the substrate
+        coefficients unchanged, and the proton coefficient is still recomputed.
 
     Raises
     ------
@@ -120,17 +140,32 @@ def scale_biomass(
     Ports ``scaleBioMass.m``. The rescaling factor is derived from
     :func:`sum_biomass` on the current state of ``model``, which is modified in place.
 
-    With ``balance_out``, that component is rescaled so the components sum
-    to ``target_total`` g/gDW (default 1), whatever the total was before.
-    The sum equals ``target_total`` when the rescaled pseudoreaction needs
-    no change of its H+ coefficient; otherwise the H+ rebalance adds to its
-    fraction and the total exceeds ``target_total`` by that amount. A
-    ``ValueError`` is raised, before the model is changed, when the current
-    fraction of the component or of ``balance_out`` is 0, or when the
-    fraction of ``balance_out`` would become 0 or negative. ``target_total`` has no
-    effect without ``balance_out``. Both rescalings are first applied to a scratch
-    copy of the pseudoreactions, so an error leaves the model unchanged. The
-    H+ rebalance adds to the fractions, so they are not linear in the scaling factor.
+    A ``ValueError`` is raised, before the model is changed, when the current fraction of the
+    component or of ``balance_out`` is 0, or when the fraction of ``balance_out`` would become
+    0 or negative. Both rescalings are first applied to a scratch copy of the
+    pseudoreactions, so an error leaves the model unchanged. The H+ rebalance adds to the
+    fractions, so they are not linear in the scaling factor.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model that holds the biomass pseudoreactions. It is modified in place.
+    config : BiomassConfig
+        Biomass components, their pseudoreaction names and the proton metabolite id.
+    component_name : str
+        Name of the component to rescale. A name that is not in ``config`` raises
+        :class:`KeyError`.
+    new_value : float
+        Target mass fraction of the component in g/gDW.
+    balance_out : str or None
+        Name of a second component that is rescaled so the components sum to ``target_total``
+        g/gDW, whatever the total was before. The sum equals ``target_total`` when the
+        rescaled pseudoreaction needs no change of its H+ coefficient; otherwise the H+
+        rebalance adds to its fraction and the total exceeds ``target_total`` by that amount.
+        Default ``None``, which rescales only ``component_name``.
+    target_total : float
+        Total mass fraction in g/gDW that ``balance_out`` aims for. Default 1.0. It has no
+        effect when ``balance_out`` is ``None``.
     """
     fractions = sum_biomass(model, config)
     current = fractions[component_name]

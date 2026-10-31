@@ -348,6 +348,17 @@ def test_predict_apply_creates_compartment_metabolites_and_transports():
     assert "B_m" not in m.metabolites
 
 
+def test_predict_apply_returns_a_copy_when_no_gene_has_scores():
+    """With apply=True the result never holds the input model, also when nothing is placeable."""
+    m = _toy_two_compartment_model()
+    scores = LocalizationScores(pd.DataFrame(
+        {"c": [1.0], "m": [0.0]}, index=pd.Index(["other"], name="gene_id")))
+    res = predict_localization(m, scores, ["r1", "r2"], apply=True)
+    assert isinstance(res, LocalizationResult)
+    assert set(res.proposal.unplaced_reactions) == {"r1", "r2"}
+    assert res.model is not m
+
+
 def test_predict_unplaced_reaction_when_no_scored_gene():
     """A relocate-set reaction whose genes are all absent from scores is reported, not crashed."""
     m = _toy_two_compartment_model()

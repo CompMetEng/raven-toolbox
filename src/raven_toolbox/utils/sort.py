@@ -20,6 +20,11 @@ def sort_identifiers(model: cobra.Model) -> cobra.Model:
 
     Returns the same model object. Compartments are a plain dict, which this function leaves
     unchanged; writers sort them as needed.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model sorted in place.
     """
     model.reactions.sort(key=lambda r: r.id)
     model.metabolites.sort(key=lambda m: m.id)
@@ -71,6 +76,11 @@ def subsystem_order_scores(model: cobra.Model) -> dict[str, int]:
     The score is the number of metabolites of the subsystem that are produced by a reaction
     before the first reaction that consumes them (reaction directions as stored). It is the
     quantity that ``sort_model(..., sort_reaction_order=True)`` maximises.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reaction order is scored. It is not modified.
     """
     scores = {}
     for name, indices in _subsystem_groups(model).items():

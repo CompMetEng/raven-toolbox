@@ -20,7 +20,7 @@ re-run skips finished ones):
 * ``ftinit_milp``  — single staged-MILP step (step 0 of series '1+1') on the merged model.
                      Cheap (~30-200 s each); the core sweep for ``mip_gap``/``big_m``/``force_on``.
 * ``prep_scale``   — rescaleModelForINIT on/off and its ``max_stoich_diff``, fed into the
-                     same step-0 MILP. Shows why scaling is needed when the big-M is capped.
+                     same step-0 MILP.
 * ``ftinit_full``  — the whole ``ftinit`` pipeline (both steps + gap-fill). Sweeps
                      ``mip_gap``/``big_m``. Expensive (~200 s+/config).
 
@@ -29,6 +29,8 @@ Usage
     python scripts/analyze_init_params.py \
         --work ~/hgem_compare --cell HCT116 --sweeps ftinit_milp,prep_scale
 
+``--big-m`` sets the per-reaction big-M cap of the ``mip_gap``, ``force_on`` and ``prep_scale``
+sweeps (default: the ``ftinit`` default, 1000); the ``big_m`` sweep runs its own grid.
 ``--work`` holds ``raven_refModel.xml`` and the Human-GEM-derived spont/custom inputs
 (see the Human-GEM validation run). Requires a MILP solver (Gurobi/HiGHS) on the cobra
 config. Produces a results pickle and prints a table per sweep; feed the tables into
@@ -50,14 +52,14 @@ from raven_toolbox.init import (
     prep_init_model,
     score_reactions_from_genes,
 )
-from raven_toolbox.init.ftinit import run_ftinit
+from raven_toolbox.init.ftinit import _BIG_M, run_ftinit
 from raven_toolbox.init.merge import group_rxn_scores
 from raven_toolbox.init.prep import rescale_for_init
 from raven_toolbox.init.steps import get_init_steps
 
-# Sweep grids (first value of each tolerance sweep is the tight "reference").
+# Sweep grids (the first value of each sweep is the "reference" row).
 MIP_GAPS = (0.0002, 0.001, 0.003, 0.01, 0.03, 0.1)
-BIG_MS = (100.0, 50.0, 25.0, 250.0, 1000.0)
+BIG_MS = (1000.0, 100.0, 50.0, 25.0, 250.0)
 FORCE_ONS = (0.1, 0.02, 0.05, 0.2, 0.5)
 MAX_STOICH = (25.0, 10.0, 50.0, 100.0)
 
@@ -170,13 +172,13 @@ def _print_table(title: str, results: list[Result], note: str = "") -> list[str]
 
 # --------------------------------------------------------------------------- sweeps
 
-def sweep_ftinit_milp(prep, rxn_scores, store, save) -> list:
+def sweep_ftinit_milp(prep, rxn_scores, store, save, big_m) -> list:
     step, scores = _step0(prep, rxn_scores)
     mm = prep.min_model
     doc: list[str] = []
 
     def cfg(label, **kw):
-        key = ("ftinit_milp", label)
+        key = ("ftinit_milp", label, kw["big_m"])  # a resumed pickle is matched on big_m too
         if key not in store:
             print(f"[ftinit_milp] {label} ...", flush=True)
             r = _run_step0(mm, scores, prep, step, **kw)
@@ -185,10 +187,11 @@ def sweep_ftinit_milp(prep, rxn_scores, store, save) -> list:
             save()
         return store[key]
 
-    # mip_gap sweep (force_on=0.1; big_m=100 caps the per-reaction big-M)
-    res = [cfg(f"gap={g}", mip_gap=g, big_m=100.0, force_on=0.1, time_limit=900) for g in MIP_GAPS]
+    # mip_gap sweep (force_on=0.1; big_m caps the per-reaction big-M)
+    res = [cfg(f"gap={g}", mip_gap=g, big_m=big_m, force_on=0.1, time_limit=900)
+           for g in MIP_GAPS]
     _finalize(res)
-    doc += _print_table("ftINIT step-0: mip_gap (big_m=100, force_on=0.1)", res)
+    doc += _print_table(f"ftINIT step-0: mip_gap (big_m={big_m:g}, force_on=0.1)", res)
 
     # big_m sweep (gap=0.001, force_on=0.1)
     res = [cfg(f"big_m={int(b)}", mip_gap=0.001, big_m=b, force_on=0.1, time_limit=900) for b in BIG_MS]
@@ -197,23 +200,24 @@ def sweep_ftinit_milp(prep, rxn_scores, store, save) -> list:
                         "big_m caps the per-reaction big-M (a scored reaction's flux capacity); "
                         "large values weaken the LP relaxation.")
 
-    # force_on sweep (gap=0.001, big_m=100 as the big-M cap); changes the model (connectivity threshold)
-    res = [cfg(f"force_on={fo}", mip_gap=0.001, big_m=100.0, force_on=fo, time_limit=900) for fo in FORCE_ONS]
+    # force_on sweep (gap=0.001, big_m as the big-M cap); changes the model (connectivity threshold)
+    res = [cfg(f"force_on={fo}", mip_gap=0.001, big_m=big_m, force_on=fo, time_limit=900)
+           for fo in FORCE_ONS]
     _finalize(res)
-    doc += _print_table("ftINIT step-0: force_on (gap=0.001, big_m=100)", res,
+    doc += _print_table(f"ftINIT step-0: force_on (gap=0.001, big_m={big_m:g})", res,
                         "force_on changes the *model* (min flux to count as 'on'), not just tolerance — "
                         "Jaccard here measures sensitivity, not error.")
     return doc
 
 
-def sweep_prep_scale(ref, spont, custom, rxn_scores, store, save) -> list:
+def sweep_prep_scale(ref, spont, custom, rxn_scores, store, save, big_m) -> list:
     doc: list[str] = []
     # One unscaled prep; rescale copies of its min_model for each setting.
     base = prep_init_model(ref, ext_comp="e", spontaneous=spont, custom=custom, scale=False)
     step, scores = _step0(base, rxn_scores)
 
     def cfg(label, msd):
-        key = ("prep_scale", label)
+        key = ("prep_scale", label, big_m)  # a resumed pickle is matched on big_m too
         if key not in store:
             print(f"[prep_scale] {label} ...", flush=True)
             mm = base.min_model.copy()
@@ -222,7 +226,7 @@ def sweep_prep_scale(ref, spont, custom, rxn_scores, store, save) -> list:
             # group_rxn_scores keys are merged ids — identical across copies, so reuse `scores`.
             t = time.time()
             try:
-                r = _run_step0(mm, scores, base, step, mip_gap=0.001, big_m=100.0,
+                r = _run_step0(mm, scores, base, step, mip_gap=0.001, big_m=big_m,
                                force_on=0.1, time_limit=600)
             except Exception as ex:  # noqa: BLE001  (infeasible/intractable is a finding)
                 r = Result(label=label, seconds=time.time() - t, status=f"FAIL:{type(ex).__name__}",
@@ -236,9 +240,9 @@ def sweep_prep_scale(ref, spont, custom, rxn_scores, store, save) -> list:
     res += [cfg(f"msd={int(m)}", m) for m in MAX_STOICH if m != 25.0]
     res.append(cfg("scale=off", None))
     _finalize(res)
-    doc += _print_table("prep scaling: rescaleModelForINIT max_stoich_diff (+scale off), big_m=100", res,
-                        "With the big-M capped at big_m=100, scale=off / poor conditioning is expected to be "
-                        "infeasible or far slower — that is the reason scaling is on by default.")
+    doc += _print_table(f"prep scaling: rescaleModelForINIT max_stoich_diff (+scale off), "
+                        f"big_m={big_m:g}", res,
+                        "Feasibility and time of the step-0 solve with and without rescaling.")
     return doc
 
 
@@ -275,6 +279,9 @@ def main() -> None:
     ap.add_argument("--work", type=Path, default=Path.home() / "hgem_compare")
     ap.add_argument("--human-gem", type=Path, default=Path.home() / "github" / "Human-GEM")
     ap.add_argument("--cell", default="HCT116")
+    ap.add_argument("--big-m", type=float, default=_BIG_M,
+                    help="per-reaction big-M cap of the mip_gap, force_on and prep_scale sweeps "
+                         "(default: the ftinit default)")
     ap.add_argument("--sweeps", default="ftinit_milp,prep_scale,ftinit_full",
                     help="comma-separated subset of: ftinit_milp,prep_scale,ftinit_full")
     ap.add_argument("--out", type=Path, default=None, help="results pickle (resumable)")
@@ -302,11 +309,11 @@ def main() -> None:
 
     doc: list[str] = [f"# ftINIT parameter calibration — Human-GEM / {args.cell}", "",
                       "Generated by `scripts/analyze_init_params.py`. Reference (first) row of each "
-                      "tolerance sweep is the tightest setting; gaps/Jaccard are measured against it.", ""]
+                      "sweep is the first grid value; gaps/Jaccard are measured against it.", ""]
     if "ftinit_milp" in sweeps:
-        doc += sweep_ftinit_milp(prep, rxn_scores, store, save)
+        doc += sweep_ftinit_milp(prep, rxn_scores, store, save, args.big_m)
     if "prep_scale" in sweeps:
-        doc += sweep_prep_scale(ref, spont, custom, rxn_scores, store, save)
+        doc += sweep_prep_scale(ref, spont, custom, rxn_scores, store, save, args.big_m)
     if "ftinit_full" in sweeps:
         doc += sweep_ftinit_full(prep, rxn_scores, gene_scores, store, save)
 

@@ -6,6 +6,18 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `init.fill_tasks` with `resolve_ties=True` on Gurobi restores `MIPGap` and `MIPGapAbs` of `reference_model` after each gap-fill (was: 0.0 and 0.4 stayed set).
+* `tasks.find_task_essential_reactions` writes its `cache_path` as JSON (was: pickle) and ignores, with a warning, an existing file that is not a JSON cache of the current version, such as a pickle. `checkpoint_every` below 1 raises `ValueError` (was: a write after every task).
+* `init.hpa_gene_scores` uses the default level scores also for an empty `level_scores` mapping, and `init.rna_gene_scores` compares `tissue` case-insensitively and takes the highest TPM over tissue names that differ in case, as RAVEN's `scoreModel` does.
+* `localization.predict_localization` with `apply=True` returns a copy of the model in `LocalizationResult.model` also when no gene of the reactions to place has a score (was: the input model itself).
+* `localization.assign_compartments` takes the default growth floor (`min_growth=None`) as 10 % of the maximum flux of `biomass_reaction` (was: of the optimum of the model's current objective).
+* `reconstruction.kegg.organisms_in_domain` raises `ValueError` for an empty `domain` (was: it matched every organism).
+* `conditions.load_condition` returns an empty dict for a YAML file without content (was: `None`; other empty values such as `[]` are returned as they are), which `apply_condition` applies as a condition without steps, as RAVEN's `parseYAML` and `applyCondition` do.
+* `analysis.reporter_metabolites` leaves a scored gene that has no entry in `gene_fold_changes` out of both the `"up"` and `"down"` subsets (was: it counted as fold change 0 and joined `"up"`), like a gene with a NaN fold change.
+* `manipulation.constrain_reversible_reactions` skips the Gurobi tolerance setting only when the solver has no `Params` attribute (was: any exception was ignored).
+* `gapfilling.connect_blocked_reactions` raises a `RuntimeError` that names the non-optimal MILP (the message said that the blocked reactions cannot carry flux with all templates). `comparison.compare_models` annotates `tasks` as also accepting `os.PathLike`.
+* `manipulation.set_exchange_bounds` is annotated as returning `list[str | Metabolite]`: the entries of `mets` that are not exchanged, as supplied (ids, names or `Metabolite` objects).
+* `scripts/analyze_init_params.py` runs the `mip_gap`, `force_on` and `prep_scale` sweeps with the `ftinit` default `big_m` (1000, was: 100) and takes `--big-m` to set it. The `big_m` sweep starts at 1000, which is its reference row. The cached sweep results are keyed on `big_m`, so a resumed pickle from a run with another `big_m` is not reused.
 * Models read with `io.read_yaml_model` and `io.read_matlab_model` have `model.tolerance` set to 1e-9, the
   feasibility and optimality tolerance RAVEN's `solveLP` gives the solver (cobrapy's default is 1e-6 for
   Gurobi and 1e-7 for GLPK). `utils.solver.set_raven_tolerance` applies it to any other model.

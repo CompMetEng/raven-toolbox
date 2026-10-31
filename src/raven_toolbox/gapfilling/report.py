@@ -337,6 +337,21 @@ def print_gap_report(
 
     The text is a Python rendering of the console report of ``gapReport.m`` and
     differs from its wording. Parity with RAVEN is compared on the structured result.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to analyse, passed to :func:`gap_report`.
+    print_fn : callable
+        Function that receives each output string of the report as one argument; a string can
+        contain line breaks. Default :func:`print`.
+    **kwargs : dict
+        Keyword arguments forwarded to :func:`gap_report` (for example ``template_models``).
+
+    Returns
+    -------
+    GapReportResult
+        The result of :func:`gap_report`.
     """
     result = gap_report(model, **kwargs)
 

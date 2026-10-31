@@ -280,82 +280,112 @@ def get_model_from_homology(
 ) -> HomologyResult:
     """Build a draft model for ``model_for`` by transferring reactions from templates.
 
-    Parameters that change the result:
-
-    * ``strictness`` (default 1) selects the hit-filtering policy:
-
-      - 1: bidirectional. A template gene and a new-organism gene must have
-        an accepted hit in both directions.
-      - 2: one-directional. A hit found in a single direction is accepted; the
-        direction is selected by ``map_direction``.
-      - 3: bidirectional and best hits only. Before matching, each gene keeps
-        only its best hits (by bitscore) in each direction, all of them when
-        several tie, then the bidirectional rule is applied.
-
-    * ``map_direction`` selects the direction of the one-directional search when
-      ``strictness`` is 2: ``"new_to_old"`` (default, hits found
-      searching from ``model_for``) or ``"old_to_new"``.
-    * ``complex_policy`` decides what happens to an AND-linked subunit with no
-      ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
-      gene (``OLD_<model>_<gene>``) for later curator review, ``"keep"`` removes that
-      subunit, ``"drop"`` drops the whole reaction. An isozyme group counts as a subunit
-      without an ortholog only when none of its members has one, and then one placeholder
-      stands for it. ``"drop"`` removes the reaction whenever a placeholder would remain,
-      also when another isozyme branch is complete.
-    * ``only_genes_in_models`` restricts the hits table to hits whose template
-      gene appears in the given ``models`` before mapping orthologs, so a gene
-      the templates lack cannot be a best hit. It raises ``ValueError`` when no
-      hit of a search direction between ``model_for`` and a template passes
-      the cutoffs and this filter. As in RAVEN, it changes the mapping only with
-      ``strictness`` 3: with 1 and 2 a template gene that no template contains is dropped in
-      any case, and only the ``ValueError`` differs.
-    * ``keep_gene_free`` (default False) also transfers the template reactions that have no
-      GPR (spontaneous, transport, exchange, artificial). By default they are dropped, as in
-      RAVEN, because no gene supports them in the new organism. True transfers them,
-      which suits a curated reference template whose gene-free reactions belong in every
-      derived model.
-    * ``preserve_notes`` (default False) keeps each transferred reaction's own ``notes``
-      (references, confidence score, free text) and only adds ``homology_source``. By default
-      they are replaced by a note that the reaction was included by this function.
-    * ``preferred_order`` breaks ties when more than one template maps the
-      same new-organism gene: the gene is mapped to the earlier template in the list, and a
-      gene of a later template that maps to any gene an earlier template already maps
-      is removed from that template altogether, with its other mappings. A reaction of
-      the later template that cannot work without the removed gene is not transferred.
-      Templates are merged in the order they were given in ``models``, whatever the
-      preferred order is, and a template that ``preferred_order`` leaves out contributes
-      nothing (default: the order of ``models``). RAVEN's ``preferredOrder`` decides which
-      template receives a gene in the same way and merges the models in the order of ``models``.
-
-    Organism ids in ``hits`` are case-sensitive. An id that matches
-    ``model_for`` or a template id only when case is ignored raises
-    ``ValueError``; hits involving other organisms are ignored. RAVEN raises an error for
-    hits from an organism that no template has as ``model.id``, and matches the template ids
-    case-insensitively.
-
     A hit passes when its e-value is below ``max_evalue`` and its alignment length and
     identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
 
     Defaults for the three filters come from a `calibration against KEGG annotations and OMA assignments
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
     on raven-docs, scored with precision weighted above recall (a wrongly transferred
-    reaction is harder to undo than a missing one):
+    reaction is harder to undo than a missing one).
 
-    * ``min_identity`` 40 lies in the 35 to 45 range that the two reference sources favour;
-      35 scores higher for two organisms (``yli`` 0.868 against 0.860, ``ani`` 0.814 against
-      0.804). It is the filter that limits the result.
-    * ``min_align_len`` 100, as RAVEN's ``minLen``. Values at or below 150 measured the
-      same; on each of the four organisms tested, the score against KEGG annotations (wrong
-      matches counted double) was 0.010 to 0.020 lower at 200 than at 100.
-    * ``max_evalue`` makes no difference between 1e-4 and 1e-50, because the other two
-      filters exclude every hit that it would exclude; 1e-30 is the RAVEN value.
+    Parameters
+    ----------
+    models : cobra.Model or Sequence[cobra.Model]
+        Template models. Each template is identified by its ``model.id``, which must match
+        the ``from_id`` or ``to_id`` values in ``hits``. A single model is accepted as a list
+        of one. Templates are merged in the order they are given, whatever the preferred order
+        is.
+    hits : pandas.DataFrame
+        Bidirectional hits table with the columns in ``HIT_COLUMNS``; a missing column raises
+        :class:`ValueError`. Organism ids in ``hits`` are case-sensitive. An id that matches
+        ``model_for`` or a template id only when case is ignored raises :class:`ValueError`;
+        hits involving other organisms are ignored. RAVEN raises an error for hits from an
+        organism that no template has as ``model.id``, and matches the template ids
+        case-insensitively.
+    model_for : str
+        Id of the organism the draft model is built for, as it appears in ``hits``.
+    preferred_order : Sequence[str] or None
+        Breaks ties when more than one template maps the same new-organism gene: the gene is
+        mapped to the earlier template in the list, and a gene of a later template that maps
+        to any gene an earlier template already maps is removed from that template
+        altogether, with its other mappings. A reaction of the later template that cannot work
+        without the removed gene is not transferred. Templates are merged in the order they
+        were given in ``models``, whatever the preferred order is, and a template that
+        ``preferred_order`` leaves out contributes nothing. The tie-break applies only when
+        more than one model is given. Default ``None``, which uses the order of ``models``.
+        RAVEN's ``preferredOrder`` decides which template receives a gene in the same way and
+        merges the models in the order of ``models``.
+    strictness : int
+        Hit-filtering policy. Default 1. Any other value than 1, 2 or 3 raises
+        :class:`ValueError`.
 
-    ``review_identity`` (for example 25) collects the reactions that the thresholds
-    reject. Any reaction that transfers at this lower identity but not at ``min_identity``
-    is reported in ``HomologyResult.candidates`` with its strongest supporting hit and is
-    not added to the model. A missing reaction can be gap-filled, whereas a wrongly
-    transferred reaction is hard to find and remove, so the filters stay strict. It must be
-    below ``min_identity``, otherwise ``ValueError`` is raised.
+        - 1: bidirectional. A template gene and a new-organism gene must have
+          an accepted hit in both directions.
+        - 2: one-directional. A hit found in a single direction is accepted; the
+          direction is selected by ``map_direction``.
+        - 3: bidirectional and best hits only. Before matching, each gene keeps
+          only its best hits (by bitscore) in each direction, all of them when
+          several tie, then the bidirectional rule is applied.
+    map_direction : str
+        Direction of the one-directional search when ``strictness`` is 2: ``"new_to_old"``
+        (hits found searching from ``model_for``) or ``"old_to_new"``. Default
+        ``"new_to_old"``. Any other value raises :class:`ValueError`; the value has no effect
+        with other strictness values.
+    complex_policy : str
+        What happens to an AND-linked subunit with no ortholog. Default ``"flag"``.
+        ``"flag"`` keeps the reaction with a placeholder gene (``OLD_<model>_<gene>``) for
+        later curator review, ``"keep"`` removes that subunit, ``"drop"`` drops the whole
+        reaction. An isozyme group counts as a subunit without an ortholog only when none of
+        its members has one, and then one placeholder stands for it. ``"drop"`` removes the
+        reaction whenever a placeholder would remain, also when another isozyme branch is
+        complete. Any other value raises :class:`ValueError`.
+    only_genes_in_models : bool
+        Restricts the hits table to hits whose template gene appears in the given ``models``
+        before mapping orthologs, so a gene the templates lack cannot be a best hit. It raises
+        :class:`ValueError` when no hit of a search direction between ``model_for`` and a
+        template passes the cutoffs and this filter. As in RAVEN, it changes the mapping only
+        with ``strictness`` 3: with 1 and 2 a template gene that no template contains is
+        dropped in any case, and only the :class:`ValueError` differs. Default ``False``.
+    max_evalue : float
+        A hit passes only when its e-value is below this value. Default 1e-30, the RAVEN
+        value. It makes no difference between 1e-4 and 1e-50, because the other two filters
+        exclude every hit that it would exclude.
+    min_align_len : int
+        A hit passes only when its alignment length is at least this value. Default 100, as
+        RAVEN's ``minLen``. Values at or below 150 measured the same; on each of the four
+        organisms tested, the score against KEGG annotations (wrong matches counted double)
+        was 0.010 to 0.020 lower at 200 than at 100.
+    min_identity : float
+        A hit passes only when its identity is at least this value. Default 40. The value
+        lies in the 35 to 45 range that the two reference sources favour; 35 scores higher
+        for two organisms (``yli`` 0.868 against 0.860, ``ani`` 0.814 against 0.804). It is
+        the filter that limits the result.
+    review_identity : float or None
+        Lower identity threshold (for example 25) that collects the reactions the thresholds
+        reject. Any reaction that transfers at this lower identity but not at
+        ``min_identity`` is reported in ``HomologyResult.candidates`` with its strongest
+        supporting hit and is not added to the model. A missing reaction can be gap-filled,
+        whereas a wrongly transferred reaction is hard to find and remove, so the filters
+        stay strict. It must be below ``min_identity``, otherwise :class:`ValueError` is
+        raised. Hits with ``hits.attrs["source"] == "SuppOrth"`` have a placeholder identity
+        of 100, so a warning is issued and no reaction is a candidate. Default ``None``, which
+        collects no candidates.
+    keep_gene_free : bool
+        Also transfers the template reactions that have no GPR (spontaneous, transport,
+        exchange, artificial). By default they are dropped, as in RAVEN, because no gene
+        supports them in the new organism. True transfers them, which suits a curated
+        reference template whose gene-free reactions belong in every derived model. Default
+        ``False``.
+    preserve_notes : bool
+        Keeps each transferred reaction's own ``notes`` (references, confidence score, free
+        text) and only adds ``homology_source``. By default they are replaced by a note that
+        the reaction was included by this function. Default ``False``.
+
+    Returns
+    -------
+    HomologyResult
+        The draft model, the template-to-new gene map and, when ``review_identity`` is given,
+        the candidate reactions.
     """
     if isinstance(models, cobra.Model):
         models = [models]
@@ -381,7 +411,8 @@ def get_model_from_homology(
     model_by_id = {m.id: m for m in models}
     model_ids = list(model_by_id)
     # An organism id that differs from model_for or a template id only in case
-    # would silently be read as another organism; RAVEN rejects it too.
+    # would silently be read as another organism. RAVEN compares template ids with strcmpi and
+    # raises only for ids that match no template; here a case-only difference raises.
     known = {model_for, *model_ids}
     known_lower = {k.lower() for k in known}
     miscased = sorted(

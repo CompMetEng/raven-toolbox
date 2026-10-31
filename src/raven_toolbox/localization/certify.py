@@ -83,7 +83,9 @@ def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_
             raise ValueError("model has no objective; pass biomass_reaction=...")
         biomass_reaction = max(obj, key=lambda r: obj[r]).id
     if min_growth is None:
-        base_opt = model.slim_optimize(error_value=0.0)
+        with model:
+            model.objective = biomass_reaction
+            base_opt = model.slim_optimize(error_value=0.0)
         if not base_opt or base_opt <= 0:
             raise ValueError(
                 "the draft model does not grow; cannot set a growth floor (pass min_growth=...)."
@@ -582,32 +584,74 @@ def assign_compartments(
     returned uncertified (see the module docstring and the
     `compartment-assignment redesign
     <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/localization_redesign.md>`_
-    on raven-gecko-parity). Notes on parameters:
+    on raven-gecko-parity).
 
-    ``transport_cost``
-        Accepted and not used: the placement master is flux-free and score-only, and
-        ``minimize_transports`` prunes transports by flux (pFBA), not by cost.
-    ``multi_compartment_penalty``
+    Parameters
+    ----------
+    model : cobra.Model
+        The draft model. It is not modified. Raises :class:`ValueError` when two metabolites in one
+        compartment have the same ``base_metabolite`` key, and when ``min_growth`` is ``None``
+        and the model does not grow.
+    scores : LocalizationScores
+        Gene x compartment localisation scores. A reaction whose genes all have no row in the
+        scores is listed in ``unplaced_reactions`` of the result.
+    reactions_to_relocate : iterable of str
+        Ids of the reactions that the placement may move. Boundary reactions, the biomass reaction
+        and reactions whose metabolites do not lie in exactly one compartment (existing
+        multi-compartment transports) are skipped. All other reactions keep their compartment.
+    default_compartment : str
+        Hub compartment of the star-topology transports, and the compartment that receives gene-free
+        and score-tied reactions (default ``"c"``). Raises :class:`ValueError` when it is neither a
+        compartment of ``model`` nor of ``scores``.
+    transport_cost : float or mapping of str to float
+        Accepted and not used (default ``0.5``): the placement master is flux-free and score-only,
+        and ``minimize_transports`` prunes transports by flux (pFBA), not by cost.
+    multi_compartment_penalty : float
         Weight (default ``0.5``) subtracted in the primary placement pass for each gene-compartment
-        assignment. A higher value places a gene in fewer compartments.
-    ``transportable``
+        assignment. A higher value places a gene in fewer compartments. A value of ``0`` applies
+        no penalty.
+    transportable : iterable of str or None
         Base ids of the metabolites eligible for a cross-compartment transport. ``None`` (default)
         allows every metabolite touched by a relocatable reaction. A narrower set forbids transports
         for the other metabolites, and the reactions that share them are co-located by the
         confinement repair.
-    ``max_rounds``
+    base_metabolite : callable or None
+        Maps a metabolite to its compartment-agnostic key (default ``None``). The default key is
+        the base id that :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged
+        metabolite, otherwise the id without the suffix of the metabolite's own compartment.
+    universal : cobra.Model or None
+        Reaction database for gap-fill (default ``None``). When the primary medium falls short of
+        the growth floor, the repair adds reactions from this model. When ``None``, no gap-fill is
+        done. The metabolite ids of ``universal`` have to match those of ``model``.
+    biomass_reaction : str or None
+        Id of the reaction whose flux is the growth measure (default ``None``). When ``None``, the
+        reaction with the largest objective coefficient is used. Raises :class:`ValueError` when
+        the model has no objective.
+    min_growth : float or None
+        Biomass flux that the materialised model has to reach on the primary medium (default
+        ``None``). When ``None``, the floor is 10 % of the maximum flux of ``biomass_reaction`` in
+        ``model``.
+        Raises :class:`ValueError` when ``biomass_reaction`` cannot carry flux in ``model``.
+    growth_conditions : iterable of GrowthCondition or None
+        Extra media on which the materialised model has to reach the floor of the condition
+        (default ``None``, the primary medium only). The growth of each condition is reported in
+        ``growths`` of the result.
+    max_rounds : int
         Maximum number of placement rounds (confinement repair and growth-failure feedback; default
         ``8``). When every metabolite is transportable, the confinement repair adds no rounds and
         the common genome-scale case certifies in one round.
-    ``prune_transports``
+    time_limit : float or None
+        Solver time limit in seconds for each placement MILP pass, truncated to an integer
+        (default ``None``, no limit). A solution found at the limit is used.
+    prune_transports : bool
         If True (default), drop transports that are blocked in every certification medium.
-    ``minimize_transports``
+    minimize_transports : bool
         If True, prune the transport and gap-fill set after certifying to the reactions that carry
         flux in a parsimonious FBA solution (:func:`_minimize_transports`; yeast-GEM: ~1260 ->
         ~280 transports). The pruned set is certified again against every medium, and the
         un-minimised set is kept if the pruning removed a transport that a growth condition needs.
         Default False; the option adds one pFBA and one certification.
-    ``multi_localize``
+    multi_localize : bool
         If True, add multi-compartment placements after certifying
         (:func:`_enrich_multilocalization`): for each reaction, a second compartment is proposed if
         its gene has a DeepLoc score ``>= multi_localize_threshold`` there, all candidates are
@@ -619,20 +663,20 @@ def assign_compartments(
         The gate (DeepLoc score above the threshold and flux in the FVA) removes duplicates that
         carry no flux, and does not test whether the enzyme is dual-localised. Many reactions can
         carry some flux in a second compartment without being dual, so many reactions are
-        multi-placed (in the yeast-GEM run, about 700 of 2300 reactions at the default threshold). The
-        gate recovers the DeepLoc-visible dual enzymes (for example HTS1, VAS1, GLR1) and misses
-        enzymes that are dual by post-translational retro-translocation (FUM1, ACO1), whose second
-        compartment carries no DeepLoc signal. A candidate source based on function (a metabolite
-        required in the second compartment) is not implemented. The result is a lower bound on
-        multi-localisation, not a precise dual-localisation call.
-    ``multi_localize_threshold``
+        multi-placed (in the yeast-GEM run, about 700 of 2300 reactions at the default threshold).
+        The gate recovers the DeepLoc-visible dual enzymes (for example HTS1, VAS1, GLR1) and
+        misses enzymes that are dual by post-translational retro-translocation (FUM1, ACO1), whose
+        second compartment carries no DeepLoc signal. A candidate source based on function (a
+        metabolite required in the second compartment) is not implemented. The result is a lower
+        bound on multi-localisation, not a precise dual-localisation call.
+    multi_localize_threshold : float
         DeepLoc score that a gene needs in a second compartment for that placement to be proposed
         (default ``0.7``). A higher value gives fewer duplicates with higher confidence and misses
         duals (yeast-GEM: 0.9 drops HTS1, VAS1 and GLR1; 0.7 keeps them).
-    ``multi_localize_eps``
+    multi_localize_eps : float
         Flux magnitude that a proposed duplicate must reach in the FVA to be kept (default
         ``1e-6``).
-    ``multi_localize_loopless``
+    multi_localize_loopless : bool
         If True (default), use loopless FVA, so a duplicate that is active only in a futile cycle is
         not kept. False gives a faster check that permits cycles.
 

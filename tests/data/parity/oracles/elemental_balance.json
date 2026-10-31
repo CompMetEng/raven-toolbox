@@ -1,0 +1,14 @@
+{
+  "rxns": [
+    "HEX1",
+    "IMBAL",
+    "UNKN",
+    "EX_glc"
+  ],
+  "balanceStatus": [
+    1,
+    0,
+    -1,
+    0
+  ]
+}

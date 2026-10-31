@@ -41,11 +41,16 @@ def remove_metabolites(
 
     Parameters
     ----------
-    by_name
+    model : cobra.Model
+        Model the metabolites are removed from, in place.
+    metabolites : str or Metabolite or Iterable
+        Metabolites to remove: names with ``by_name=True``, otherwise ids or
+        :class:`~cobra.Metabolite` objects.
+    by_name : bool
         If True, ``metabolites`` are metabolite names; every metabolite with a
         matching name is removed, in any compartment (RAVEN ``isNames``).
         If False, they are IDs or objects, resolved by cobra.
-    destructive
+    destructive : bool
         Passed to cobra. If True, every reaction that contains the metabolite is
         removed as well.
 
@@ -73,12 +78,7 @@ def remove_genes(
     """Remove genes and handle reactions that can no longer carry flux.
 
     cobra rewrites the GPRs (AND and OR semantics) and deletes the genes; this function adds a
-    policy for reactions whose GPR becomes empty (no enzyme left):
-
-    * ``"constrain"`` (default, as RAVEN's ``removeGenes``): keep them with an empty
-      GPR and bounds ``(0, 0)``.
-    * ``"remove"``: delete them.
-    * ``"keep"``: keep them with an empty GPR and unchanged bounds.
+    policy, set by ``blocked_reactions``, for reactions whose GPR becomes empty (no enzyme left).
 
     Requested genes that are not in the model are ignored. When none of the requested genes is in
     the model, the model is not changed and ``[]`` is returned. Otherwise, after the requested genes
@@ -88,8 +88,24 @@ def remove_genes(
     gene whose only reaction is blocked and kept (``"constrain"`` or ``"keep"``), such as the other
     subunit of a complex that lost one, stays in ``model.genes``.
 
-    ``remove_orphans`` (relevant with ``blocked_reactions="remove"`` only) is passed to
-    cobra's ``remove_reactions``, which also removes the metabolites left without a reaction.
+    Parameters
+    ----------
+    model : cobra.Model
+        Model the genes are removed from, in place.
+    genes : str or Gene or Iterable
+        Gene ids or :class:`~cobra.Gene` objects to remove.
+    blocked_reactions : str
+        Policy for reactions whose GPR becomes empty. One of the following; any other value
+        raises ``ValueError``.
+
+        * ``"constrain"`` (default, as RAVEN's ``removeGenes``): keep them with an empty
+          GPR and bounds ``(0, 0)``.
+        * ``"remove"``: delete them.
+        * ``"keep"``: keep them with an empty GPR and unchanged bounds.
+    remove_orphans : bool
+        Relevant with ``blocked_reactions="remove"`` only. It is passed to cobra's
+        ``remove_reactions``, which also removes the metabolites left without a reaction. The
+        default is ``False``.
 
     Returns
     -------

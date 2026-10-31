@@ -176,6 +176,12 @@ def parse_kegg_reactions(kegg_dir: str | Path) -> list[KeggReaction]:
     Reversibility is taken from the equation arrow and, when
     ``reaction_mapformula.lst`` is present, set to irreversible for reactions that are
     irreversible across all KEGG maps (see :func:`_irreversible_from_mapformula`).
+
+    Parameters
+    ----------
+    kegg_dir : str or Path
+        Directory of the arranged KEGG dump. It must contain the file ``reaction`` and may
+        contain ``reaction_mapformula.lst``.
     """
     kegg_dir = Path(kegg_dir)
     reactions: list[KeggReaction] = []
@@ -262,7 +268,14 @@ class KeggCompound:
 
 
 def parse_kegg_compounds(kegg_dir: str | Path) -> list[KeggCompound]:
-    """Parse ``<kegg_dir>/compound`` and the optional ``compound.inchi`` into records."""
+    """Parse ``<kegg_dir>/compound`` and the optional ``compound.inchi`` into records.
+
+    Parameters
+    ----------
+    kegg_dir : str or Path
+        Directory of the arranged KEGG dump. It must contain the file ``compound`` and may
+        contain ``compound.inchi``. A compound with an InChI gets an empty formula.
+    """
     kegg_dir = Path(kegg_dir)
     compounds: list[KeggCompound] = []
     for entry in _iter_entries(kegg_dir / "compound"):
@@ -320,6 +333,13 @@ def parse_kegg_kos(kegg_dir: str | Path, *, keep: set[str] | None = None) -> lis
 
     ``keep`` limits parsing to those KO ids (for example only KOs linked to reactions),
     as RAVEN's ``koList`` argument does; the gene lists are large.
+
+    Parameters
+    ----------
+    kegg_dir : str or Path
+        Directory of the arranged KEGG dump. It must contain the file ``ko``.
+    keep : set of str or None
+        KO ids to parse. When None (default), all KOs are parsed.
     """
     ko_records: list[KeggKO] = []
     for entry in _iter_entries(Path(kegg_dir) / "ko"):
@@ -368,6 +388,15 @@ def build_reference_model(
     annotations (reaction id, KO ids, EC codes, pathways) and no genes or GPRs.
     Reactions with empty stoichiometry are skipped. Bounds are ``(-1000, 1000)``
     for reversible reactions and ``(0, 1000)`` otherwise.
+
+    Parameters
+    ----------
+    reactions : list of KeggReaction
+        Records from :func:`parse_kegg_reactions`. A record whose cached stoichiometry is
+        empty is parsed again from its equation.
+    compounds : list of KeggCompound
+        Records from :func:`parse_kegg_compounds`. They give the name, formula and
+        annotations of the metabolites. A metabolite without a record is named by its id.
     """
     model = cobra.Model("KEGG")
     model.name = "Automatically generated from KEGG database"
@@ -427,6 +456,15 @@ def build_kegg_tables(
 
     Returns a dict of ``DataFrame`` objects keyed by table name: ``ko_reaction``,
     ``ko_names``, ``organism_gene_ko``, ``rxn_flags``.
+
+    Parameters
+    ----------
+    reactions : list of KeggReaction
+        Records from :func:`parse_kegg_reactions`. They give the tables ``ko_reaction``
+        and ``rxn_flags``.
+    kos : list of KeggKO
+        Records from :func:`parse_kegg_kos`. They give the tables ``ko_names`` and
+        ``organism_gene_ko``.
     """
     ko_reaction = pd.DataFrame(
         [(ko, r.id) for r in reactions for ko in r.kos],
@@ -466,6 +504,16 @@ def write_kegg_tables(
     Gzipped TSV is the format shared with MATLAB RAVEN; MATLAB's built-in ``gunzip``
     reads it without an external tool. ``prefix`` version-tags the filenames (for
     example ``kegg116_``). Returns the written paths.
+
+    Parameters
+    ----------
+    tables : dict of str to pandas.DataFrame
+        Tables keyed by name, for example the result of :func:`build_kegg_tables`. Each
+        is written to ``<prefix><name>.tsv.gz`` without the index.
+    out_dir : str or Path
+        Output directory. It is created, with parents, if missing.
+    prefix : str
+        String put before each file name. Defaults to ``""``.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -484,6 +532,11 @@ def read_kegg_table(path: str | Path) -> pd.DataFrame:
     Compression is inferred from the file suffix. The published tables are gzipped TSV
     (``.tsv.gz``), including those with a version prefix (``kegg116_<name>.tsv.gz``).
     All columns are read as strings, and empty fields stay empty strings.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the tab-separated table.
     """
     return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
 
@@ -535,9 +588,6 @@ def stream_organism_gene_ko(
 ) -> pd.DataFrame:
     """Stream the ``ko`` file to a sorted, gzipped ``organism_gene_ko.tsv.gz``.
 
-    ``keep`` restricts output to that set of KO ids (for example only KOs linked to
-    reactions), mirroring ``keep`` on :func:`parse_kegg_kos`.
-
     KEGG has ~9M gene and KO associations, which are too many to hold in memory as a
     DataFrame. Rows are sorted by ``(organism, gene)`` before writing: gene IDs
     from one organism share long common prefixes (locus tags, numeric runs), so
@@ -546,13 +596,29 @@ def stream_organism_gene_ko(
     compressed with gzip, which MATLAB's built-in ``gunzip`` reads without an external
     tool; xz would give a smaller file.
 
-    The sort is an **external merge sort** that holds at most ``chunk_rows`` rows in
-    memory at a time (sorted runs are written to gzipped temporary files and merged with
-    :func:`heapq.merge`), so peak memory does not grow with the size of KEGG. Only
+    The sort is an external merge sort: the row buffer is written as a sorted run, to a gzipped
+    temporary file, once it reaches ``chunk_rows`` rows, and the runs are merged with
+    :func:`heapq.merge`, so peak memory does not grow with the size of KEGG. Only
     the ``ko_names`` table (one row per KO) is held in full; it is returned with the
     columns ``ko`` and ``name``.
 
-    ``progress`` shows a tqdm byte-progress bar over the (large) ``ko`` read pass.
+    Parameters
+    ----------
+    kegg_dir : str or Path
+        Directory of the arranged KEGG dump. It must contain the file ``ko``.
+    keep : set of str
+        KO ids to write, for example only the KOs linked to reactions, as ``keep`` of
+        :func:`parse_kegg_kos`.
+    ogk_path : str or Path
+        Path of the gzipped output table. Temporary sort files are written to its parent
+        directory.
+    chunk_rows : int
+        Row count at which the buffer is written as a sorted run. It is checked after all GENES
+        lines of a KO entry are added, so a run can exceed it by the rows of one entry. Defaults
+        to 1,000,000.
+    progress : bool
+        If True, show a tqdm byte-progress bar over the (large) ``ko`` read pass. Defaults
+        to False.
     """
     ogk_path = Path(ogk_path)
     names: list[tuple[str, str]] = []
@@ -607,8 +673,18 @@ def parse_kegg_dump(
     version-prefixed (``<version>_<name>``), as in the published release
     assets; the keys of the returned dict are the logical table names.
 
-    ``progress`` reports each stage and shows a byte-progress bar over the
-    ``organism_gene_ko`` streaming pass, the longest stage.
+    Parameters
+    ----------
+    kegg_dir : str or Path
+        Directory of the arranged KEGG dump, as produced by :func:`download_kegg_dump`.
+    out_dir : str or Path
+        Output directory. It is created, with parents, if missing.
+    version : str or None
+        Release tag, for example ``"kegg116"``, put before each file name as
+        ``<version>_``. When None (default), the file names have no prefix.
+    progress : bool
+        If True, report each stage and show a byte-progress bar over the
+        ``organism_gene_ko`` streaming pass, the longest stage. Defaults to False.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

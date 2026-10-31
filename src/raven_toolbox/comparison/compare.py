@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from os import PathLike
 from pathlib import Path
 from typing import cast
 
@@ -165,17 +166,24 @@ def _jaccard_matrix(presence: pd.DataFrame) -> pd.DataFrame:
 def compare_models(
     models: Iterable[cobra.Model],
     *,
-    tasks: str | Iterable[Task] | None = None,
+    tasks: str | PathLike[str] | Iterable[Task] | None = None,
 ) -> ModelComparison:
     """Compare N cobra models on their reactions, metabolites, genes, ec_codes,
     metabolite_names, equations, equations_no_compartments and subsystems (and tasks, if
     provided).
 
-    ``tasks`` is passed to :func:`raven_toolbox.tasks.check_tasks` for each model; it is
-    a file path or a parsed task list. When omitted, ``ModelComparison.tasks`` is ``None``.
-
     Models are identified by ``model.id``. A missing or blank id becomes ``model_<i>``
     and a repeated id gets the suffix ``__<n>`` (``__2`` for the second occurrence).
+
+    Parameters
+    ----------
+    models : Iterable[cobra.Model]
+        The models to compare. At least two are required, otherwise :class:`ValueError` is
+        raised. The models are not modified.
+    tasks : str or os.PathLike or Iterable[Task] or None
+        Metabolic tasks, passed to :func:`raven_toolbox.tasks.check_tasks` for each model. It
+        is a file path (``str`` or ``os.PathLike``) or a parsed task list. When omitted,
+        ``ModelComparison.tasks`` is ``None``.
     """
     models_list = list(models)
     if len(models_list) < 2:

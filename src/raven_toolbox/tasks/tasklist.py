@@ -96,7 +96,17 @@ def _read_rows(path: str | Path) -> list[list[str]]:
 
 
 def parse_task_list(path: str | Path) -> list[Task]:
-    """Parse a task-list file into :class:`Task` objects."""
+    """Parse a task-list file into :class:`Task` objects.
+
+    Parameters
+    ----------
+    path : str or Path
+        Task-list file. A ``.xlsx`` or ``.xlsm`` file is read from its ``TASKS`` sheet and
+        needs the ``[excel]`` extra (openpyxl); a ``.xls`` file raises :class:`ValueError`.
+        Any other extension is read as tab-delimited UTF-8 text. The file needs a header row
+        with an ``ID`` column that is not the first column, otherwise :class:`ValueError` is
+        raised; rows whose first cell is not empty are skipped as comments.
+    """
     rows = _read_rows(path)
     header_idx = next(
         (i for i, r in enumerate(rows) if any(c.strip().upper() == "ID" for c in r)), None

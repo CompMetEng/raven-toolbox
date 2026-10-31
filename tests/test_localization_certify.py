@@ -410,6 +410,20 @@ def test_unreachable_floor_is_uncertified_not_falsely_certified():
     assert res.growths["__primary__"] < 1e6  # the real (small) growth is reported, not hidden
 
 
+def test_default_floor_follows_biomass_reaction_not_the_model_objective():
+    m = _linear()
+    B = m.metabolites.B_c
+    m.reactions.bio.add_metabolites({B: -1})  # bio: 2 B ->, optimum 5
+    A = m.metabolites.A_c
+    dump = cobra.Reaction("dumpA", lower_bound=0, upper_bound=1000)
+    dump.add_metabolites({A: -1})
+    m.add_reactions([dump])
+    m.objective = "dumpA"  # optimum 10
+    scores = LocalizationScores(pd.DataFrame({"c": [0.4], "m": [0.9]}, index=["g1"]))
+    res = assign_compartments(m, scores, ["r1"], biomass_reaction="bio")
+    assert res.min_growth == pytest.approx(0.5)
+
+
 def test_no_growth_draft_raises():
     m = _linear()
     m.reactions.EX_A.lower_bound = 0  # no uptake -> no growth

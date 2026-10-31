@@ -58,15 +58,28 @@ def fetch_protein_sequences(
 ) -> dict[str, str]:
     """Fetch ``{gene_id: protein_sequence}`` from the UniProtKB REST API for an organism.
 
-    ``organism`` is a UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae*
-    S288C). ``id_field`` selects the identifier used as key: ``"gene_oln"`` (ordered locus, the
-    ORF name like ``YNR001C``; matches yeast-GEM gene ids), ``"accession"`` or ``"gene_primary"``.
-    A UniProt entry listing several ids for the field maps each of them to its sequence.
+    A UniProt entry listing several ids for the field maps each of them to its sequence. The query
+    is the same as in :func:`fetch_uniprot_localization`. Raises :class:`ValueError` when
+    ``id_field`` is not one of the accepted values.
 
-    ``genes`` restricts the result to those gene ids (other entries are fetched and dropped);
-    ``None`` returns every entry. ``reviewed=True`` keeps only curated Swiss-Prot entries;
-    ``extra_query`` is ANDed into the UniProt query. ``min_length`` drops sequences shorter than it
-    (DeepLoc 2.1 needs ≥ 10 aa). The query is the same as in :func:`fetch_uniprot_localization`.
+    Parameters
+    ----------
+    organism : int or str
+        UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae* S288C).
+    genes : iterable of str or None
+        Restricts the result to those gene ids (other entries are fetched and dropped). ``None``
+        (default) returns every entry.
+    id_field : str
+        Identifier used as key (default ``"gene_oln"``): ``"gene_oln"`` (ordered locus, the ORF
+        name like ``YNR001C``; matches yeast-GEM gene ids), ``"accession"`` or ``"gene_primary"``.
+    reviewed : bool
+        If True (default), keep only curated Swiss-Prot entries.
+    extra_query : str or None
+        UniProt query string that is ANDed into the query (default ``None``).
+    min_length : int
+        Drops sequences shorter than it (default ``1``; DeepLoc 2.1 needs >= 10 aa).
+    timeout : float
+        Timeout of the HTTP request in seconds (default ``120.0``).
     """
     if id_field not in _ID_COLUMN:
         raise ValueError(f"id_field must be one of {list(_ID_COLUMN)}")
@@ -129,10 +142,19 @@ def write_fasta(sequences: Mapping[str, str], path: str | Path, *,
     space and many tools identify results by that token, so ids must not contain whitespace; a
     ``ValueError`` is raised otherwise.
 
-    With ``max_records_per_file`` set (for example ``500`` for the DeepLoc 2.1 web server), records
-    are split across ``<stem>_001<suffix>``, ``<stem>_002<suffix>``, … and every path is returned;
-    otherwise a single file is written at ``path``. ``wrap`` sets the residues-per-line (≤ 0 = one
-    line per sequence). An empty sequence gives the header line only.
+    Parameters
+    ----------
+    sequences : mapping of str to str
+        Maps each FASTA header to its sequence. An empty sequence gives the header line only.
+    path : str or Path
+        Output file. With chunking, the chunk number is added to the stem (see
+        ``max_records_per_file``).
+    max_records_per_file : int or None
+        With a value set (for example ``500`` for the DeepLoc 2.1 web server) and more records than
+        that, records are split across ``<stem>_001<suffix>``, ``<stem>_002<suffix>``, ... and
+        every path is returned. Otherwise (default ``None``) a single file is written at ``path``.
+    wrap : int
+        Residues per line (default ``60``; ``<= 0`` gives one line per sequence).
     """
     items = list(sequences.items())
     bad = [k for k, _ in items if k != k.strip() or any(ch.isspace() for ch in k)]
@@ -174,17 +196,28 @@ def prepare_deeploc_input(
 ) -> PreparedFasta:
     """Write a FASTA of protein sequences for ``genes`` as input for DeepLoc 2.1.
 
-    ``genes`` is an iterable of gene ids, or a cobra model (its ``.genes`` ids are used). For
-    yeast-GEM those are the ORF names that match ``id_field="gene_oln"``. Sequences are fetched from
-    UniProtKB (see :func:`fetch_protein_sequences`; ``reviewed=``, ``id_field=`` and the other
-    options go through ``fetch_kwargs``). The FASTA is split into files of ``max_records_per_file``
-    records (default ``500``, the DeepLoc 2.1 web-server limit; ``None`` for the standalone tool,
-    which has no limit). ``min_length`` drops sequences below the DeepLoc minimum of 10 aa.
+    Sequences are fetched from UniProtKB (see :func:`fetch_protein_sequences`). Returns a
+    :class:`PreparedFasta` with the file path(s) and the genes that had no sequence (with the
+    default ``reviewed=True``, no reviewed sequence). The CSV that DeepLoc 2.1 writes for these
+    files is read with :func:`load_deeploc`; its ``Protein_ID`` column holds these gene ids.
 
-    Returns a :class:`PreparedFasta` with the file path(s) and the genes that had no sequence
-    (with the default ``reviewed=True``, no reviewed sequence).
-    The CSV that DeepLoc 2.1 writes for these files is read with :func:`load_deeploc`; its
-    ``Protein_ID`` column holds these gene ids.
+    Parameters
+    ----------
+    genes : iterable of str or cobra.Model
+        Gene ids, or a cobra model (its ``.genes`` ids are used). For yeast-GEM those are the ORF
+        names that match ``id_field="gene_oln"``.
+    organism : int or str
+        UniProt organism or taxon id, as in :func:`fetch_protein_sequences`.
+    path : str or Path
+        Output FASTA file. When the output is split, the chunk number is added to the stem.
+    max_records_per_file : int or None
+        The FASTA is split into files of this many records (default ``500``, the DeepLoc 2.1
+        web-server limit). ``None`` writes one file, for the standalone tool, which has no limit.
+    min_length : int
+        Drops sequences below this length (default ``10``, the DeepLoc minimum of 10 aa).
+    **fetch_kwargs : dict
+        Forwarded to :func:`fetch_protein_sequences`, for example ``reviewed``, ``id_field``,
+        ``extra_query`` and ``timeout``.
     """
     gene_ids = [g.id for g in genes.genes] if isinstance(genes, cobra.Model) else list(genes)
     requested = list(dict.fromkeys(gene_ids))        # de-dupe, keep order

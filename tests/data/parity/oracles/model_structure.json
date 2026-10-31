@@ -1,0 +1,91 @@
+{
+  "rxns": [
+    "HEX1",
+    "IMBAL",
+    "UNKN",
+    "EX_glc"
+  ],
+  "mets": [
+    "glc_c",
+    "g6p_c",
+    "atp_c",
+    "adp_c",
+    "h_c",
+    "unknown_c"
+  ],
+  "genes": [
+    "G1",
+    "G2",
+    "G3"
+  ],
+  "lb": [
+    0,
+    0,
+    0,
+    -1000
+  ],
+  "ub": [
+    1000,
+    1000,
+    1000,
+    1000
+  ],
+  "grRules": [
+    "(G1 and G2) or G3",
+    "",
+    "",
+    ""
+  ],
+  "stoichiometry": [
+    {
+      "rxn": "HEX1",
+      "met": "glc_c",
+      "coefficient": -1
+    },
+    {
+      "rxn": "HEX1",
+      "met": "g6p_c",
+      "coefficient": 1
+    },
+    {
+      "rxn": "HEX1",
+      "met": "atp_c",
+      "coefficient": -1
+    },
+    {
+      "rxn": "HEX1",
+      "met": "adp_c",
+      "coefficient": 1
+    },
+    {
+      "rxn": "HEX1",
+      "met": "h_c",
+      "coefficient": 1
+    },
+    {
+      "rxn": "IMBAL",
+      "met": "glc_c",
+      "coefficient": 1
+    },
+    {
+      "rxn": "IMBAL",
+      "met": "g6p_c",
+      "coefficient": -1
+    },
+    {
+      "rxn": "UNKN",
+      "met": "g6p_c",
+      "coefficient": -1
+    },
+    {
+      "rxn": "UNKN",
+      "met": "unknown_c",
+      "coefficient": 1
+    },
+    {
+      "rxn": "EX_glc",
+      "met": "glc_c",
+      "coefficient": -1
+    }
+  ]
+}

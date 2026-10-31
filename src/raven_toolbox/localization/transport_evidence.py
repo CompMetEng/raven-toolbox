@@ -78,6 +78,11 @@ def default_metabolite_chebi(metabolite: cobra.Metabolite) -> frozenset[str]:
     This is the model-side input to the ChEBI substrate match and can be passed as
     ``metabolite_chebi`` to :func:`evidence_aware_transport_cost`. A metabolite without a ``chebi``
     annotation returns the empty set and is matched by coarse class only.
+
+    Parameters
+    ----------
+    metabolite : cobra.Metabolite
+        The metabolite whose ``chebi`` annotation (one identifier or a collection) is read.
     """
     ann = metabolite.annotation.get("chebi")
     if not ann:
@@ -112,6 +117,30 @@ def annotate_transporters(
     list columns (``families``, ``substrate_classes``) may hold lists or ``sep``-joined strings. A
     gene that appears on several rows keeps its highest confidence and the union of the families and
     of the substrate classes.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        One row per gene and annotation. The column ``gene_col`` is required; a missing
+        ``confidence_col`` column gives confidence 0.
+    gene_col : str
+        Column with the gene ids (default ``"gene"``).
+    confidence_col : str
+        Column with the annotation confidence (default ``"confidence"``). An empty string or
+        ``None`` counts as 0; a missing pandas value (NaN) is carried as NaN.
+    families_col : str or None
+        Column with the transporter families (default ``"families"``), as a list or a string
+        joined by ``sep``. ``None`` ignores families.
+    substrate_col : str or None
+        Column with the coarse substrate classes (default ``"substrate_classes"``), in the same
+        form as ``families_col``. ``None`` ignores substrate classes.
+    mechanism_col : str or None
+        Column with the transport mechanism (default ``"mechanism"``), for example ``"uniport"``,
+        ``"symport"`` or ``"antiport"``. A missing value gives ``None``. ``None`` ignores the
+        mechanism.
+    sep : str
+        Separator of the joined strings in ``families_col`` and ``substrate_col`` (default
+        ``";"``).
     """
 
     def _as_set(v) -> frozenset[str]:
@@ -320,6 +349,22 @@ def annotate_proteome(
     to skip that lookup). Returns gene -> :class:`TransporterAnnotation`, with ``mechanism`` set to
     ``None``. Genes without a transporter hit are absent, so the compartment-only match (no
     ``substrate_of``, no ``ontology``) counts only genes with a hit.
+
+    Parameters
+    ----------
+    proteome : str or Path
+        Protein FASTA file whose headers are gene ids.
+    hmm_db : str or Path or None
+        Transporter Pfam HMM database for ``hmmsearch`` (default ``None``, downloaded from
+        toolbox-assets).
+    tcdb_db : str or Path or None
+        TCDB DIAMOND database (default ``None``, downloaded from toolbox-assets).
+    substrates : str or Path or bool or None
+        Path to ``tcdb_substrates.tsv``, which maps TCDB TC-IDs to curated substrate ChEBIs.
+        ``None`` or ``True`` (default ``None``) loads the file downloaded from toolbox-assets.
+        ``False`` skips the lookup.
+    threads : int
+        Number of threads for ``hmmsearch`` and ``diamond`` (default ``1``).
     """
     proteome = Path(proteome)
     hmm_db = Path(hmm_db) if hmm_db else ensure_data_file("transporters", "transporter_pfam.hmm")
@@ -398,6 +443,11 @@ def default_substrate_of(metabolite: cobra.Metabolite) -> frozenset[str]:
     :func:`evidence_aware_transport_cost`. Classes are not derived from the ChEBI or KEGG annotation
     of the metabolite. A metabolite that matches no keyword returns the empty set and receives no
     support from the coarse class match.
+
+    Parameters
+    ----------
+    metabolite : cobra.Metabolite
+        The metabolite whose name (the id when the name is empty) is matched against the keywords.
     """
     name = (metabolite.name or metabolite.id or "").lower()
     return frozenset(cls for cls, kws in _SUBSTRATE_KEYWORDS.items() if any(k in name for k in kws))

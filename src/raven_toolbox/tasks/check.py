@@ -18,7 +18,7 @@ complete boundary of the system for that check; this corresponds to RAVEN's
 from __future__ import annotations
 
 import concurrent.futures as cf
-import pickle
+import json
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -34,6 +34,7 @@ from raven_toolbox.manipulation.add import add_reactions_from_equations
 from raven_toolbox.manipulation.boundary import close_model_in_place
 from raven_toolbox.tasks.tasklist import Task, parse_task_list
 
+_CACHE_VERSION = 1
 _ALLMETS = "ALLMETS"
 _ALLMETSIN = "ALLMETSIN"
 
@@ -245,12 +246,18 @@ def check_tasks(
 ) -> list[TaskResult]:
     """Run a task list against ``model`` and return a :class:`TaskResult` per task.
 
-    ``tasks`` is a parsed list of :class:`Task` or a path to a task-list file. By
-    default (``close_boundaries=False``), existing exchange, sink and demand reactions are
-    left open, so the inputs and outputs of a task add to what the boundary of the model
-    already allows, as RAVEN's ``checkTasks`` does on a model without boundary
-    metabolites. With ``close_boundaries=True``, the inputs and outputs are defined only
-    by the tasks, as with RAVEN's ``checkTasks(closeModel(model), ...)``.
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to test. It is copied, so the model is not modified.
+    tasks : str or Iterable[Task]
+        A parsed list of :class:`Task` or a path to a task-list file.
+    close_boundaries : bool
+        By default (``False``), existing exchange, sink and demand reactions are left open, so
+        the inputs and outputs of a task add to what the boundary of the model already allows,
+        as RAVEN's ``checkTasks`` does on a model without boundary metabolites. With ``True``,
+        the inputs and outputs are defined only by the tasks, as with RAVEN's
+        ``checkTasks(closeModel(model), ...)``.
     """
     tasks = _as_tasks(tasks)
     base, name_to_id, comp_to_ids = _prepare_base(model, close_boundaries)
@@ -447,6 +454,25 @@ def _essential_worker(i: int, task: Task) -> tuple[int, dict[str, int] | None, s
     return i, essential, task_mets, error
 
 
+def _read_cache(path: Path) -> dict | None:
+    """Read a checkpoint written by :func:`find_task_essential_reactions`.
+
+    Returns the cache dictionary with the keys ``per_index``, ``mets`` and ``failed``, or
+    ``None`` with a warning when the file is not a JSON cache of the current version.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        cached = None
+    if (not isinstance(cached, dict) or cached.get("version") != _CACHE_VERSION
+            or not {"per_index", "mets", "failed"} <= cached.keys()):
+        warnings.warn(f"{path} is not a task-essentials cache of version {_CACHE_VERSION} "
+                      "and is ignored; all tasks are recomputed.", stacklevel=3)
+        return None
+    return cached
+
+
 def find_task_essential_reactions(
     model: cobra.Model,
     tasks: str | Iterable[Task],
@@ -465,31 +491,50 @@ def find_task_essential_reactions(
     ``prepINITModel`` step that feeds (ft)INIT: essential reactions are kept regardless of
     expression score and made irreversible in their forced direction. When a reaction is
     essential in several tasks with conflicting directions, the direction of the majority
-    is used (ties give forward), matching RAVEN's ``pos < neg``. ``close_boundaries``
-    defaults to ``False``: the inputs and outputs of a task add to what the open exchanges
-    of the model already allow, as in :func:`check_tasks`. RAVEN's ``prepINITModel`` calls
-    ``closeModel`` first, which corresponds to ``close_boundaries=True``.
+    is used (ties give forward), matching RAVEN's ``pos < neg``.
 
     The solver is configured per task to match RAVEN's ``solveLP`` (``FeasibilityTol =
     1e-9``, single-threaded with a fixed seed), so the degenerate min-flux vertex, and thus
     the discovered essential set, is reproducible. ``Threads=1`` applies to each solve; the
-    tasks are independent of each other. ``processes`` (default 1, sequential) runs the
-    tasks in parallel with a ``ProcessPoolExecutor``. Each worker solves single-threaded,
-    so the results equal those of the sequential run. Each worker holds its own copy of
-    ``model``, sent once at pool startup and not per task. Tasks with ``should_fail`` set
-    are skipped.
+    tasks are independent of each other. Tasks with ``should_fail`` set are skipped.
 
-    Each task needs a min-flux solve and a feasibility LP per candidate reaction. With
-    ``cache_path``, the run is resumable: the accumulated results are written there
-    (atomically) every ``checkpoint_every`` tasks, in sequential and parallel execution,
-    and once more after the last task, and a rerun skips tasks already cached. Writing the
-    whole accumulated result after every task would make the total checkpoint I/O grow
-    quadratically with the number of tasks; with ``checkpoint_every`` it scales with
-    ``n_tasks / checkpoint_every``, and at most that many completed tasks are redone after
-    an interruption. ``verbose`` (default False) prints one line per task as it completes
-    or is skipped because it is cached. In parallel, lines print in completion order, not
-    task order.
+    Each task needs a min-flux solve and a feasibility LP per candidate reaction.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to analyse. It is copied, so the model is not modified.
+    tasks : str or Iterable[Task]
+        A parsed list of :class:`Task` or a path to a task-list file.
+    close_boundaries : bool
+        Default ``False``: the inputs and outputs of a task add to what the open exchanges of
+        the model already allow, as in :func:`check_tasks`. RAVEN's ``prepINITModel`` calls
+        ``closeModel`` first, which corresponds to ``close_boundaries=True``.
+    cache_path : str or Path or None
+        File that makes the run resumable. The accumulated results are written there
+        (atomically, as JSON) every ``checkpoint_every`` tasks, in sequential and parallel
+        execution, and once more after the last task, and a rerun skips tasks already cached.
+        An existing file is read at the start. A file that is not a JSON cache of the current
+        version, such as a pickle written by an earlier release, is ignored with a warning and
+        overwritten by the first checkpoint. Default ``None``, which writes no cache.
+    verbose : bool
+        Prints one line per task as it completes or is skipped because it is cached. In
+        parallel, lines print in completion order, not task order. Default ``False``.
+    processes : int
+        Number of worker processes. Default 1, which runs the tasks sequentially. A larger
+        value runs the tasks in parallel with a ``ProcessPoolExecutor``. Each worker solves
+        single-threaded, so the results equal those of the sequential run. Each worker holds
+        its own copy of ``model``, sent once at pool startup and not per task.
+    checkpoint_every : int
+        Number of finished tasks between two writes to ``cache_path``. Default 10. Writing
+        the whole accumulated result after every task would make the total checkpoint I/O grow
+        quadratically with the number of tasks; with ``checkpoint_every`` it scales with
+        ``n_tasks / checkpoint_every``, and fewer than ``checkpoint_every`` completed tasks are
+        redone after an interruption. A value below 1 raises ``ValueError``, with or without
+        ``cache_path``; without ``cache_path`` the value has no other effect.
     """
+    if checkpoint_every < 1:
+        raise ValueError(f"checkpoint_every must be at least 1, got {checkpoint_every}.")
     tasks = _as_tasks(tasks)
     base, name_to_id, comp_to_ids = _prepare_base(model, close_boundaries)
     original_ids = {r.id for r in base.reactions}
@@ -504,23 +549,22 @@ def find_task_essential_reactions(
     failed_index: list[int] = []
     task_metabolites: set[str] = set()
     if cache_path is not None and Path(cache_path).exists():
-        cached = pickle.load(open(cache_path, "rb"))
-        if "per_index" in cached:  # ignore any pre-fix, id-keyed cache and recompute
+        cached = _read_cache(Path(cache_path))
+        if cached is not None:
             per_index = {int(k): v for k, v in cached["per_index"].items()}
             task_metabolites = set(cached["mets"])
             failed_index = list(cached["failed"])
 
     def write_checkpoint() -> None:
         assert cache_path is not None  # only called when a cache_path was given
-        # The handle must be closed *before* the rename, not merely dropped: a
-        # buffered write is only guaranteed flushed on close, and on Windows
-        # renaming a file that still has an open handle raises PermissionError.
-        # Passing open() straight into pickle.dump left that to refcount timing —
-        # it happens to work on CPython, and emitted a ResourceWarning per task.
+        # The handle is closed before the rename: a buffered write is flushed on close, and
+        # on Windows renaming a file with an open handle raises PermissionError.
         tmp = Path(f"{cache_path}.part")
-        with open(tmp, "wb") as fh:
-            pickle.dump({"per_index": per_index, "mets": task_metabolites,
-                         "failed": failed_index}, fh)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": _CACHE_VERSION,
+                       "per_index": {str(i): v for i, v in per_index.items()},
+                       "mets": sorted(task_metabolites),
+                       "failed": failed_index}, fh)
         tmp.replace(cache_path)
 
     since_checkpoint = 0

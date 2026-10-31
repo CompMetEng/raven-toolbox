@@ -227,3 +227,20 @@ def test_set_reaction_bounds_infeasible_case():
     set_reaction_bounds(rxn, 100, 0)
     assert rxn.lower_bound == 100
     assert rxn.upper_bound == 0
+
+
+def test_load_condition_of_an_empty_file_is_an_empty_condition(tmp_path):
+    path = tmp_path / "empty.yml"
+    path.write_text("")
+    assert load_condition(path) == {}
+    path.write_text("# only a comment\n")
+    assert load_condition(path) == {}
+
+
+def test_apply_condition_with_an_empty_file_leaves_the_model_unchanged(tmp_path):
+    path = tmp_path / "empty.yml"
+    path.write_text("")
+    m = _toy_model()
+    before = {r.id: (r.lower_bound, r.upper_bound) for r in m.reactions}
+    apply_condition(m, path)
+    assert {r.id: (r.lower_bound, r.upper_bound) for r in m.reactions} == before

@@ -77,22 +77,24 @@ def add_transport_reactions(
 
     Parameters
     ----------
-    from_compartment
+    model : cobra.Model
+        Model the reactions are added to, in place.
+    from_compartment : str
         Source compartment id.
-    to_compartments
+    to_compartments : str or Iterable of str
         Target compartment id(s).
-    metabolite_names
+    metabolite_names : str or Iterable of str or None
         Names of metabolites to transport. Default: every metabolite in
         ``from_compartment``.
-    reversible
+    reversible : bool
         If True (default), bounds span the cobra configuration default
         (reversible); otherwise lower bound 0.
-    only_to_existing
+    only_to_existing : bool
         If True (default), only transport a metabolite into a target
         compartment where a same-named metabolite already exists. If False,
         create the missing target metabolite (with name, formula, charge and
         annotation of the source) before adding the transport.
-    id_prefix
+    id_prefix : str
         Prefix for the sequential reaction IDs (``tr_0001``, ...).
 
     Returns

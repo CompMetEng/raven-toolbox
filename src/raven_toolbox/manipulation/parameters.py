@@ -65,11 +65,13 @@ def set_variance_bounds(
 
     Parameters
     ----------
-    reactions
+    model : cobra.Model
+        Model whose reaction bounds are set in place.
+    reactions : str or Reaction or Iterable
         Reaction IDs or objects.
-    values
+    values : Number or Sequence of Number
         Measured value per reaction; a scalar applies to all reactions.
-    percent
+    percent : Number
         Total band width as a percentage.
 
     Returns
@@ -119,7 +121,7 @@ def set_exchange_bounds(
     *,
     close_others: bool = True,
     media_only: bool = False,
-) -> list[Metabolite]:
+) -> list[str | Metabolite]:
     """Set exchange-flux bounds for a chosen set of metabolites.
 
     Corresponds to RAVEN ``setExchangeBounds``. Exchange reactions are the boundary reactions of
@@ -130,21 +132,23 @@ def set_exchange_bounds(
 
     Parameters
     ----------
-    mets
+    model : cobra.Model
+        Model whose exchange-reaction bounds are set in place.
+    mets : str or Metabolite or Iterable or None
         Metabolite objects, ids (exact) or names (case-insensitive), matched against the
         exchanged metabolites of the model only; a metabolite in the model that is not
         exchanged counts as unused, like one that does not exist. ``None`` (default)
         selects every exchanged metabolite, in which case ``lb`` and ``ub`` must each be a
         single value.
-    lb, ub
+    lb, ub : Number or Sequence of Number or None
         A single value for every metabolite in ``mets``, or one value per
         metabolite. Default to ``cobra.Configuration().bounds`` when not given.
-    close_others
+    close_others : bool
         Close import on every exchange reaction not covered by ``mets``; export is not
         changed. Default True. Set to False, with a warning, if the exchange reactions of the
         model do not agree on which sign of flux is import: closing import would then need a
         different bound (lb or ub) for each reaction, which this function does not do.
-    media_only
+    media_only : bool
         Only consider exchange reactions whose metabolite is in the compartment named
         "extracellular" (in ``model.compartments``, case-insensitive), which excludes, for
         example, sink and demand reactions of an intracellular metabolite. Raises
@@ -186,7 +190,7 @@ def set_exchange_bounds(
         targets = exchanged
         lbs = _broadcast(lb, len(targets))
         ubs = _broadcast(ub, len(targets))
-        unused: list[Metabolite] = []
+        unused: list[str | Metabolite] = []
     else:
         tokens = [mets] if isinstance(mets, (str, Metabolite)) else list(mets)
         lbs_in = _broadcast(lb, len(tokens))

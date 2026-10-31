@@ -114,25 +114,46 @@ def triage_localization(
 ) -> ReviewReport:
     """Rank the localisation calls in ``proposal`` for manual curation, without a solver.
 
-    ``proposal`` is a localisation or assignment proposal with the attributes ``gene_compartments``
-    (gene -> [compartments]) and ``unplaced_reactions``; both :class:`LocalizationProposal` and
-    :class:`raven_toolbox.localization.assign.AssignmentProposal` provide them. ``scores`` is the
-    table that the proposal is based on.
+    Returns a :class:`ReviewReport` ranked by ``uncertainty``.
 
-    ``raw_confidence`` (a gene -> top-probability Series) enables the low-confidence signal. If it
-    is omitted, it is read from ``scores.raw_confidence`` (set by
-    ``load_deeploc(keep_raw_confidence=True)``), and if that is also absent, the confidence signal
-    is skipped. ``sources`` (the per-source :class:`LocalizationScores` before fusion, for example
-    ``{"DeepLoc": ..., "UniProt": ...}``) enables the source-conflict signal, which is not available
-    after :func:`combine_scores`. ``model`` (a cobra model) adds a ``reactions`` column that lists
-    the reactions each gene gates. ``compartment_trust`` overrides
-    :data:`DEEPLOC_COMPARTMENT_TRUST`.
-
-    ``confidence_threshold``, ``margin_threshold`` and ``entropy_threshold`` set the cutoffs that
-    trigger the low-confidence, borderline and diffuse signals respectively (see the module
-    docstring for each signal). ``weights`` sets the weight of each signal in the blended
-    ``uncertainty`` score. ``top_n`` limits the number of returned rows. Returns a
-    :class:`ReviewReport` ranked by ``uncertainty``.
+    Parameters
+    ----------
+    proposal : object
+        A localisation or assignment proposal with the attributes ``gene_compartments``
+        (gene -> [compartments]) and ``unplaced_reactions``; both :class:`LocalizationProposal`
+        and :class:`raven_toolbox.localization.assign.AssignmentProposal` provide them.
+    scores : LocalizationScores
+        The table that the proposal is based on.
+    model : cobra.Model or None
+        Adds the ids of the reactions that each gene gates to the ``reactions`` column (default
+        ``None``, an empty list).
+    sources : mapping of str to LocalizationScores or None
+        The per-source tables before fusion, for example ``{"DeepLoc": ..., "UniProt": ...}``
+        (default ``None``). It enables the source-conflict signal, which is not available after
+        :func:`combine_scores`.
+    raw_confidence : pandas.Series or None
+        Gene -> top probability of the predictor (default ``None``). It enables the low-confidence
+        signal. If it is omitted, it is read from ``scores.raw_confidence`` (set by
+        ``load_deeploc(keep_raw_confidence=True)``), and if that is also absent, the confidence
+        signal is skipped.
+    compartment_trust : mapping of str to float or None
+        Per-compartment accuracy of the predictor (default ``None``, which uses
+        :data:`DEEPLOC_COMPARTMENT_TRUST`). A compartment absent from the mapping counts as 1.0.
+    confidence_threshold : float
+        Raw confidence below which the low-confidence signal fires (default ``0.7``; see the module
+        docstring).
+    margin_threshold : float
+        Difference between the two highest scores below which the borderline signal fires (default
+        ``0.15``).
+    entropy_threshold : float
+        Normalised score entropy above which the diffuse signal fires (default ``0.7``).
+    weights : mapping of str to float or None
+        Weight of each signal in the blended ``uncertainty`` score (default ``None``). The default
+        weights are ``confidence`` 0.35, ``disagreement`` 0.25, ``margin`` 0.20,
+        ``weak_compartment`` 0.10 and ``entropy`` 0.10. A key that is absent from a given mapping
+        has weight 0.1.
+    top_n : int or None
+        Limits the number of returned rows (default ``None``, all rows).
     """
     df = scores.df
     trust = dict(DEEPLOC_COMPARTMENT_TRUST if compartment_trust is None else compartment_trust)

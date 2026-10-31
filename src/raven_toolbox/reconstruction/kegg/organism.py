@@ -133,12 +133,34 @@ def get_kegg_model_for_organism_from_artefacts(
     ``organism_gene_ko`` and ``rxn_flags``, then calls :func:`get_kegg_model_for_organism`.
     If ``artefact_dir`` is ``None``, the published artefacts are fetched and cached via
     :func:`raven_toolbox.data.ensure_kegg_data` (``version`` selects the release).
-    Remaining keyword arguments go to :func:`get_kegg_model_for_organism`.
-
     For a whole-domain model (``organism_id`` ``"prokaryotes"`` or ``"eukaryotes"``)
     the KEGG ``taxonomy`` artefact is taken from ``artefact_dir`` if present, otherwise
     fetched via :func:`raven_toolbox.data.ensure_kegg_taxonomy`, because it is a separate
     artefact outside the core set. An explicit ``taxonomy`` path takes precedence.
+
+    Parameters
+    ----------
+    organism_id : str
+        Three- or four-letter KEGG organism code (for example ``"eco"``), or
+        ``"eukaryotes"`` or ``"prokaryotes"`` for a whole-domain model. Matched
+        case-insensitively.
+    artefact_dir : str or Path or None
+        Directory with the artefact files ``reference_model.yml.gz``, ``ko_reaction.tsv.gz``,
+        ``organism_gene_ko.tsv.gz`` and ``rxn_flags.tsv.gz``, each with or without a
+        ``<version>_`` prefix. When None (default), the published artefacts are fetched and
+        cached.
+    version : str or None
+        KEGG release to fetch. Used only when ``artefact_dir`` is None, or when the
+        taxonomy of a domain model is fetched. When None (default), the default release of
+        :func:`raven_toolbox.data.ensure_kegg_data` is used.
+    taxonomy : str or Path or None
+        Path of the KEGG ``taxonomy`` file for a domain model. When None (default), it is
+        taken from ``artefact_dir`` or fetched. Unused for a single organism.
+    **kwargs : dict
+        Keyword arguments forwarded to :func:`get_kegg_model_for_organism`: the quality
+        filters ``keep_spontaneous``, ``keep_undefined_stoich``, ``keep_incomplete`` and
+        ``keep_general``. The arguments ``rxn_flags`` and ``taxonomy`` are set by this
+        function.
     """
     if artefact_dir is None:
         from raven_toolbox.data import ensure_kegg_data

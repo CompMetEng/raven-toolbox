@@ -55,6 +55,13 @@ def merge_linear(
     ``no_merge`` reaction ids are never merged. The reduced model carries no genes
     (merging makes GPRs meaningless); scores are remapped with
     :func:`group_rxn_scores`.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to reduce. It is not modified.
+    no_merge : Iterable[str]
+        Ids of reactions that are never merged. The default is an empty tuple.
     """
     banned = set(no_merge)
     orig_ids = [r.id for r in model.reactions]
@@ -203,6 +210,23 @@ def group_rxn_scores(
     their score becomes 0. A score of 0 and a group that cancels to 0 become 0.01, so
     that only ignore-masked reactions have a score of exactly 0 in the MILP. Returns
     ``{reduced_reaction_id: score}``.
+
+    Parameters
+    ----------
+    reduced_model : cobra.Model
+        Reduced model from :func:`merge_linear`. The result has one score per reaction of
+        this model, and each of its reaction ids must be in ``orig_rxn_ids``.
+    orig_scores : Mapping[str, float]
+        Score of each original reaction, keyed by reaction id. A missing id scores 0, and a
+        score of 0 is set to 0.01 (see above).
+    orig_rxn_ids : list of str
+        Original reaction ids, in the order of ``group_ids``.
+    group_ids : list of int
+        Group number of each original reaction, as returned by :func:`merge_linear`; 0 marks
+        a reaction that is not merged. It must have the length of ``orig_rxn_ids``.
+    to_zero : Iterable[str]
+        Ids of original reactions whose score becomes 0 (the reactions dropped from the
+        problem). The default is an empty tuple.
     """
     zero = set(to_zero)
     group_of = dict(zip(orig_rxn_ids, group_ids, strict=True))

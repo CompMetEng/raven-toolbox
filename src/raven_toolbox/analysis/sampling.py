@@ -94,6 +94,8 @@ def random_sampling(
 
     Parameters
     ----------
+    model : cobra.Model
+        Model to sample. Its current bounds and constraints define the sampled space.
     n_samples:
         Number of flux vectors to return.
     method:
@@ -194,6 +196,18 @@ def find_good_reactions(
     bound threshold would also drop legitimate reactions that reach the model's default
     (for example 1000) bound. With ``loopless=False`` the FVA is faster and keeps any
     flux-carrying reaction (loops included).
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are tested.
+    flux_tol : float
+        A reaction is kept when the larger of ``|minimum|`` and ``|maximum|`` of its FVA range
+        exceeds this value. The default is 1e-9.
+    loopless : bool
+        Whether the FVA is loopless (``cycleFreeFlux``). The default is ``True``.
+    exclude_reactions : Iterable[str] or None
+        Identifiers of reactions dropped from the result. The default ``None`` excludes none.
     """
     fva = flux_variability_analysis(
         model, fraction_of_optimum=0.0,

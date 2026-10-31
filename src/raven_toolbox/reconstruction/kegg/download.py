@@ -136,6 +136,44 @@ def fetch_kegg_files(
     Existing files are skipped unless ``force=True``. ``progress`` shows a per-file byte
     download bar, sized from the response ``Content-Length``; ``verbose`` enables the
     ``fetching`` and ``skip`` INFO log lines.
+
+    Parameters
+    ----------
+    dest : str or Path
+        Directory that receives the archives. It is created, with parents, if missing.
+    files : tuple of str
+        KEGG FTP paths to download, relative to ``base_url``. Each file is saved under its
+        basename. Defaults to ``DEFAULT_FILES``: the reaction, compound, glycan and ko
+        archives, the eukaryote and prokaryote proteomes, and the taxonomy file.
+    base_url : str
+        Base URL of the server. Defaults to ``"https://ftp.kegg.net"``. A trailing slash
+        is removed.
+    host : str
+        Host name looked up in the ``.netrc`` file. Defaults to ``"ftp.kegg.net"``. It is
+        unused when ``auth`` is given.
+    auth : tuple of (str, str) or None
+        ``(user, password)`` for HTTP basic or digest authentication. When None (default),
+        the credentials of ``host`` are read from the ``.netrc`` file. A
+        ``FileNotFoundError`` is raised if that file does not exist, and a ``ValueError``
+        if it cannot be parsed or has no complete entry for ``host``.
+    netrc_path : str or Path or None
+        Path of the ``.netrc`` file. When None (default), ``~/.netrc`` is used. Ignored
+        when ``auth`` is given.
+    force : bool
+        If True, files that already exist in ``dest`` are downloaded again. If False
+        (default), they are skipped.
+    verbose : bool
+        If True (default), log a ``fetching`` line for each download and a ``skip`` line
+        for each existing file at INFO level.
+    progress : bool
+        If True (default), show a byte progress bar for each download. The total comes
+        from the ``Content-Length`` header; without it the bar shows a byte count.
+
+    Returns
+    -------
+    list of Path
+        Paths of the files in ``dest``, in the order of ``files``, including skipped
+        files.
     """
     user, password = _resolve_auth(host, netrc_path=netrc_path, auth=auth)
     opener = _build_opener(base_url, user, password)
@@ -193,6 +231,17 @@ def extract_kegg_dump(dest: str | Path, *, progress: bool = False) -> dict[str, 
 
     The function makes no network access; :func:`download_kegg_dump` runs
     :func:`fetch_kegg_files` before it.
+
+    Parameters
+    ----------
+    dest : str or Path
+        Directory that holds the downloaded archives. The extracted files are written
+        into it, and the archives and sub-directories are deleted. A
+        ``FileNotFoundError`` is raised if the reaction, compound or ko archive did not
+        yield its file.
+    progress : bool
+        If True, show a progress bar over the untar step and a byte bar for each proteome
+        gunzip. Defaults to False.
     """
     dest = Path(dest)
 
@@ -283,8 +332,38 @@ def download_kegg_dump(
 
     Runs :func:`fetch_kegg_files` and then :func:`extract_kegg_dump`. Returns the mapping of
     logical name to path of the arranged dump, the input of
-    :func:`raven_toolbox.reconstruction.kegg.parse_kegg_dump`. ``progress`` (default True)
-    shows download and extraction bars.
+    :func:`raven_toolbox.reconstruction.kegg.parse_kegg_dump`.
+
+    Parameters
+    ----------
+    dest : str or Path
+        Directory that receives the dump. It is created, with parents, if missing.
+    files : tuple of str
+        KEGG FTP paths to download, relative to ``base_url``. Defaults to
+        ``DEFAULT_FILES``. See :func:`fetch_kegg_files`.
+    base_url : str
+        Base URL of the server. Defaults to ``"https://ftp.kegg.net"``.
+    host : str
+        Host name looked up in the ``.netrc`` file. Defaults to ``"ftp.kegg.net"``.
+        Unused when ``auth`` is given.
+    auth : tuple of (str, str) or None
+        ``(user, password)`` for the server. When None (default), the credentials are read
+        from the ``.netrc`` file.
+    netrc_path : str or Path or None
+        Path of the ``.netrc`` file. When None (default), ``~/.netrc`` is used. Ignored
+        when ``auth`` is given.
+    force : bool
+        If True, archives that already exist in ``dest`` are downloaded again. If False
+        (default), they are skipped.
+    verbose : bool
+        If True (default), log the download, skip and extraction steps at INFO level.
+    progress : bool
+        If True (default), show download and extraction progress bars.
+
+    Returns
+    -------
+    dict of str to Path
+        Logical name to path of each arranged file that exists in ``dest``.
     """
     fetch_kegg_files(
         dest,

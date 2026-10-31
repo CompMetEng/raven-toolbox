@@ -99,6 +99,21 @@ def fseof(
 
     Parameters
     ----------
+    model : cobra.Model
+        Model to scan. It is restored after the call.
+    target_rxn : str
+        Identifier of the reaction whose flux is enforced. The theoretical maximum is found by
+        maximising this reaction; a ``ValueError`` is raised when that maximum is not above
+        ``flux_eps``.
+    biomass_rxn : str or None
+        Identifier of the reaction maximised at each enforced level. The default ``None``
+        keeps the model's current objective.
+    n_steps : int
+        Number of enforced flux levels. The default is 10. Levels are evenly spaced; the scan
+        raises ``RuntimeError`` when fewer than two levels are feasible.
+    max_fraction : float
+        Fraction of the theoretical maximum target flux at which the highest level is set.
+        The default is 0.9.
     correlation_threshold:
         Minimum absolute Pearson correlation between the absolute flux of a reaction and
         the enforced product flux for the reaction to be reported as a target; a higher

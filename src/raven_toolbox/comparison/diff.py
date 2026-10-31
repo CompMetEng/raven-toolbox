@@ -86,8 +86,28 @@ def diff_models(
     The GPR comparison lowercases gene ids, so rules that differ only in the case of a
     gene id are equal. RAVEN's ``diffModels`` compares gene ids case-sensitively.
 
-    ``max_per_category`` caps the number of reported differences per category (for
-    example stoichiometry or bounds); a final entry reports the truncation.
+    Parameters
+    ----------
+    a : cobra.Model
+        First model, labelled ``A`` in the difference messages.
+    b : cobra.Model
+        Second model, labelled ``B`` in the difference messages.
+    stoichiometry_tol : float
+        Largest absolute difference between two stoichiometric coefficients that counts as
+        equal. Default 1e-9. Reactions whose metabolite sets differ are reported regardless.
+    ignore_annotations : Iterable[str]
+        Annotation keys removed from the compared set. Default: no key removed.
+    extra_annotations : Iterable[str]
+        Annotation keys compared in addition to ``DEFAULT_ANNOTATION_KEYS``. Default: no
+        additional key. For every compared key, default or extra, values are compared as
+        sorted tuples of strings when they are lists or tuples, otherwise as strings.
+    max_per_category : int
+        Maximum number of differences reported per category. The categories are
+        stoichiometry, bounds, objective, GPR and annotation for reactions, and formula,
+        charge, compartment and annotation for metabolites; the annotation category counts the
+        differences of all compared annotation keys together. The first difference beyond the
+        cap adds one entry that reports the truncation. Default 50. The lists of ids that
+        are present in only one model are not capped by this value; each shows 10 ids.
     """
     diffs: list[str] = []
     keys = (set(DEFAULT_ANNOTATION_KEYS) | set(extra_annotations)) - set(ignore_annotations)

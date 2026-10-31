@@ -177,33 +177,46 @@ def load_deeploc(path: str | Path, *,
 
     DeepLoc 2's per-protein CSV has ``Protein_ID, Localizations, Signals`` then one probability
     column per compartment. The first column is the gene id; non-numeric metadata columns
-    (``Localizations``, ``Signals``) are dropped.
-
-    ``min_confidence`` drops genes whose top compartment probability (before per-gene normalisation)
-    is below it. In the yeast-GEM benchmark of the confidence study, the share of calls that other
-    evidence corroborates rises with the raw probability.
-
-    ``membrane_split`` (for example ``{"m": "mm"}``) moves the probability of an organelle to its
-    membrane sub-compartment when the protein is membrane-associated (``1 - P(Soluble) >=
-    membrane_threshold``, using DeepLoc's ``Soluble`` column); otherwise it stays in the lumen. Keys
-    and values are the compartment ids of the model (after ``compartment_map``). The evidence
-    supports only the mitochondrial split (``m``/``mm``; matrix versus membrane AUC ~0.93). DeepLoc
-    does not separate the ER lumen from the membrane, so a split of ``er`` has no support. See the
-    `DeepLoc yeast-GEM benchmark
+    (``Localizations``, ``Signals``) are dropped. The measurements behind ``membrane_split`` and
+    ``normalise`` are in the `DeepLoc yeast-GEM benchmark
     <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_
-    on raven-gecko-parity.
-
-    ``keep_raw_confidence=True`` attaches the per-gene pre-normalisation top probability to
-    :attr:`LocalizationScores.raw_confidence` (normalisation otherwise sets every top to 1.0).
-    :func:`triage_localization` uses it for its low-confidence signal.
-
-    ``normalise=False`` keeps DeepLoc's raw probabilities and does not rescale the best compartment
-    of every gene to 1.0. The raw probabilities are calibrated (a 0.97 call is more reliable than a
-    0.40 one), so a downstream assignment can weight confident genes more heavily. The default
-    ``True`` follows the RAVEN ``parseScores`` convention and keeps the scales of several sources
-    comparable. See the `DeepLoc normalisation benchmark
+    and the `DeepLoc normalisation benchmark
     <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_normalisation_benchmark.md>`_
     on raven-gecko-parity.
+
+    Parameters
+    ----------
+    path : str or Path
+        DeepLoc 2 CSV file.
+    compartment_map : mapping of str to str or None
+        Renames the predictor labels to model compartment ids (default ``None``, which keeps the
+        labels). A label absent from the map is dropped with its column (see the module docstring).
+    min_confidence : float
+        Drops genes whose top compartment probability (before per-gene normalisation) is below it
+        (default ``0.0``, which keeps every gene). In the yeast-GEM benchmark of the confidence
+        study, the share of calls that other evidence corroborates rises with the raw probability.
+    membrane_split : mapping of str to str or None
+        For example ``{"m": "mm"}`` (default ``None``, no split). It moves the probability of an
+        organelle to its membrane sub-compartment when the protein is membrane-associated
+        (``1 - P(Soluble) >= membrane_threshold``, using DeepLoc's ``Soluble`` column); otherwise
+        it stays in the lumen. Keys and values are the compartment ids of the model (after
+        ``compartment_map``). A key that is not a compartment of the table is skipped. Raises
+        :class:`ValueError` when the file has no ``Soluble`` column. The evidence supports only the
+        mitochondrial split (``m``/``mm``; matrix versus membrane AUC ~0.93). DeepLoc does not
+        separate the ER lumen from the membrane, so a split of ``er`` has no support.
+    membrane_threshold : float
+        Value of ``1 - P(Soluble)`` from which a protein counts as membrane-associated (default
+        ``0.5``). Used only with ``membrane_split``.
+    keep_raw_confidence : bool
+        If True, attach the per-gene pre-normalisation top probability to
+        :attr:`LocalizationScores.raw_confidence` (default False; normalisation otherwise sets
+        every top to 1.0). :func:`triage_localization` uses it for its low-confidence signal.
+    normalise : bool
+        If True (default), rescale the best compartment of every gene to 1.0. This follows the
+        RAVEN ``parseScores`` convention and keeps the scales of several sources comparable. False
+        keeps DeepLoc's raw probabilities. The raw probabilities are calibrated (a 0.97 call is
+        more reliable than a 0.40 one), so a downstream assignment can weight confident genes more
+        heavily.
     """
     raw = pd.read_csv(path)
     wide = _wide_mapped(raw, id_column=None, compartment_map=compartment_map, source=str(path))
@@ -232,9 +245,21 @@ def load_mulocdeep(path: str | Path, *,
     """Parse MULocDeep output into a normalised :class:`LocalizationScores`.
 
     Expects a wide table: a protein or gene id column plus one numeric probability column per major
-    subcellular compartment (MULocDeep predicts 10). ``sep=None`` auto-detects the delimiter;
-    ``id_column`` names the id column when it is not the first column. ``min_confidence`` works as
-    in :func:`load_deeploc`.
+    subcellular compartment (MULocDeep predicts 10).
+
+    Parameters
+    ----------
+    path : str or Path
+        MULocDeep output table.
+    compartment_map : mapping of str to str or None
+        Renames the predictor labels to model compartment ids (default ``None``, which keeps the
+        labels). A label absent from the map is dropped with its column (see the module docstring).
+    id_column : str or None
+        Name of the id column (default ``None``, the first column).
+    sep : str or None
+        Field delimiter (default ``None``, auto-detected).
+    min_confidence : float
+        Works as in :func:`load_deeploc` (default ``0.0``).
     """
     df = (pd.read_csv(path, sep=None, engine="python") if sep is None
           else pd.read_csv(path, sep=sep))
@@ -251,7 +276,15 @@ def combine_scores(sources: list[LocalizationScores], *,
     (best -> 1.0), so a compartment supported by several sources scores higher than a
     compartment supported by one source. The consensus combines complementary evidence (for example
     DeepLoc, curated UniProt and COMPARTMENTS); two curated sources agree on ~90% of the genes in
-    yeast-GEM.
+    yeast-GEM. Raises :class:`ValueError` when ``sources`` is empty or ``weights`` and ``sources``
+    differ in length.
+
+    Parameters
+    ----------
+    sources : list of LocalizationScores
+        The score tables to merge.
+    weights : list of float or None
+        One weight per source (default ``None``, a weight of 1.0 for every source).
     """
     sources = list(sources)
     if not sources:
@@ -284,7 +317,17 @@ def load_compartments(path: str | Path, *,
 
     The per-organism files (for example ``yeast_compartment_integrated_full.tsv``) are available
     from https://download.jensenlab.org/, also when the COMPARTMENTS Downloads web page is
-    unavailable.
+    unavailable. Raises :class:`ValueError` when the file has fewer than 5 columns.
+
+    Parameters
+    ----------
+    path : str or Path
+        COMPARTMENTS channel file.
+    compartment_map : mapping of str to str or None
+        Renames the GO compartment term names to model compartment ids (default ``None``, which
+        keeps the term names). A term absent from the map is dropped (see the module docstring).
+    min_confidence : float
+        Drops annotations whose confidence score is below it (default ``0.0``).
     """
     raw = pd.read_csv(path, sep="\t", header=None, dtype=str)
     if raw.shape[1] < 5:
@@ -327,9 +370,25 @@ def load_uniprot(path: str | Path, *,
     sorted and a ``UserWarning`` is issued.
 
     Export from https://rest.uniprot.org with ``fields=accession,gene_oln,cc_subcellular_location``
-    (TSV). ``id_column`` selects the column with the gene ids (default: the first column, the
-    accession in this export). For yeast-GEM, the ordered-locus column
-    (``Gene Names (ordered locus)``, the ORF id like ``YNR001C``) matches the gene ids.
+    (TSV). Raises :class:`ValueError` when ``compartment_map`` is empty and when no location column
+    is found.
+
+    Parameters
+    ----------
+    path : str or Path
+        UniProtKB export.
+    compartment_map : mapping of str to str
+        Maps the location labels to model compartment ids, and is the vocabulary that the
+        annotation text is scanned for (default :data:`DEFAULT_COMPARTMENT_MAP`).
+    id_column : str or None
+        Column with the gene ids (default ``None``, the first column, the accession in this
+        export). For yeast-GEM, the ordered-locus column (``Gene Names (ordered locus)``, the ORF
+        id like ``YNR001C``) matches the gene ids.
+    location_column : str or None
+        Column with the subcellular location annotation (default ``None``, the first column whose
+        name contains ``subcellular``, ignoring case).
+    sep : str
+        Field delimiter of the file (default ``"\t"``).
     """
     df = pd.read_csv(path, sep=sep, dtype=str).fillna("")
     return _uniprot_scores(df, id_column=id_column, location_column=location_column,
@@ -353,11 +412,25 @@ def fetch_uniprot_localization(organism: int | str, *,
     """Query the UniProtKB REST API for the subcellular locations of an organism and return
     normalised :class:`LocalizationScores`.
 
-    ``organism`` is a UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae*
-    S288C). ``id_field`` selects the identifier used as gene id: ``"gene_oln"`` (ordered locus, the
-    ORF name like ``YNR001C``; matches yeast-GEM), ``"accession"`` or ``"gene_primary"``.
-    ``reviewed=True`` restricts the query to curated Swiss-Prot entries; ``extra_query`` is ANDed
-    into the UniProt query string. Parsing is as in :func:`load_uniprot`.
+    Parsing is as in :func:`load_uniprot`. Raises :class:`ValueError` when ``id_field`` is not
+    one of the accepted values.
+
+    Parameters
+    ----------
+    organism : int or str
+        UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae* S288C).
+    compartment_map : mapping of str to str
+        Maps the location labels to model compartment ids, as in :func:`load_uniprot` (default
+        :data:`DEFAULT_COMPARTMENT_MAP`).
+    id_field : str
+        Identifier used as gene id (default ``"gene_oln"``): ``"gene_oln"`` (ordered locus, the
+        ORF name like ``YNR001C``; matches yeast-GEM), ``"accession"`` or ``"gene_primary"``.
+    reviewed : bool
+        If True (default), restrict the query to curated Swiss-Prot entries.
+    extra_query : str or None
+        UniProt query string that is ANDed into the query (default ``None``).
+    timeout : float
+        Timeout of the HTTP request in seconds (default ``120.0``).
     """
     if id_field not in _UNIPROT_ID_COLUMN:
         raise ValueError(f"id_field must be one of {list(_UNIPROT_ID_COLUMN)}")

@@ -149,13 +149,27 @@ def apply_assignment(
 ) -> cobra.Model:
     """Build the compartmentalised model from a proposal (deep copy; the original is unchanged).
 
-    ``default_compartment`` is the hub compartment of the star-topology transports. The same
-    ``base_metabolite`` and ``universal`` as in :func:`assign_compartments` give the same
+    The same ``base_metabolite`` and ``universal`` as in :func:`assign_compartments` give the same
     compartment-agnostic keying (existing per-compartment metabolites are reused and not duplicated)
-    and add the chosen gap-fill reactions. The default key is the base id that
-    :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged metabolite, otherwise
-    the id without the suffix of the metabolite's own compartment. Raises :class:`ValueError` when
-    two metabolites in one compartment of ``model`` have the same key.
+    and add the chosen gap-fill reactions. Raises :class:`ValueError` when two metabolites in one
+    compartment of ``model`` have the same key.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model the proposal was computed for. It is copied; the original is unchanged.
+    proposal : AssignmentProposal
+        Placements, added transports and added gap-fill reactions to apply.
+    default_compartment : str
+        Hub compartment of the star-topology transports in ``proposal.added_transports``
+        (default ``"c"``).
+    base_metabolite : callable or None
+        Maps a metabolite to its compartment-agnostic key. The default key is the base id that
+        :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged metabolite,
+        otherwise the id without the suffix of the metabolite's own compartment.
+    universal : cobra.Model or None
+        Reaction database that contains the ids in ``proposal.added_reactions``. When ``None``,
+        no gap-fill reactions are added.
     """
     out = model.copy()
     base = base_metabolite if base_metabolite is not None else _base_met

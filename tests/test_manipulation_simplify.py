@@ -246,6 +246,41 @@ def test_constrain_reversible_raises_on_infeasible():
         constrain_reversible_reactions(m)
 
 
+def _reversible_one_way_model():
+    m = cobra.Model("t")
+    a = cobra.Metabolite("a", compartment="c")
+    m.add_metabolites([a])
+    supply = cobra.Reaction("supply", lower_bound=0, upper_bound=5)
+    supply.add_metabolites({a: 1})
+    r = cobra.Reaction("r", lower_bound=-10, upper_bound=10)
+    r.add_metabolites({a: -1})
+    m.add_reactions([supply, r])
+    return m
+
+
+class _FailingParams:
+    def __setattr__(self, name, value):
+        raise ValueError("tolerance out of range")
+
+
+def test_constrain_reversible_does_not_hide_a_failing_tolerance(monkeypatch):
+    """Only a solver without Gurobi parameters is skipped; other errors propagate."""
+    from types import SimpleNamespace
+
+    m = _reversible_one_way_model()
+    fake = SimpleNamespace(problem=SimpleNamespace(Params=_FailingParams()))
+    monkeypatch.setattr(cobra.Model, "solver", property(lambda self: fake))
+    with pytest.raises(ValueError, match="tolerance out of range"):
+        constrain_reversible_reactions(m)
+
+
+def test_constrain_reversible_runs_on_a_solver_without_gurobi_parameters():
+    m = _reversible_one_way_model()
+    m.solver = "glpk"
+    assert constrain_reversible_reactions(m) == ["r"]
+    assert m.reactions.r.lower_bound == 0.0
+
+
 # --- order, survivor, reserved, orphans (RAVEN simplifyModel) ---------------
 
 def _chain_model():
