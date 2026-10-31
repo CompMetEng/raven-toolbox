@@ -106,6 +106,7 @@ Milestones in the raven-toolbox port. For function-level status see
 * `init.ftinit` with `resolve_ties`: the last step skips the minimal-flux and direction phases,
   as no step reads its fluxes, and reports the fluxes of the id-rank phase. The reaction set
   does not change.
+* Docstrings are rewritten in impersonal, present-tense wording with British spelling; the code is unchanged. Statements that differed from the code are corrected, for example `find_good_reactions`, `sum_biomass`, `diff_models`, `compare_models`, `set_gene_rule`, `constrain_reversible_reactions`, `ftinit` (essential forcing, `mip_gap`, determinism figures), `fast_lp` metabolite matching and `batch_curate` index matching.
 
 ## 3.0.0b1 — 2026-09-07
 
