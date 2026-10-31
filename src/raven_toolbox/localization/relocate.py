@@ -109,20 +109,44 @@ def relocate_reactions(
 ) -> RelocationResult:
     """Place reactions in curator-chosen compartments and repair the model around the decision.
 
-    ``decisions`` maps reaction ids to the compartment the curator wants them in. Returns a
-    :class:`RelocationResult` with the repaired proposal and a log of every secondary change
-    (gene-linked co-moves, transports added and removed, and the growth certificate). ``model`` and
-    ``proposal`` are the draft and its current assignment (as returned by
-    :func:`assign_compartments`); ``base_metabolite`` and ``universal`` are the same as in that
-    call.
+    Returns a :class:`RelocationResult` with the repaired proposal and a log of every secondary
+    change (gene-linked co-moves, transports added and removed, and the growth certificate).
+    The transport repair only changes species of the moved reactions.
 
-    ``move_gene_siblings`` (default True) moves every other reaction whose genes all belong to moved
-    reactions and all point to the same moved-to compartment ("one enzyme, one compartment"), and
-    reports them. A reaction is left in place when one of its genes does not belong to a moved
-    reaction, when its genes point to different compartments, or when its placement has more than
-    one compartment. ``prune_orphan_transports`` (default True) removes a transport of species ``b``
-    at the old compartment of a moved reaction when no other reaction uses ``b`` there. The
-    transport repair only changes species of the moved reactions.
+    Parameters
+    ----------
+    model : cobra.Model
+        The draft model that ``proposal`` was computed for. Raises :class:`ValueError` when two
+        metabolites in one compartment have the same ``base_metabolite`` key.
+    proposal : AssignmentProposal
+        The current assignment, as returned by :func:`assign_compartments`. It is not modified.
+    decisions : dict of str to str
+        Maps reaction ids to the compartment the curator wants them in. A reaction that is not in
+        ``model``, a boundary reaction, and a reaction that is already only in the requested
+        compartment are skipped (the first two with a warning in the result).
+    base_metabolite : callable or None
+        Maps a metabolite to its compartment-agnostic key. The same as in
+        :func:`assign_compartments` (default ``None``, the default key of that function).
+    default_compartment : str
+        Hub compartment of the transports (default ``"c"``). No transport is added when a
+        reaction moves into this compartment, and none is removed when a reaction leaves it.
+    biomass_reaction : str or None
+        Id of the reaction used as objective when growth is measured (default ``None``). When
+        ``None`` or not in the materialised model, the objective of ``model`` is used.
+    min_growth : float or None
+        Growth floor for the certificate (default ``None``, the ``min_growth`` of ``proposal``).
+    universal : cobra.Model or None
+        The same as in :func:`assign_compartments` (default ``None``). It supplies the gap-fill
+        reactions of ``proposal`` when the model is materialised.
+    move_gene_siblings : bool
+        If True (default), move every other reaction whose genes all belong to moved reactions and
+        all point to the same moved-to compartment ("one enzyme, one compartment"), and report
+        them. A reaction is left in place when one of its genes does not belong to a moved
+        reaction, when its genes point to different compartments, or when its placement has more
+        than one compartment.
+    prune_orphan_transports : bool
+        If True (default), remove a transport of species ``b`` at the old compartment of a moved
+        reaction when no other reaction uses ``b`` there.
     """
     base = base_metabolite if base_metabolite is not None else _base_met
     _check_unique_keys(model.metabolites, base)

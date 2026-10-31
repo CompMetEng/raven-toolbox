@@ -26,6 +26,11 @@ def close_model(model: cobra.Model) -> cobra.Model:
     balancing side.
 
     The input model is not modified.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to close. It is copied and not modified.
     """
     out = model.copy()
     close_model_in_place(out)

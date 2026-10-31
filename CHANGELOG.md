@@ -6,6 +6,8 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
+* `manipulation.set_exchange_bounds` is annotated as returning `list[str | Metabolite]`: the entries of `mets` that are not exchanged, as supplied (ids, names or `Metabolite` objects).
+* `scripts/analyze_init_params.py` runs the `mip_gap`, `force_on` and `prep_scale` sweeps with the `ftinit` default `big_m` (1000, was: 100) and takes `--big-m` to set it. The `big_m` sweep starts at 1000, which is its reference row. The cached sweep results are keyed on `big_m`, so a resumed pickle from a run with another `big_m` is not reused.
 * Models read with `io.read_yaml_model` and `io.read_matlab_model` have `model.tolerance` set to 1e-9, the
   feasibility and optimality tolerance RAVEN's `solveLP` gives the solver (cobrapy's default is 1e-6 for
   Gurobi and 1e-7 for GLPK). `utils.solver.set_raven_tolerance` applies it to any other model.

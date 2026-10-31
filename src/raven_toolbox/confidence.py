@@ -411,7 +411,7 @@ def _warn_if_no_sbo(model: cobra.Model) -> None:
 
 # Defects (evidence contradicts the model) sort strictly below ignorance (evidence is missing).
 _EQ_MASS_IMBALANCED = 0.0     # proven: atoms do not conserve
-_EQ_CHARGE_IMBALANCED = 0.1   # proven, but often a protonation-state convention rather than an error
+_EQ_CHARGE_IMBALANCED = 0.1   # proven; can come from a protonation-state convention of the formulas
 _EQ_FORMULA_UNKNOWN = 0.3     # a formula is missing, unparseable, or generic -- verdict impossible
 _EQ_CHARGE_UNKNOWN = 0.6      # mass proven balanced, charge unverifiable
 _EQ_BALANCED = 1.0            # proven: mass and charge conserve

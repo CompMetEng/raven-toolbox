@@ -26,6 +26,11 @@ def get_model_metadata(model: cobra.Model) -> dict:
     default bounds). ``version`` is taken from ``notes["version"]``, falling back to
     ``notes["metaData"]``, the same order :func:`write_yaml_model` uses. Fields the model
     does not carry are absent.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose ``notes`` are read. The model is not changed.
     """
     notes = model.notes or {}
     meta = dict(notes.get("metaData") or {})
@@ -46,13 +51,15 @@ def set_model_metadata(
 
     Parameters
     ----------
-    version
+    model : cobra.Model
+        Model whose ``notes["version"]`` and ``notes["metaData"]`` are updated in place.
+    version : str or None
         Model version, for example ``"1.2.0"``.
-    date
+    date : str or datetime.date or None
         Model date, as ``YYYY-MM-DD`` or a ``datetime.date`` (a ``datetime`` is reduced to its
         date). Any other value raises ``ValueError``. The YAML writer stamps today's date only
         when the model has none.
-    **fields
+    **fields : str
         Descriptive ``metaData`` fields: ``givenName``, ``familyName``, ``authors``,
         ``email``, ``organization``, ``taxonomy``, ``note`` and ``sourceUrl``.
 

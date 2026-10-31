@@ -95,6 +95,11 @@ def parse_hpa(path: str | Path) -> HPAData:
     columns are ``Gene``, ``Gene name``, ``Tissue``, ``Cell type``, ``Level`` and
     ``Reliability``; a missing column raises :class:`ValueError`. Returns an
     :class:`HPAData` with one row per (gene, tissue, cell type).
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the HPA proteomics file, read with :func:`pandas.read_csv`.
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
     _check_headers(df, _HPA_HEADERS, path)
@@ -113,6 +118,11 @@ def parse_hpa_rna(path: str | Path) -> HPARnaData:
     A file without a tissue or value column (for example one TPM column per tissue) raises
     ``ValueError``. When a gene and tissue occur more than once, the last row is kept and a
     warning is issued. Rows whose value is not a number are dropped.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the HPA RNA-seq file, read with :func:`pandas.read_csv`.
     """
     df = pd.read_csv(path, sep=None, engine="python", dtype=str, na_filter=False)
     for col in ("Gene", "Gene name"):
@@ -183,9 +193,23 @@ def hpa_gene_scores(
     contain gives an empty result. RAVEN raises only when neither the HPA nor the RNA data
     contain it; that check needs both data sets and is not made here.
 
-    When several cell types of a tissue carry the gene, ``multiple_celltype`` selects
-    ``"best"`` (maximum score, RAVEN default) or ``"average"`` (mean over the cell types).
-    Any other value raises :class:`ValueError`.
+    Parameters
+    ----------
+    hpa : HPAData
+        Parsed HPA proteomics data, as returned by :func:`parse_hpa`.
+    tissue : str
+        Tissue to score, compared case-insensitively with the ``tissue`` column of ``hpa``.
+    celltype : str or None
+        Cell type to score, compared case-insensitively. The default ``None`` and an empty
+        string use all cell types of the tissue.
+    level_scores : Mapping[str, float] or None
+        Keyword-only; default ``None``, which uses :data:`HPA_LEVEL_SCORES`. Score of each HPA
+        level name.
+    multiple_celltype : str
+        Keyword-only; default ``"best"``. Selects how the scores of several cell types of a
+        tissue that carry the gene are combined: ``"best"`` is the maximum score (RAVEN
+        default) and ``"average"`` is the mean over the cell types. Any other value raises
+        :class:`ValueError`.
     """
     if multiple_celltype not in ("best", "average"):
         raise ValueError(f"multiple_celltype must be 'best' or 'average'; got {multiple_celltype!r}")
@@ -219,8 +243,22 @@ def rna_gene_scores(
     RAVEN's default for ``arrayData.threshold``), and returns ``{gene_id: score}``. A tissue that
     is not in ``rna`` raises :class:`ValueError`.
 
-    ``factor`` multiplies ``ln(TPM/reference)``; ``max_score`` and ``min_score`` clamp the
-    result to that range.
+    Parameters
+    ----------
+    rna : HPARnaData
+        Parsed HPA RNA-seq data, as returned by :func:`parse_hpa_rna`.
+    tissue : str
+        Tissue to score, matched exactly (case-sensitive) with the ``tissue`` column of
+        ``rna``.
+    reference : Mapping[str, float] or float or None
+        Keyword-only. Per-gene reference TPM, or one threshold for all genes. The default
+        ``None`` uses the mean TPM of each gene over all tissues.
+    factor : float
+        Keyword-only; default 5.0. Multiplies ``ln(TPM/reference)``.
+    max_score : float
+        Keyword-only; default 10.0. Upper limit of the gene score.
+    min_score : float
+        Keyword-only; default -5.0. Lower limit of the gene score.
     """
     if tissue not in set(rna.df["tissue"]):
         raise ValueError(f"tissue {tissue!r} not in dataset (tissues: {rna.tissues()})")

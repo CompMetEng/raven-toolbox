@@ -263,9 +263,10 @@ class GPRIssue:
 
 _NON_DNF_REASON = (
     "GPR is not in disjunctive normal form (an AND clause contains an OR). "
-    "Isoenzyme/complex reasoning and expand_model assume an OR of AND-complexes, "
-    'e.g. rewrite "(G1 or G2) and (G3 or G4)" as '
-    '"(G1 and G3) or (G1 and G4) or (G2 and G3) or (G2 and G4)".'
+    "Isoenzyme and complex reasoning assume an OR of AND-complexes, so it needs the expanded "
+    'form: the rule "(G1 or G2) and (G3 or G4)" is equivalent to '
+    '"(G1 and G3) or (G1 and G4) or (G2 and G3) or (G2 and G4)". '
+    "expand_model splits a rule when its expanded form has more than one clause."
 )
 
 
@@ -273,6 +274,11 @@ def find_non_dnf_grrules(model: cobra.Model) -> list[GPRIssue]:
     """Find reactions whose GPR is not in disjunctive normal form ("OR of AND-complexes").
 
     The check runs on cobra's GPR AST. Reactions with no GPR are skipped.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are checked. It is not modified.
 
     Returns
     -------

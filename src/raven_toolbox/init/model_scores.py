@@ -121,6 +121,44 @@ def score_for_init(
     from the gene scores. Raises ``ValueError`` for missing data, unknown option values, a
     tissue or cell type found in neither dataset, or expression with fewer than two tissues
     and no threshold.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are scored. Only genes of the model are scored.
+    hpa : HPAData or None
+        Parsed HPA proteomics data. ``None`` scores from ``transcr`` alone. At least one of
+        ``hpa`` and ``transcr`` must be given.
+    transcr : TranscrData or HPARnaData or None
+        Expression data. An :class:`~raven_toolbox.init.hpa.HPARnaData` is converted with
+        :meth:`TranscrData.from_rna` without a threshold. ``None`` scores from ``hpa``
+        alone.
+    tissue : str
+        Tissue to score, compared case-insensitively. It must occur in ``hpa`` or ``transcr``.
+    celltype : str or None
+        Cell type to score, compared case-insensitively. The default ``None`` and an empty
+        string use all cell types of the tissue. A non-empty value must occur in ``hpa`` or
+        ``transcr``.
+    no_gene_score : float
+        Keyword-only; default -2.0. Score of a reaction with no genes or no scored genes.
+    isozyme_scoring : str
+        Keyword-only; default ``"max"``. Combination of genes joined by OR; see
+        :func:`~raven_toolbox.init.score.score_reactions_from_genes`.
+    complex_scoring : str
+        Keyword-only; default ``"min"``. Combination of genes joined by AND; accepts the
+        same values as ``isozyme_scoring``.
+    multiple_cell_scoring : str
+        Keyword-only; default ``"max"``. Combination of the values of several cell types
+        (or samples) of the tissue for one gene: ``"max"`` takes the maximum and
+        ``"average"`` the mean. Any other value raises ``ValueError``.
+    hpa_level_scores : Mapping[str, float] or None
+        Keyword-only. Score of each HPA level name, compared case-insensitively. ``None`` and
+        an empty mapping use :data:`RAVEN_HPA_LEVEL_SCORES`.
+    data_precedence : str
+        Keyword-only; default ``"gene"``. ``"gene"`` lets an HPA gene score replace an
+        expression score of the same gene. ``"reaction"`` scores a reaction from HPA alone if
+        any of its genes has an HPA score and from expression otherwise. Any other value
+        raises ``ValueError``.
     """
     if hpa is None and transcr is None:
         raise ValueError("Must supply hpa, transcr or both")

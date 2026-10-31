@@ -46,7 +46,9 @@ def get_elemental_balance(
 
     Parameters
     ----------
-    reactions
+    model : cobra.Model
+        Model whose reactions are checked. It is not modified.
+    reactions : str or Reaction or Iterable or None
         Reaction IDs or reaction objects to check; default all reactions. Boundary
         reactions exchange mass with the environment and are reported as
         ``unbalanced``.

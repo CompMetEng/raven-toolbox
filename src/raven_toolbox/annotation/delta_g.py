@@ -98,6 +98,21 @@ def save_delta_g_csv(
     ``array2table([ids, values])`` behaviour). A value of another type that ``float`` rejects
     (for example a list) raises :class:`TypeError`.
 
+    Parameters
+    ----------
+    entities : Iterable
+        Cobra entities (``model.metabolites`` or ``model.reactions``). One CSV row is written
+        per entity, in iteration order.
+    path : str or Path
+        Path of the CSV file to write. An existing file is overwritten. The file has a header
+        row and no index column.
+    id_column : str
+        Header of the identifier column. Default ``"Var1"``.
+    value_column : str
+        Header of the value column. Default ``"Var2"``.
+    note_key : str
+        Key read from ``entity.notes``. Default ``"deltaG"``.
+
     Returns
     -------
     int

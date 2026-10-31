@@ -82,10 +82,17 @@ def remove_dead_end_reactions(
     A metabolite is a dead end if it participates in only one reaction, or if (given the
     reaction directions) it can only be produced or only be consumed. Such a metabolite cannot
     carry steady-state flux, so the reactions that contain it are removed. The removal repeats
-    until no dead end remains. ``reserved`` reaction ids are never removed, even if they contain
-    a dead-end metabolite.
+    until no dead end remains. A reserved reaction is kept even if it contains a dead-end
+    metabolite.
 
     Returns ``(removed_reaction_ids, removed_metabolite_ids)``.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    reserved : Iterable[str] or None
+        Reaction ids that are never removed. The default ``None`` reserves none.
     """
     reserved = set(reserved or [])
     removed_rxns: list[str] = []
@@ -124,8 +131,14 @@ def remove_zero_interval_reactions(
     This is the ``deleteZeroInterval`` mode of RAVEN ``simplifyModel``. Such reactions cannot
     carry flux. Every metabolite left without a reaction is removed, including metabolites that
     had no reaction before. Genes are kept, as in RAVEN ``removeReactions`` with its defaults.
-    ``reserved`` reaction ids are never removed. The model is modified in place; the function
-    returns the removed reaction ids.
+    The model is modified in place; the function returns the removed reaction ids.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    reserved : Iterable[str] or None
+        Reaction ids that are never removed. The default ``None`` reserves none.
     """
     reserved = set(reserved or [])
     zero = [
@@ -147,16 +160,24 @@ def remove_no_flux_reactions(
     """Remove reactions that cannot carry flux under the tested bounds (RAVEN ``deleteMinMax``).
 
     Runs FVA and removes every reaction whose minimum and maximum flux are both zero.
-    With ``open_exchanges`` (default) the reactions in ``model.exchanges`` are first
-    opened to at least ``(-1000, 1000)``; sink and demand reactions and all internal
-    bounds keep their current values, so a reaction blocked only by one of those is
-    still removed. With ``open_exchanges=False`` the current bounds are used, as in RAVEN's
-    ``deleteMinMax``, which can remove more reactions. A reaction that is blocked under these
-    bounds stays blocked under any tighter bounds, so removing it before task discovery or
-    the merge holds as long as no later step relaxes a sink, demand or internal
-    bound. ``reserved`` reaction ids are never removed. Every metabolite left without a
+    A reaction that is blocked under the tested bounds stays blocked under any tighter bounds,
+    so removing it before task discovery or the merge holds as long as no later step relaxes a
+    sink, demand or internal bound. Every metabolite left without a
     reaction is removed; genes are kept, as in RAVEN ``removeReactions`` with its
     defaults. The model is modified in place; the function returns the removed reaction ids.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    open_exchanges : bool
+        With ``True`` (the default) the reactions in ``model.exchanges`` are first
+        opened to at least ``(-1000, 1000)``; sink and demand reactions and all internal
+        bounds keep their current values, so a reaction blocked only by one of those is
+        still removed. With ``False`` the current bounds are used, as in RAVEN's
+        ``deleteMinMax``, which can remove more reactions.
+    reserved : Iterable[str] or None
+        Reaction ids that are never removed. The default ``None`` reserves none.
     """
     reserved = set(reserved or [])
     blocked = [
@@ -206,6 +227,8 @@ def find_duplicate_reactions(
 
     Parameters
     ----------
+    model : cobra.Model
+        Model searched. It is not modified.
     ignore_direction
         When True (default), ``A → B`` and ``B → A`` are treated as
         duplicates (the convention of yeast-GEM). If False, identical
@@ -251,6 +274,8 @@ def remove_duplicate_reactions(
 
     Parameters
     ----------
+    model : cobra.Model
+        Model modified in place.
     restrict_to_metabolites:
         If given, only reactions that contain at least one of these metabolites
         are checked for duplicates; every other reaction is left unchanged even
@@ -354,6 +379,14 @@ def constrain_reversible_reactions(
     when the solver exposes these Gurobi parameters. At the Gurobi default of 1e-6, a reaction with
     a tiny one-way flux is misclassified, which changes its reversibility and how
     ``group_linear_reactions`` merges it.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    eps : float
+        A flux bound counts as zero when its absolute value is below ``eps``. The default is
+        1e-10.
     """
     revs = [r for r in model.reactions if r.lower_bound < 0 < r.upper_bound]
     if not revs:
@@ -417,8 +450,15 @@ def group_linear_reactions(
     model is first made irreversible, then any metabolite that is produced by exactly one reaction
     and consumed by exactly one reaction is eliminated by merging the two reactions. Metabolites are
     visited in model order and the reaction with the lower index survives a merge, as in RAVEN's
-    ``groupLinear``, so the survivor of a chain is its first reaction. ``reserved`` reaction ids are
-    never merged away. The model is modified in place.
+    ``groupLinear``, so the survivor of a chain is its first reaction. A reserved reaction
+    is never merged away. The model is modified in place.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    reserved : Iterable[str] or None
+        Reaction ids that are never merged away. The default ``None`` reserves none.
     """
     reserved = set(reserved or [])
 
@@ -496,16 +536,35 @@ def simplify_model(
     topological dead-end, no-flux (FVA ``deleteMinMax``), constrain-reversible, then linear
     grouping, so reversible reactions that carry flux in one direction only are made
     irreversible before they are grouped. Each mode delegates to the function of this module with
-    the same name. All modes operate in place. ``reserved`` reaction ids are never removed by the
-    zero-interval, dead-end, no-flux and group-linear modes (the duplicates mode ignores them, as
-    in RAVEN); ``open_exchanges`` is passed to the no-flux mode.
-
-    ``delete_duplicates`` runs :func:`remove_duplicate_reactions` on the whole model.
-    ``group_linear`` runs :func:`group_linear_reactions`, which clears all gene-reaction rules and
-    removes all genes.
+    the same name. All modes operate in place.
 
     RAVEN's ``deleteUnconstrained`` (boundary-metabolite removal) has no analogue here: cobra
     models have explicit boundary reactions and no ``unconstrained`` field.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model modified in place.
+    delete_zero_interval : bool
+        Run :func:`remove_zero_interval_reactions`. The default is ``False``.
+    delete_dead_end : bool
+        Run :func:`remove_dead_end_reactions`. The default is ``False``.
+    delete_no_flux : bool
+        Run :func:`remove_no_flux_reactions`. The default is ``False``.
+    delete_duplicates : bool
+        Run :func:`remove_duplicate_reactions` on the whole model. The default is ``False``.
+    group_linear : bool
+        Run :func:`group_linear_reactions`, which clears all gene-reaction rules and removes all
+        genes. The default is ``False``.
+    constrain_reversible : bool
+        Run :func:`constrain_reversible_reactions` with its default ``eps``. The default is
+        ``False``.
+    reserved : Iterable[str] or None
+        Reaction ids that are never removed by the zero-interval, dead-end, no-flux and
+        group-linear modes (the duplicates mode ignores them, as in RAVEN). The default
+        ``None`` reserves none.
+    open_exchanges : bool
+        Passed to the no-flux mode. The default is ``True``.
     """
     if delete_duplicates:
         remove_duplicate_reactions(model)

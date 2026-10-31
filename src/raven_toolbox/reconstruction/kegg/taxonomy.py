@@ -38,6 +38,11 @@ def parse_taxonomy_records(path: str | Path) -> list[tuple[str, str, list[str]]]
     kept (for example ``"Homo sapiens (human)"``), matching RAVEN ``getPhylDist``; the category
     list is the lineage from outermost (domain) to innermost. Order is preserved so it
     aligns with the rows and columns of :func:`phyl_dist`.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
     """
     records: list[tuple[str, str, list[str]]] = []
     stack: list[str] = []
@@ -83,12 +88,24 @@ def parse_taxonomy_records(path: str | Path) -> list[tuple[str, str, list[str]]]
 
 
 def parse_taxonomy(path: str | Path) -> dict[str, list[str]]:
-    """Return ``{organism_id: [category, ...]}`` from outermost to innermost."""
+    """Return ``{organism_id: [category, ...]}`` from outermost to innermost.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
+    """
     return {org_id: lineage for org_id, _name, lineage in parse_taxonomy_records(path)}
 
 
 def organism_domains(path: str | Path) -> dict[str, str]:
-    """Return ``{organism_id: domain}`` (the outermost category)."""
+    """Return ``{organism_id: domain}`` (the outermost category).
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
+    """
     return {org: cats[0] for org, cats in parse_taxonomy(path).items() if cats}
 
 
@@ -96,6 +113,14 @@ def organisms_in_domain(path: str | Path, domain: str) -> set[str]:
     """Organism ids whose outermost category matches ``domain`` (case-insensitive).
 
     Accepts a prefix, so ``"prok"`` matches ``"Prokaryotes"``.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
+    domain : str
+        Domain name, or a prefix of it, for example ``"prokaryotes"`` or ``"euk"``. A
+        category also matches when it is a prefix of ``domain``.
     """
     needle = domain.lower()
     return {
@@ -137,6 +162,14 @@ def phyl_dist(path: str | Path, *, only_in_kingdom: bool = False) -> PhylDist:
     domains (RAVEN's ``onlyInKingdom`` variant); the matrix is then returned as ``float``.
 
     Time and memory use are ``O(N²)``, with ``N`` the number of KEGG organisms (~10⁴).
+
+    Parameters
+    ----------
+    path : str or Path
+        Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
+    only_in_kingdom : bool
+        If True, the distance between organisms of different domains is ``inf`` and the
+        matrix has dtype ``float``. If False (default), all distances are integers.
     """
     records = parse_taxonomy_records(path)
     ids = [r[0] for r in records]

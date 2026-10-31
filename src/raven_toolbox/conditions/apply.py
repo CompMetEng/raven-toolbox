@@ -74,7 +74,16 @@ DEFAULT_RESET_EXCHANGES_UPPER_BOUND: float = 1000.0
 def load_condition(path: str | Path) -> dict[str, Any]:
     """Parse a condition YAML file into a plain dict.
 
-    Raises ``FileNotFoundError`` if ``path`` does not exist."""
+    Parameters
+    ----------
+    path : str or Path
+        Path of the YAML file, in the schema described in the module docstring.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` does not exist.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Condition file not found: {path}")
@@ -89,6 +98,14 @@ def apply_condition(
     """Apply a parsed condition (or a YAML file path) to ``model`` in place.
 
     Returns the same model object.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to modify in place.
+    condition : dict or str or Path
+        A condition already parsed into a dict, or the path of a condition YAML file that is
+        read with :func:`load_condition`. The schema is described in the module docstring.
     """
     cfg = condition if isinstance(condition, dict) else load_condition(condition)
 
@@ -108,6 +125,15 @@ def set_reaction_bounds(rxn: cobra.Reaction, lb: float, ub: float) -> None:
     flux via a sentinel bound), which cobra's setter rejects. When ``lb > ub``, the
     function writes the private bound attributes of the reaction directly; otherwise
     it uses ``rxn.bounds``.
+
+    Parameters
+    ----------
+    rxn : cobra.Reaction
+        Reaction to modify in place.
+    lb : float
+        New lower bound.
+    ub : float
+        New upper bound.
     """
     if lb > ub:
         rxn._lower_bound = lb  # noqa: SLF001 — intentional bypass

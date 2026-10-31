@@ -58,6 +58,23 @@ def add_sbo_terms(
 
     Parameters
     ----------
+    model : cobra.Model
+        Model to annotate. It is modified in place and returned.
+    biomass_met_names : Iterable[str]
+        Metabolite names that receive SBO:0000649. Default
+        ``DEFAULT_BIOMASS_MET_NAMES`` (``biomass``, ``DNA``, ``RNA``, ``protein``,
+        ``carbohydrate``, ``lipid``, ``cofactor`` and ``ion``). Names are matched exactly.
+    biomass_met_suffixes : Iterable[str]
+        Name suffixes that mark a metabolite as biomass. Default ``(" backbone", " chain")``.
+    biomass_rxn_name : str
+        Name of the biomass pseudoreaction, which receives SBO:0000629. The match is exact.
+        Default ``"biomass pseudoreaction"``.
+    ngam_rxn_name : str
+        Name of the non-growth associated maintenance reaction, which receives SBO:0000630.
+        The match is exact. Default ``"non-growth associated maintenance reaction"``.
+    pseudoreaction_name_substrings : Iterable[str]
+        Reactions that are not the biomass or NGAM reaction and whose name contains any of
+        these substrings receive SBO:0000395. Default ``("pseudoreaction", "SLIME rxn")``.
     transport_detector
         Optional callable that takes the model and returns the set of
         reaction ids classified as transport. When ``None``, the default

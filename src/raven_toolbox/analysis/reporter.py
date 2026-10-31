@@ -112,6 +112,17 @@ def reporter_metabolites(
     Parity with RAVEN's ``reporterMetabolites``: the same closed-form
     correction, one-sided p-value and sort order, with ``"up"`` and ``"down"``
     matching its ``"only up"`` and ``"only down"`` entries.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose metabolites are scored through the genes of their neighbouring reactions.
+    gene_pvalues : Mapping[str, float]
+        Gene id to differential-expression p-value, as described above.
+    gene_fold_changes : Mapping[str, float] or None
+        Gene id to log fold change. The default ``None`` returns only the ``"all"`` result.
+        Genes missing from the mapping count as fold change 0 and fall in the up-regulated
+        subset.
     """
     given = {g: float(p) for g, p in gene_pvalues.items() if p is not None and not math.isnan(p)}
     invalid = [(g, p) for g, p in given.items() if not 0.0 <= p <= 1.0]

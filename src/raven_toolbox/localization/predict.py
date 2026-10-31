@@ -92,17 +92,6 @@ def predict_localization(
     Returns a :class:`LocalizationProposal` (when ``apply=False``) or a
     :class:`LocalizationResult` (when ``apply=True``).
 
-    ``reactions_to_relocate``: the reaction ids to (re-)place. All other reactions stay
-    where they are. Boundary reactions and existing multi-compartment transports in
-    this set are filtered out without a message (they are always pinned). An empty set, or a set
-    without non-boundary reactions, gives an empty proposal (a :class:`LocalizationResult` holding a
-    copy of the model when ``apply=True``).
-
-    ``transport_cost``: a scalar (same cost per added transport) or a mapping
-    ``{metabolite_id_base: cost}`` (the base id has the compartment suffix removed,
-    for example ``"glc__D"`` matches ``"glc__D_c"`` and ``"glc__D_e"``). A metabolite missing from
-    the mapping costs ``0.5``. Negative costs favour adding the transport.
-
     **Multi-compartment gene scoring (default):** a gene contributes its
     predictor score in each compartment it is assigned to. The highest-scoring compartment
     is free, and each additional compartment costs ``multi_compartment_penalty``. A
@@ -110,12 +99,49 @@ def predict_localization(
     penalty; there is no hard cutoff. A large ``multi_compartment_penalty`` gives
     mono-localised genes.
 
-    ``time_limit``: maximum solve time of the MILP in seconds (``None`` = no limit). With no limit,
-    a model with more than about 5,000 gene-associated reactions, or with ambiguous scores, can make
-    the solve run for a long time; ``time_limit=900`` stops it after 15 min with the incumbent
-    solution. MATLAB RAVEN's ``predictLocalization`` has a default ``maxTime`` of 15 min (900 s),
-    but it solves this problem with simulated annealing, so its ``maxTime`` is not a solver cutoff
-    with an optimality guarantee.
+    Parameters
+    ----------
+    model : cobra.Model
+        The model to place reactions in. With ``apply=True`` the result holds a copy and the
+        original is unchanged, except when every reaction of the set to place has genes and none
+        of these genes has a row in the scores: then the result holds the original object.
+        Raises :class:`ValueError` when ``default_compartment`` is neither a compartment of
+        ``model`` nor of ``scores``.
+    scores : LocalizationScores
+        Gene x compartment localisation scores. A reaction whose genes all have no row in the
+        scores is listed in ``unplaced_reactions`` and is not moved.
+    reactions_to_relocate : iterable of str
+        The reaction ids to (re-)place. All other reactions stay where they are. Boundary reactions
+        and existing multi-compartment transports in this set are filtered out without a message
+        (they are always pinned). An empty set, or a set without non-boundary reactions, gives an
+        empty proposal (a :class:`LocalizationResult` holding a copy of the model when
+        ``apply=True``).
+    default_compartment : str
+        Hub compartment of the added transports (default ``"c"``). Each transport connects the
+        metabolite in this compartment to the metabolite in the target compartment.
+    transport_cost : float or mapping of str to float
+        A scalar (same cost per added transport) or a mapping ``{metabolite_id_base: cost}``
+        (default ``0.5``). The base id has the compartment suffix removed, for example ``"glc__D"``
+        matches ``"glc__D_c"`` and ``"glc__D_e"``; a full metabolite id is also looked up. A
+        metabolite missing from the mapping costs ``0.5``. Negative costs favour adding the
+        transport.
+    multi_compartment_penalty : float
+        Cost (default ``0.5``) of each additional compartment of a gene (see above). A value of
+        ``0`` applies no penalty.
+    apply : bool
+        If True (default), apply the proposal with :func:`apply_localization` and return a
+        :class:`LocalizationResult`. If False, return the :class:`LocalizationProposal` and leave
+        the model unchanged.
+    mip_gap : float or None
+        Relative MIP gap at which the solver stops (default ``None``, the solver default). It is set
+        through the Gurobi parameter ``MIPGap`` and ignored by other solvers.
+    time_limit : float or None
+        Maximum solve time of the MILP in seconds, truncated to an integer (``None`` = no limit).
+        With no limit, a model with more than about 5,000 gene-associated reactions, or with
+        ambiguous scores, can make the solve run for a long time; ``time_limit=900`` stops it after
+        15 min with the incumbent solution. MATLAB RAVEN's ``predictLocalization`` has a default
+        ``maxTime`` of 15 min (900 s), but it solves this problem with simulated annealing, so its
+        ``maxTime`` is not a solver cutoff with an optimality guarantee.
     """
     # ---- 1. Scope: which reactions move, which are pinned. -----------------
     to_relocate = set(reactions_to_relocate)
@@ -315,6 +341,15 @@ def apply_localization(
     new compartment-specific metabolite copies are added as needed. Each added
     transport is a passive diffusion ``M[default] ⇌ M[c]`` (RAVEN convention),
     named ``tr_<met>_<c>``.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model the proposal was computed for. It is copied; the original is unchanged.
+    proposal : LocalizationProposal
+        The reactions to move and the transports to add.
+    default_compartment : str
+        Compartment from which each added transport starts (default ``"c"``).
     """
     out = model.copy()
     added: list[cobra.Reaction] = []

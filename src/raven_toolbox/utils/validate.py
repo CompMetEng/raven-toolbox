@@ -37,6 +37,11 @@ def check_model(model: cobra.Model) -> list[ModelIssue]:
     """Run curation checks on a model and return the issues found.
 
     Does not raise; returns a possibly empty list of :class:`ModelIssue`.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to check. It is not modified.
     """
     issues: list[ModelIssue] = []
 

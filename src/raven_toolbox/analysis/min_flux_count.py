@@ -14,7 +14,7 @@ Two differences from ``getMinNrFluxes.m``:
   each with its own binary indicator. cobrapy and optlang need no irreversible model,
   so a reversible reaction here gets one indicator ``y`` and two constraints
   (``v <= M*y`` and ``v >= -M*y``) that bound ``|v|`` directly. At a
-  cardinality-optimal solution the two formulations are equivalent: the MATLAB MILP
+  cardinality-optimal solution the two formulations are equivalent: the RAVEN MILP
   would never pay for two indicators on one reaction when zeroing the smaller direction
   and keeping the net flux is strictly cheaper.
 - **Big-M from the model's own bounds.** ``getMinNrFluxes.m`` first solves the model's
@@ -23,8 +23,9 @@ Two differences from ``getMinNrFluxes.m``:
   can fail (and then report "no feasible solution") even when the cardinality MILP,
   which does not reference the objective, is feasible. This port estimates big-M from
   the reactions' finite bounds (``5 * the largest finite |bound|``, at least 1000, the
-  same lower limit as in MATLAB), so the estimate does not depend on a solve. No MILP
-  warm start is set; a warm start only speeds up a solve that reaches the same optimum.
+  same lower limit as in the ``'irrev'`` formulation of RAVEN), so the estimate does not
+  depend on a solve. No MILP warm start is set; a warm start only speeds up a solve that
+  reaches the same optimum.
 
 The MILP of ``getMinNrFluxes.m`` does not reference ``model.c``, the objective; only its
 preliminary scale-estimating solve does.

@@ -200,20 +200,47 @@ def connect_blocked_reactions(
     exchange reactions for its nutrients has every reaction blocked that depends on those
     nutrients.
 
-    ``scores`` maps a template reaction id to its score; a negative score is the penalty
-    of adding that reaction, and the default penalty applies to a reaction without one.
-    A template reaction whose id is already taken by the draft or by an earlier template is
-    renamed ``<id>_<template id>`` (see :func:`~raven_toolbox.gapfilling.templates.unique_templates`).
-    A score under the renamed id applies to that reaction; otherwise the score under the
-    original id applies, so templates that share an id share that score unless the renamed
-    id is given too.
+    Parameters
+    ----------
+    model : cobra.Model
+        Draft model. It is not modified; the filled copy is in the result.
+    templates : cobra.Model or Iterable[cobra.Model]
+        One template model or several. Template metabolites are matched to the draft by
+        ``name[compartment]``. A template reaction whose id is already taken by the draft or by
+        an earlier template is renamed ``<id>_<template id>`` (see
+        :func:`~raven_toolbox.gapfilling.templates.unique_templates`).
+    scores : dict[str, float] or None
+        Maps a template reaction id to its score; a negative score is the penalty of adding
+        that reaction, and ``penalty`` applies to a reaction without a score. A score that is
+        not negative takes the penalty of the least negative score, or 0 when no score is
+        negative. A score under the renamed id applies to that reaction; otherwise the score
+        under the original id applies, so templates that share an id share that score unless
+        the renamed id is given too. Default ``None``, which gives every template reaction
+        the penalty ``penalty``.
+    penalty : float
+        Penalty of adding a template reaction that has no score. It must be greater than 0,
+        otherwise :class:`ValueError` is raised. Default 1.0.
+    allow_net_production : bool
+        Relaxes the steady-state balance from ``S @ v == 0`` to ``S @ v >= 0`` (metabolites
+        may accumulate) in both flux checks and in the MILP. This can connect reactions that
+        are blocked because a consumption pathway is missing. Default ``False``.
+    threshold : float
+        Flux that a reaction must be able to exceed, in either direction, to count as
+        unblocked, in the draft and, for a blocked reaction, with the templates added.
+        Default 1.0.
+    min_flux : float
+        Lower bound set on each rescuable blocked reaction while the MILP is solved. Default
+        0.1.
 
-    ``threshold`` is the flux a reaction must be able to exceed to count as unblocked, in
-    the draft and, for a blocked reaction, with the templates added. ``min_flux`` is the
-    flux forced through each rescuable reaction while solving. ``allow_net_production``
-    relaxes the steady-state balance from ``S @ v == 0`` to ``S @ v >= 0`` (metabolites
-    may accumulate) in both checks and in the MILP. This can connect reactions that are
-    blocked because a consumption pathway is missing.
+    Raises
+    ------
+    ValueError
+        If ``penalty`` is not greater than 0.
+    RuntimeError
+        If the MILP over the reactions that pass the per-reaction rescue check is not optimal,
+        for example when they cannot carry ``min_flux`` together or the solver stops for another
+        reason. A blocked reaction that cannot carry flux even with all templates is listed in
+        ``cannot_connect`` and does not raise.
     """
     if penalty <= 0:
         raise ValueError(f"penalty must be > 0 (a non-positive cost malforms the MILP); got {penalty}.")

@@ -134,7 +134,11 @@ def export_to_excel(
 
     Parameters
     ----------
-    sort_ids
+    model : cobra.Model
+        Model to export.
+    path : str or Path
+        Output file path; the workbook is saved to it (``str`` or ``pathlib.Path``).
+    sort_ids : bool
         If True, write reactions, metabolites and genes sorted alphabetically by ID
         (the model itself is not modified); compartments are sorted by abbreviation. The ec
         sheets keep the order of the ec data.

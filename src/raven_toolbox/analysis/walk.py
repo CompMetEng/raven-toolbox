@@ -261,6 +261,29 @@ def walk_fluxes(
 
     See :class:`FluxWalker` for a non-blocking, programmatic form of the same
     navigation (``.step(n)``, ``.back()``, ``.groups``).
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are navigated.
+    fluxes : pd.Series or Mapping[str, float]
+        Flux by reaction id. A reaction without an entry counts as carrying zero flux.
+    start_rxn : str or int
+        Reaction to start from, as a reaction id or as an index into ``model.reactions``. An
+        id that is not in the model raises ``ValueError``.
+    cutoff : float
+        A metabolite is shown when the absolute net contribution of the current reaction is at
+        least this value and at least one neighbour has an absolute contribution above it. A
+        neighbour is listed when its absolute contribution exceeds it. The default is 1e-8.
+    max_per_met : int
+        Maximum number of neighbouring reactions listed per metabolite, taken in order of
+        descending absolute flux. The default is 8.
+    input_fn : callable
+        Function called with the prompt ``"  > "`` that returns the user's response as a
+        string. The default is the builtin ``input``.
+    print_fn : callable
+        Function called with each output string, which can contain line breaks. The default is
+        the builtin ``print``.
     """
     walker = FluxWalker(model, fluxes, start_rxn, cutoff=cutoff, max_per_met=max_per_met)
     while True:

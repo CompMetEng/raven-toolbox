@@ -141,16 +141,13 @@ def curation_priority(
 ):
     """Rank reaction placements and added transports by how likely each needs manual curation.
 
-    Parameters mirror :func:`assign_compartments` where they overlap (``model`` is the draft that
-    was placed; ``base_metabolite`` and ``universal`` are the same as in that call). Returns a
-    :class:`pandas.DataFrame` sorted by ``priority`` (descending), one row per (reaction,
-    compartment) placement and per flagged added transport, with columns ``target`` (id), ``type``
-    (``"placement"``, ``"gapfill"`` or ``"transport"``), ``compartment``, ``priority`` (0-1),
-    ``flags`` (the names of the signals that fired, strongest first), ``action`` (a text
-    that names the check for the strongest signal, for example to re-place the reaction in the
-    neighbouring compartment),
-    ``n_affected`` and ``affected``. A dual-localised reaction yields one row per
-    compartment.
+    Returns a :class:`pandas.DataFrame` sorted by ``priority`` (descending), one row per
+    (reaction, compartment) placement and per flagged added transport, with columns ``target``
+    (id), ``type`` (``"placement"``, ``"gapfill"`` or ``"transport"``), ``compartment``,
+    ``priority`` (0-1), ``flags`` (the names of the signals that fired, strongest first),
+    ``action`` (a text that names the check for the strongest signal, for example to re-place the
+    reaction in the neighbouring compartment), ``n_affected`` and ``affected``. A dual-localised
+    reaction yields one row per compartment.
 
     ``n_affected`` and ``affected`` give the **one-hop coupling** of each row: the other placed
     reactions that curating this one touches, because they share a non-currency metabolite with it
@@ -159,25 +156,50 @@ def curation_priority(
     the ones also flagged in this table first, followed by ``+N`` for the remainder. The coupling is
     not transitive: each coupled reaction has its own coupled reactions.
 
-    ``check_essential`` runs a single-reaction-deletion essentiality check (an FBA per candidate) on
-    the already-flagged placements (base priority ``>= essential_candidate_threshold``) and
-    multiplies their score by 1.6 when removing a placement drops the growth of the
-    materialised model to below 1 % of its growth. Essentiality is measured against the achievable
-    growth of the applied model, not the heuristic growth floor of the assignment. The check is
-    skipped if the floor is 0 or if the materialised model does not exceed that floor (a comparison
-    with the floor would then flag every candidate).
-    ``min_growth`` overrides the floor used for this comparison (default: the floor of the
-    proposal). ``check_essential=False`` skips this signal, the only one that needs FBA.
-
-    ``currency_metabolites`` extends the built-in currency and cofactor set (ATP, NAD(P)H, H+, H2O,
-    CoA, Pi, ...) that is excluded from the topology signals. It takes ids or names of
-    organism-specific pools that count as freely available.
-
-    A reaction whose ``localization`` confidence is marked ``curated`` (via
-    :func:`~raven_toolbox.confidence.mark_curated`, for example after a curator settled its
-    placement) is
-    dropped from the result, so a settled reaction does not reappear. ``include_curated=True``
-    scores it anyway.
+    Parameters
+    ----------
+    model : cobra.Model
+        The draft model that was placed. Raises :class:`ValueError` when two metabolites in one
+        compartment have the same ``base_metabolite`` key.
+    proposal : AssignmentProposal
+        The proposal whose placements, gap-fill reactions and added transports are scored.
+    scores : LocalizationScores
+        Gene x compartment localisation scores that were used for the placement.
+    base_metabolite : callable or None
+        Maps a metabolite to its compartment-agnostic key. The same as in
+        :func:`assign_compartments` (default ``None``, the default key of that function).
+    default_compartment : str
+        Hub compartment of the transports (default ``"c"``). It is the compartment reported for a
+        gap-fill reaction whose metabolites in ``universal`` do not lie in a single compartment,
+        and the second end of the bridge in the coupling of a transport.
+    universal : cobra.Model or None
+        The same as in :func:`assign_compartments` (default ``None``). It gives the compartment and
+        the metabolites of a gap-fill reaction, and the model that the essentiality check
+        materialises.
+    currency_metabolites : iterable of str or None
+        Ids or names of organism-specific pools that count as freely available (default ``None``).
+        They extend the built-in currency and cofactor set (ATP, NAD(P)H, H+, H2O, CoA, Pi, ...)
+        that is excluded from the topology signals.
+    check_essential : bool
+        If True (default), run a single-reaction-deletion essentiality check (an FBA per candidate)
+        on the already-flagged placements (base priority ``>= essential_candidate_threshold``).
+        The score of a placement is multiplied by 1.6 when removing it drops the growth of the
+        materialised model to below 1 % of its growth. Essentiality is measured against the
+        achievable growth of the applied model, not the heuristic growth floor of the assignment.
+        The check is skipped if the floor is 0 or if the materialised model does not exceed that
+        floor (a comparison with the floor would then flag every candidate). False skips this
+        signal, the only one that needs FBA.
+    essential_candidate_threshold : float
+        Minimum base priority (before the essentiality factor) that a placement needs to be
+        checked for essentiality (default ``0.2``).
+    min_growth : float or None
+        Floor used for the comparison in the essentiality check (default ``None``, the
+        ``min_growth`` of ``proposal``).
+    include_curated : bool
+        If False (default), a reaction whose ``localization`` confidence is marked ``curated`` (via
+        :func:`~raven_toolbox.confidence.mark_curated`, for example after a curator settled its
+        placement) is dropped from the result, so a settled reaction does not reappear. True
+        scores it anyway.
     """
     import pandas as pd
 

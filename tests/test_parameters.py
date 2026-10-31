@@ -151,3 +151,10 @@ def test_exchange_bounds_warns_on_metabolite_in_multiple_exchanges(exchange_mode
     # both reactions exchanging a_e get the requested bounds.
     assert exchange_model.reactions.EX_a.bounds == (-10, 5)
     assert exchange_model.reactions.EX_a2.bounds == (-10, 5)
+
+
+def test_exchange_bounds_name_entries(exchange_model):
+    exchange_model.metabolites.a_e.name = "Alpha"
+    unused = set_exchange_bounds(exchange_model, ["ALPHA", "No Such Name"], [-10, -5], [3, 3])
+    assert exchange_model.reactions.EX_a.bounds == (-10, 3)
+    assert unused == ["No Such Name"]

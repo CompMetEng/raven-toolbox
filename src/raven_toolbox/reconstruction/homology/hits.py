@@ -55,7 +55,14 @@ def make_ortholog_hits(
 
 
 def validate_hits(hits: pd.DataFrame) -> pd.DataFrame:
-    """Check that a hits DataFrame has the required columns and return it unchanged."""
+    """Check that a hits DataFrame has the required columns and return it unchanged.
+
+    Parameters
+    ----------
+    hits : pandas.DataFrame
+        Hits table. It must contain every column in ``HIT_COLUMNS``, otherwise
+        :class:`ValueError` is raised. Extra columns are allowed.
+    """
     missing = [c for c in HIT_COLUMNS if c not in hits.columns]
     if missing:
         raise ValueError(f"hits is missing required columns: {missing}")

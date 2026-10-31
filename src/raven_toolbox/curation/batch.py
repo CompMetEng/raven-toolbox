@@ -264,6 +264,30 @@ def batch_curate_from_tsv(
     non-empty cells than the header has columns refused with :class:`ValueError` (RAVEN wraps
     the extra cell into a new row). A line without any text is skipped; RAVEN makes an empty row
     from a line that holds only ``""`` or from a row that ends in two or more tabs.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to curate in place.
+    mets_tsv : str or Path or None
+        Path of the metabolite table. Default ``None``, which skips the metabolite table.
+    genes_tsv : str or Path or None
+        Path of the gene table. Default ``None``, which skips the gene table.
+    rxns_tsv : str or Path or None
+        Path of the reaction table. It must be given together with ``rxns_coeffs_tsv``,
+        otherwise :func:`batch_curate` raises :class:`ValueError`. Default ``None``.
+    rxns_coeffs_tsv : str or Path or None
+        Path of the table with the stoichiometric coefficients of the reactions. It must be
+        given together with ``rxns_tsv``. Default ``None``.
+    met_id_prefix : str
+        Prefix of the ids of new metabolites, as in :func:`batch_curate`. Default ``"M_"``.
+    rxn_id_prefix : str
+        Prefix of the ids of new reactions, as in :func:`batch_curate`. Default ``"R_"``.
+    overwrite_with_empty : bool
+        How an empty cell is applied to an entity that already exists in the model, as in
+        :func:`batch_curate`. Default ``True``, which lets an empty cell clear the stored
+        value. With ``False`` an empty cell leaves the stored value as it is. A value that
+        is not a ``bool`` or ``numpy.bool_`` raises :class:`TypeError`.
     """
     def _read(path):
         return None if path is None else _read_table(path)

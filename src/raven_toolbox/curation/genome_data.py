@@ -178,6 +178,12 @@ def parse_gff_gene_table(gff_path: str | Path) -> pd.DataFrame:
     (CDS -> mRNA -> gene for eukaryotes, CDS -> gene for prokaryotes), so
     the ``GenBank_protein`` column matches a protein FASTA's headers.
 
+    Parameters
+    ----------
+    gff_path : str or Path
+        Path of an uncompressed GFF3 file, read as UTF-8. Comment lines (starting with ``#``)
+        and lines with fewer than 9 tab-separated fields are skipped.
+
     Returns
     -------
     pandas.DataFrame

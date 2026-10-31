@@ -96,8 +96,20 @@ def classify_reactions(
 ) -> ReactionMasks:
     """Classify reactions into the ftINIT ``toIgnore`` categories (``prepINITModel``).
 
-    ``ext_comp`` is the extracellular compartment. ``spontaneous`` and ``custom`` are
-    iterables of reaction ids. A reaction is "GPR-less" when its gene rule is empty.
+    A reaction is "GPR-less" when its gene rule is empty.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are classified.
+    ext_comp : str
+        Keyword-only; default ``"e"``. Id of the extracellular compartment.
+    spontaneous : Iterable[str]
+        Keyword-only; default empty. Ids of the spontaneous reactions. Ids that are not
+        reactions of ``model`` are ignored.
+    custom : Iterable[str]
+        Keyword-only; default empty. Ids of the reactions in the custom category. Ids that
+        are not reactions of ``model`` are ignored.
     """
     spont, cust = set(spontaneous), set(custom)
     masks = ReactionMasks(
@@ -260,27 +272,14 @@ def prep_init_model(
     infeasible. Then classifies reactions into the omics-independent categories, linearly
     merges, and (unless ``scale=False``) rescales the merged model's stoichiometry
     (:func:`rescale_for_init`) so that a single MILP big-M is valid across all reactions.
-    In the INIT parameter calibration study on raven-docs (Human-GEM, one cell line), the
-    full ftINIT pipeline without scaling was feasible at ``big_m`` 1000 and took 157 s
-    against 83 s with scaling, and it was infeasible at ``big_m`` 100. ``simplify=False``
-    skips RAVEN's dead-end and FVA-blocked removal and its reversibility-tightening passes,
-    leaving a larger merged model that may reach a different extraction optimum.
-
-    ``essential_cache_path`` makes the essential-reaction discovery resumable across
-    interruptions: the accumulated results are written to this path; see
-    :func:`find_task_essential_reactions`.
 
     Task-essential discovery runs with ``close_boundaries=True``, as RAVEN's
     ``prepINITModel`` (which calls ``closeModel`` first), and the default of
     :func:`find_task_essential_reactions` is additive. With ``close_boundaries=True`` the
     task file defines the whole boundary of the model during the discovery.
 
-    ``verbose`` prints one line per phase plus per-task progress during essential-reaction
-    discovery (default False).
-
-    ``processes`` (default 1) parallelises task-essential discovery across tasks; see
-    :func:`find_task_essential_reactions`. The two ``simplify_model`` passes are parallelised
-    by cobra's own ``cobra.Configuration().processes``.
+    The two ``simplify_model`` passes are parallelised by cobra's own
+    ``cobra.Configuration().processes``.
 
     The first simplification removes reactions only; every metabolite stays in the reference model
     while the tasks are checked, so a task can name any metabolite of the template, including
@@ -296,6 +295,43 @@ def prep_init_model(
     codes) and may be empty; a task that cannot be performed is removed by its position, so a
     task with the same id that can be performed stays. Raises :class:`ValueError` when a task
     id is not text.
+
+    Parameters
+    ----------
+    template : cobra.Model
+        Template model. It is not modified; the preprocessing works on a copy.
+    tasks : Iterable[Task] or None
+        Metabolic tasks whose essential reactions are kept regardless of score. The default
+        ``None`` skips the task-essential discovery.
+    ext_comp : str
+        Keyword-only; default ``"e"``. Id of the extracellular compartment, passed to
+        :func:`classify_reactions`.
+    spontaneous : Iterable[str]
+        Keyword-only; default empty. Ids of the spontaneous reactions, passed to
+        :func:`classify_reactions`.
+    custom : Iterable[str]
+        Keyword-only; default empty. Ids of the reactions in the custom category, passed to
+        :func:`classify_reactions`.
+    essential_cache_path : str or Path or None
+        Keyword-only; default ``None``. Path of a file to which the accumulated results of
+        the essential-reaction discovery are written, which makes the discovery resumable
+        across interruptions; see :func:`find_task_essential_reactions`. The default
+        ``None`` writes no file.
+    simplify : bool
+        Keyword-only; default ``True``. When ``False``, the function skips RAVEN's dead-end
+        and FVA-blocked removal and its reversibility-tightening passes, which leaves a
+        larger merged model that may reach a different extraction optimum.
+    scale : bool
+        Keyword-only; default ``True``. When ``False``, the merged model's stoichiometry is
+        not rescaled. In the INIT parameter calibration study on raven-docs (Human-GEM, one
+        cell line), the full ftINIT pipeline without scaling was feasible at ``big_m`` 1000
+        and took 157 s against 83 s with scaling, and it was infeasible at ``big_m`` 100.
+    verbose : bool
+        Keyword-only; default ``False``. Prints one line per phase plus per-task progress
+        during essential-reaction discovery.
+    processes : int
+        Keyword-only; default 1. Number of processes for the task-essential discovery across
+        tasks; see :func:`find_task_essential_reactions`.
     """
     if tasks is not None:
         tasks = list(tasks)

@@ -40,6 +40,20 @@ def gene_scores_from_expression(
     negative level or reference, and a missing reference score ``min_score``. A gene whose
     level is missing (``None`` or NaN) gets no entry, so :func:`score_reactions_from_genes`
     leaves it out of the rule.
+
+    Parameters
+    ----------
+    expression : Mapping[str, float]
+        Expression level of each gene, keyed by gene id.
+    reference : Mapping[str, float] or float
+        Per-gene reference level, or one threshold for all genes. A gene missing from a
+        mapping has a missing reference.
+    factor : float
+        Keyword-only; default 5.0. Multiplies ``ln(level/reference)``.
+    max_score : float
+        Keyword-only; default 10.0. Upper limit of the score.
+    min_score : float
+        Keyword-only; default -5.0. Lower limit of the score.
     """
     scores: dict[str, float] = {}
     for gene, level in expression.items():
@@ -82,6 +96,21 @@ def score_reactions_from_genes(
     complex subunits (AND) with ``complex_scoring`` (default ``min``). A reaction
     with no genes, or whose genes are all missing from ``gene_scores`` or scored NaN,
     gets ``no_gene_score`` (default -2).
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are scored.
+    gene_scores : Mapping[str, float]
+        Score of each gene, keyed by gene id.
+    isozyme_scoring : str
+        Keyword-only; default ``"max"``. Combination of genes joined by OR. One of ``"min"``,
+        ``"max"``, ``"median"`` and ``"average"``; any other value raises :class:`ValueError`.
+    complex_scoring : str
+        Keyword-only; default ``"min"``. Combination of genes joined by AND. Accepts the same
+        values as ``isozyme_scoring``.
+    no_gene_score : float
+        Keyword-only; default -2.0. Score of a reaction with no genes or no scored genes.
     """
     iso, cplx = resolve_aggregators(isozyme_scoring, complex_scoring)
 

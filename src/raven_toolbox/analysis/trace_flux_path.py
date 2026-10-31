@@ -249,6 +249,22 @@ def print_flux_path(
 
     The output is a simplified rendering of ``traceFluxPath.m``'s console
     diagram. Parity with RAVEN is defined on the structured result.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model both reactions belong to.
+    fluxes : pd.Series or Mapping[str, float]
+        Flux by reaction id, as for :func:`trace_flux_path`.
+    from_rxn : str
+        Source reaction id.
+    to_rxn : str
+        Target reaction id.
+    print_fn : callable
+        Function called with each output line. The default is the builtin ``print``.
+    **kwargs : dict
+        Keyword arguments forwarded to :func:`trace_flux_path`: ``cutoff``, ``max_hops``,
+        ``trace_material``, ``carbon_only`` and ``exclude_mets``.
     """
     result = trace_flux_path(model, fluxes, from_rxn, to_rxn, **kwargs)
 

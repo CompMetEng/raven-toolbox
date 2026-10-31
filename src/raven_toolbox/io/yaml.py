@@ -287,6 +287,11 @@ def read_yaml_model(path: str | Path) -> cobra.Model:
     Accepts both the cobra `!!omap` shape and a very old RAVEN shape where
     the document root is a bare ``-`` sequence of single-key mappings; the
     latter is merged into one mapping before parsing.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path of the YAML file. A path ending in ``.gz`` is read as gzip-compressed text.
     """
     with _open_text(path, "r") as handle:
         raw = _to_plain(_load_yaml_text(handle.read()))
@@ -905,6 +910,15 @@ def write_yaml_model(
     With ``sort_ids=True`` metabolites/reactions/genes/compartments are
     written in alphabetical order (diff-friendly), without modifying
     ``model``.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to write.
+    path : str or pathlib.Path
+        Output file path. A path ending in ``.gz`` is written as gzip-compressed text.
+    sort_ids : bool
+        Whether to write entries in alphabetical order of their ids. The default is ``False``.
     """
     model_notes = dict(model.notes or {})
     stored_meta = model_notes.pop("metaData", None) or {}
