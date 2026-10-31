@@ -43,6 +43,15 @@ def test_non_positive_penalty_rejected(draft_and_template):
         connect_blocked_reactions(draft, template, penalty=0)
 
 
+def test_non_optimal_milp_raises_with_a_message_that_names_the_milp(draft_and_template, monkeypatch):
+    from raven_toolbox.gapfilling import fill
+
+    draft, template = draft_and_template
+    monkeypatch.setattr(fill, "_solve_min_templates", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="MILP is not optimal.*min_flux"):
+        connect_blocked_reactions(draft, template)
+
+
 def test_fill_gaps_connects_blocked_reaction(draft_and_template):
     draft, template = draft_and_template
     assert "r1" in cobra.flux_analysis.find_blocked_reactions(draft)  # precondition

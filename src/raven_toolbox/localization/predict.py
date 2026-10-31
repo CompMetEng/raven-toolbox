@@ -103,8 +103,7 @@ def predict_localization(
     ----------
     model : cobra.Model
         The model to place reactions in. With ``apply=True`` the result holds a copy and the
-        original is unchanged, except when every reaction of the set to place has genes and none
-        of these genes has a row in the scores: then the result holds the original object.
+        original is unchanged.
         Raises :class:`ValueError` when ``default_compartment`` is neither a compartment of
         ``model`` nor of ``scores``.
     scores : LocalizationScores
@@ -182,7 +181,7 @@ def predict_localization(
             moved=pd.DataFrame(columns=["rxn_id", "from_compartment", "to_compartment"]),
             added_transports=pd.DataFrame(columns=["met_id", "compartment"]),
             gene_compartments={}, unplaced_reactions=unplaced, objective=0.0)
-        return prop if not apply else LocalizationResult(model, prop)
+        return prop if not apply else LocalizationResult(model.copy(), prop)
 
     # ---- 4. Per-metabolite transport cost. ---------------------------------
     def _met_cost(m_id: str) -> float:

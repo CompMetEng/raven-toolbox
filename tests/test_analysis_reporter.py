@@ -293,3 +293,16 @@ def test_scores_match_exact_moments_when_the_first_zscore_is_an_outlier():
     got = res.table.set_index("metabolite")["z_score"]
     assert got["A_c"] == pytest.approx(expected([f"g{i}" for i in range(2, 12)]), rel=1e-13, abs=0)
     assert got["B_c"] == pytest.approx(expected(["g1"]), rel=1e-13, abs=0)
+
+
+def test_scored_gene_without_a_fold_change_is_in_neither_subset(model):
+    res = reporter_metabolites(
+        model,
+        {"g1": 0.001, "g2": 0.01, "g3": 0.01},
+        gene_fold_changes={"g1": 2.0},
+    )
+    up = next(r for r in res if r.test == "up").table
+    down = next(r for r in res if r.test == "down").table
+    # g1 alone touches A and B; g2 and g3 (no fold change) do not enter either subset
+    assert set(up["metabolite"]) == {"A_c", "B_c"}
+    assert down.empty

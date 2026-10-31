@@ -120,9 +120,12 @@ def organisms_in_domain(path: str | Path, domain: str) -> set[str]:
         Path of the KEGG ``taxonomy`` file, plain or gzipped (suffix ``.gz``).
     domain : str
         Domain name, or a prefix of it, for example ``"prokaryotes"`` or ``"euk"``. A
-        category also matches when it is a prefix of ``domain``.
+        category also matches when it is a prefix of ``domain``. Raises :class:`ValueError` when
+        ``domain`` is empty.
     """
     needle = domain.lower()
+    if not needle:
+        raise ValueError("domain must not be empty.")
     return {
         org
         for org, dom in organism_domains(path).items()

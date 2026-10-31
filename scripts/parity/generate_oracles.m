@@ -32,6 +32,8 @@ model = readYAMLmodel(fullfile(fixtureDir, 'tiny.yml'));
 writeOracle(oracleDir, 'model_structure', modelStructure(model));
 writeOracle(oracleDir, 'elemental_balance', elementalBalance(model));
 writeOracle(oracleDir, 'gpr_dnf', gprDnf(model));
+writeOracle(oracleDir, 'reporter_fold_changes', reporterFoldChanges(model));
+writeOracle(oracleDir, 'empty_condition', emptyCondition(model));
 
 writeProvenance(oracleDir);
 fprintf('Oracles written to %s\n', oracleDir);
@@ -86,6 +88,43 @@ out = struct();
 out.rxns = reshape(model.rxns, 1, []);
 out.grRules = reshape(model.grRules, 1, []);
 out.dnf = rules;
+end
+
+
+function out = reporterFoldChanges(model)
+% Reporter metabolites for the full gene set and for the up- and
+% down-regulated subsets, with one fold change per gene.
+pvalues = [0.01 0.2 0.7];
+foldChanges = [2 -1 3];
+if numel(model.genes) ~= numel(pvalues)
+    error('generate_oracles:fixture', 'tiny.yml must have %d genes.', numel(pvalues));
+end
+rep = reporterMetabolites(model, model.genes, pvalues, 'geneFoldChanges', foldChanges);
+tests = cell(1, numel(rep));
+for k = 1:numel(rep)
+    tests{k} = struct('test', rep(k).test, 'mets', {reshape(rep(k).mets, 1, [])}, ...
+        'metZScores', reshape(rep(k).metZScores, 1, []));
+end
+out = struct();
+out.genes = reshape(model.genes, 1, []);
+out.pvalues = pvalues;
+out.foldChanges = foldChanges;
+out.tests = tests;
+end
+
+
+function out = emptyCondition(model)
+% An empty condition file: how many fields parseYAML returns and whether
+% applyCondition changes the bounds.
+file = [tempname '.yml'];
+fid = fopen(file, 'w');
+fclose(fid);
+cleanup = onCleanup(@() delete(file));
+cond = parseYAML(file);
+changed = applyCondition(model, file);
+out = struct();
+out.nFields = numel(fieldnames(cond));
+out.modelChanged = ~isequal(model.lb, changed.lb) || ~isequal(model.ub, changed.ub);
 end
 
 

@@ -391,10 +391,10 @@ def constrain_reversible_reactions(
     revs = [r for r in model.reactions if r.lower_bound < 0 < r.upper_bound]
     if not revs:
         return []
-    try:  # Gurobi-specific; match RAVEN solveLP's precision. Harmless on other backends.
+    try:  # Gurobi parameters, to match RAVEN solveLP's precision; other backends have no Params
         model.solver.problem.Params.FeasibilityTol = 1e-9
         model.solver.problem.Params.OptimalityTol = 1e-9
-    except Exception:  # noqa: BLE001
+    except AttributeError:
         pass
     # Infeasible models surface as either OptimizationError (Gurobi/HiGHS) or
     # NaN-filled ranges (some optlang backends silently). Catch both and raise

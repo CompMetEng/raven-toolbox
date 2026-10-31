@@ -140,28 +140,33 @@ def _set_fill_solver(model: cobra.Model, time_limit: float | None, seed: int) ->
             model.solver.configuration.timeout = int(time_limit)
 
 
+_GUROBI_FILL_PARAMS = ("Threads", "Seed", "IntFeasTol", "TimeLimit", "MIPGap", "MIPGapAbs")
+
+
 def _snapshot_solver_params(model: cobra.Model):
-    """Save the solver state that :func:`_set_fill_solver` overwrites.
+    """Save the solver state that :func:`_set_fill_solver` and :func:`_resolve_ties_fill` set.
 
     ``model.solver.problem.Params`` (Gurobi) and ``model.solver.configuration.timeout`` (the
     generic optlang fallback) are raw solver state. ``with model:`` does not revert them on
     exit, unlike the other changes that :func:`_gap_fill_task` makes to a shared reference
-    model. :func:`_restore_solver_params` restores the saved state.
+    model. :func:`_restore_solver_params` restores the saved state. The Gurobi parameters are
+    ``Threads``, ``Seed``, ``IntFeasTol``, ``TimeLimit``, ``MIPGap`` and ``MIPGapAbs``.
     """
     try:  # Gurobi-specific; harmless on other backends
         params = model.solver.problem.Params
-        return "gurobi", (params.Threads, params.Seed, params.IntFeasTol, params.TimeLimit)
+        return "gurobi", {name: getattr(params, name) for name in _GUROBI_FILL_PARAMS}
     except Exception:  # noqa: BLE001
         return "generic", model.solver.configuration.timeout
 
 
 def _restore_solver_params(model: cobra.Model, saved) -> None:
-    """Undo :func:`_set_fill_solver`, from a snapshot taken by :func:`_snapshot_solver_params`."""
+    """Undo the parameter changes of a gap-fill, from a :func:`_snapshot_solver_params` snapshot."""
     kind, value = saved
     if kind == "gurobi":
         try:  # noqa: BLE001 - if this now fails, the params were never changed either
             params = model.solver.problem.Params
-            params.Threads, params.Seed, params.IntFeasTol, params.TimeLimit = value
+            for name, parameter_value in value.items():
+                setattr(params, name, parameter_value)
         except Exception:  # noqa: BLE001
             pass
     else:
@@ -267,7 +272,7 @@ def _gap_fill_task(
     and the raw Gurobi parameters ``Threads``, ``Seed``, ``IntFeasTol`` and ``TimeLimit`` that
     :func:`_set_fill_solver` sets (``model.solver.problem.Params`` is not part of the cobra
     context system). With ``resolve_ties=True`` on Gurobi, :func:`_resolve_ties_fill` also sets
-    ``MIPGap`` to 0.0 and ``MIPGapAbs`` to 0.4, and these stay on ``reference_model``.
+    ``MIPGap`` to 0.0 and ``MIPGapAbs`` to 0.4; these two are saved and restored as well.
     ``reference_model`` is ``prep.ref_model``, which is shared by every sample built from the
     same :class:`~raven_toolbox.init.PrepData`, so the restored parameters keep the gap-fill of
     one task (single-threaded, 300 s time limit) from persisting into the extraction of the
@@ -380,8 +385,8 @@ def fill_tasks(
     reference_model : cobra.Model
         Model that supplies the candidate reactions. After each gap-fill, the Gurobi parameters
         ``Threads``, ``Seed``, ``IntFeasTol`` and ``TimeLimit`` (the generic solver timeout on
-        other solvers) are restored. With ``resolve_ties=True`` on Gurobi, ``MIPGap`` (0.0)
-        and ``MIPGapAbs`` (0.4) stay set on it.
+        other solvers) are restored. With ``resolve_ties=True`` on Gurobi, ``MIPGap`` and
+        ``MIPGapAbs`` are restored as well.
     tasks : Iterable[Task]
         Tasks to make feasible in the result. Tasks with ``should_fail`` are skipped. A task
         that cannot be gap-filled stays infeasible, is listed in ``failed_tasks`` and gives a

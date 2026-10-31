@@ -104,7 +104,8 @@ def diff_models(
     max_per_category : int
         Maximum number of differences reported per category. The categories are
         stoichiometry, bounds, objective, GPR and annotation for reactions, and formula,
-        charge, compartment and annotation for metabolites. The first difference beyond the
+        charge, compartment and annotation for metabolites; the annotation category counts the
+        differences of all compared annotation keys together. The first difference beyond the
         cap adds one entry that reports the truncation. Default 50. The lists of ids that
         are present in only one model are not capped by this value; each shows 10 ids.
     """

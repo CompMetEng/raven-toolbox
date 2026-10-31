@@ -79,6 +79,13 @@ def load_condition(path: str | Path) -> dict[str, Any]:
     path : str or Path
         Path of the YAML file, in the schema described in the module docstring.
 
+    Returns
+    -------
+    dict
+        The parsed condition. A file without content gives an empty dict, which
+        :func:`apply_condition` applies as a condition without steps (as RAVEN ``parseYAML``
+        and ``applyCondition`` do).
+
     Raises
     ------
     FileNotFoundError
@@ -88,7 +95,8 @@ def load_condition(path: str | Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Condition file not found: {path}")
     with open(path) as f:
-        return _SAFE_YAML.load(f)
+        data = _SAFE_YAML.load(f)
+    return {} if data is None else data
 
 
 def apply_condition(

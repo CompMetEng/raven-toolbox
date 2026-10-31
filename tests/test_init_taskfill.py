@@ -226,3 +226,28 @@ def test_reference_model_is_unchanged_and_reusable_after_gap_fill():
     res2 = fill_tasks(gapped_again, ref, [make_test_task()])
     assert res2.added_reactions == ["R7"]
     assert not res2.failed_tasks
+
+
+def test_resolve_ties_restores_the_gap_parameters_of_the_reference_model():
+    """fill_tasks(resolve_ties=True) leaves MIPGap and MIPGapAbs of reference_model as they were."""
+    import importlib
+
+    import pytest
+
+    try:
+        importlib.import_module("optlang.gurobi_interface")
+    except ImportError:
+        pytest.skip("gurobi is not installed; this test pins Gurobi-specific solver state")
+
+    ref = _reference_without_exchanges()
+    ref.solver = "gurobi"
+    ref.solver.problem.Params.MIPGap = 0.01
+    ref.solver.problem.Params.MIPGapAbs = 0.25
+
+    for _ in range(2):  # the second call starts from the state the first one left
+        gapped = ref.copy()
+        gapped.remove_reactions(["R7"], remove_orphans=False)
+        res = fill_tasks(gapped, ref, [make_test_task()], resolve_ties=True)
+        assert res.added_reactions == ["R7"]
+        assert ref.solver.problem.Params.MIPGap == 0.01
+        assert ref.solver.problem.Params.MIPGapAbs == 0.25

@@ -276,7 +276,8 @@ def connect_blocked_reactions(
     )
     if chosen is None:
         raise RuntimeError(
-            "Gap-filling is infeasible: the blocked reactions cannot all carry flux "
-            "even with every template reaction added."
+            "Gap-filling MILP is not optimal: the blocked reactions that can carry flux with the "
+            "templates added cannot all carry min_flux together, or the solver stopped for "
+            "another reason."
         )
     return GapFillResult(sorted(chosen), sorted(target), cannot, _build_filled(model, templates, chosen))

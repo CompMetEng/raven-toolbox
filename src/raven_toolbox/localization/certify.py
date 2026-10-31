@@ -83,7 +83,9 @@ def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_
             raise ValueError("model has no objective; pass biomass_reaction=...")
         biomass_reaction = max(obj, key=lambda r: obj[r]).id
     if min_growth is None:
-        base_opt = model.slim_optimize(error_value=0.0)
+        with model:
+            model.objective = biomass_reaction
+            base_opt = model.slim_optimize(error_value=0.0)
         if not base_opt or base_opt <= 0:
             raise ValueError(
                 "the draft model does not grow; cannot set a growth floor (pass min_growth=...)."
@@ -627,8 +629,9 @@ def assign_compartments(
         the model has no objective.
     min_growth : float or None
         Biomass flux that the materialised model has to reach on the primary medium (default
-        ``None``). When ``None``, the floor is 10 % of the optimal objective value of ``model``.
-        Raises :class:`ValueError` when ``model`` does not grow.
+        ``None``). When ``None``, the floor is 10 % of the maximum flux of ``biomass_reaction`` in
+        ``model``.
+        Raises :class:`ValueError` when ``biomass_reaction`` cannot carry flux in ``model``.
     growth_conditions : iterable of GrowthCondition or None
         Extra media on which the materialised model has to reach the floor of the condition
         (default ``None``, the primary medium only). The growth of each condition is reported in

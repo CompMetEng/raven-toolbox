@@ -1047,7 +1047,9 @@ def ftinit(
     a task that cannot be gap-filled stays infeasible, with a warning. When ``remove_genes`` is
     true and gene scores exist (given as ``gene_scores`` or derived from the data),
     negative-scoring genes are pruned from the GPRs at the end
-    (:func:`raven_toolbox.init.remove_low_score_genes`).
+    (:func:`raven_toolbox.init.remove_low_score_genes`). The pruning aggregates with its own
+    defaults (``"max"`` for isozymes, ``"min"`` for complexes), whatever ``isozyme_scoring`` and
+    ``complex_scoring`` are; RAVEN ``ftINIT`` calls ``removeLowScoreGenes`` without options too.
 
     An essential reaction is forced to carry ``min(0.99·|carried flux|, force_on)`` in the
     forced direction, with ``force_on`` (default 0.1). The carried flux of every reaction

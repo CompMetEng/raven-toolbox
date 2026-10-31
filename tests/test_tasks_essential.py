@@ -57,21 +57,18 @@ def test_cache_path_checkpoints_and_resumes(tmp_path, recwarn):
     This path had no coverage at all, despite being what makes a genome-scale prep
     survive an interruption. Two things are pinned here:
 
-    * the checkpoint leaves no ``.part`` file behind and emits no ResourceWarning --
-      the write used to hand ``open()`` straight to ``pickle.dump`` and rename the file
-      on the next line, leaving the flush-before-rename to refcount timing (it emitted a
-      ResourceWarning per task, 57 per Human-GEM prep, and on Windows renaming a file
-      with a live handle raises PermissionError);
+    * the checkpoint leaves no ``.part`` file behind and emits no ResourceWarning (on
+      Windows renaming a file with a live handle raises PermissionError);
     * a second call reading that cache returns the same answer, which is the whole point
       of the feature.
     """
-    cache = tmp_path / "essential.pkl"
+    cache = tmp_path / "essential.json"
 
     first = find_task_essential_reactions(
         make_test_model(), [make_test_task()], cache_path=cache)
 
     assert cache.exists(), "the checkpoint was never written"
-    assert not (tmp_path / "essential.pkl.part").exists(), "a .part file was left behind"
+    assert not (tmp_path / "essential.json.part").exists(), "a .part file was left behind"
     assert not [w for w in recwarn if issubclass(w.category, ResourceWarning)], (
         "the checkpoint leaked an unclosed file handle"
     )
@@ -81,6 +78,44 @@ def test_cache_path_checkpoints_and_resumes(tmp_path, recwarn):
         make_test_model(), [make_test_task()], cache_path=cache)
     assert resumed.reactions == first.reactions
     assert sorted(resumed.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+
+
+def test_cache_is_json_and_is_read_without_warning(tmp_path, recwarn):
+    import json
+
+    cache = tmp_path / "essential.json"
+    first = find_task_essential_reactions(
+        make_test_model(), [make_test_task()], cache_path=cache)
+    data = json.loads(cache.read_text(encoding="utf-8"))
+    assert data["version"] == 1 and set(data) == {"version", "per_index", "mets", "failed"}
+    assert sorted(data["per_index"]["0"]) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+
+    # A cache with a result for task 0 is used: the result comes from the file, not a solve.
+    data["per_index"]["0"] = {"R2": 1}
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    resumed = find_task_essential_reactions(
+        make_test_model(), [make_test_task()], cache_path=cache)
+    assert resumed.reactions == {"R2": 1}
+    assert first.reactions != resumed.reactions
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+
+def test_pickle_cache_is_ignored_with_a_warning(tmp_path):
+    import pickle
+
+    cache = tmp_path / "essential.pkl"
+    cache.write_bytes(pickle.dumps({"per_index": {0: {"R2": 1}}, "mets": set(), "failed": []}))
+    with pytest.warns(UserWarning, match="ignored"):
+        res = find_task_essential_reactions(
+            make_test_model(), [make_test_task()], cache_path=cache)
+    assert sorted(res.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+    assert cache.read_bytes()[:1] == b"{"  # overwritten by the JSON checkpoint
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_checkpoint_every_below_one_raises(bad):
+    with pytest.raises(ValueError, match="checkpoint_every"):
+        find_task_essential_reactions(make_test_model(), [make_test_task()], checkpoint_every=bad)
 
 
 def test_equation_metabolites_are_protected():

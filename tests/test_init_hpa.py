@@ -189,6 +189,27 @@ def test_hpa_gene_scores_match_tissue_and_celltype_case_insensitively(hpa_tsv):
     assert hpa_gene_scores(hpa, "liver", celltype="") == hpa_gene_scores(hpa, "liver")
 
 
+def test_hpa_gene_scores_empty_level_scores_use_the_defaults(hpa_tsv):
+    hpa = parse_hpa(hpa_tsv)
+    assert hpa_gene_scores(hpa, "liver", level_scores={}) == hpa_gene_scores(hpa, "liver")
+
+
+def test_rna_gene_scores_match_tissue_case_insensitively(rna_tsv):
+    rna = parse_hpa_rna(rna_tsv)
+    assert rna_gene_scores(rna, "LIVER") == rna_gene_scores(rna, "liver")
+    assert rna_gene_scores(rna, "Liver", reference=10.0) == rna_gene_scores(rna, "liver", reference=10.0)
+
+
+def test_rna_gene_scores_use_the_highest_tpm_over_tissue_names_differing_in_case(tmp_path):
+    p = tmp_path / "rna_case.tsv"
+    p.write_text("Gene\tGene name\tTissue\tTPM\n"
+                 "G1\tA\tLiver\t10\n"
+                 "G1\tA\tliver\t40\n"
+                 "G1\tA\tbrain\t10\n")
+    rna = parse_hpa_rna(p)
+    assert rna_gene_scores(rna, "LIVER", reference=10.0) == {"G1": pytest.approx(5 * 1.3862943611)}
+
+
 def test_rna_gene_scores_against_per_gene_mean(rna_tsv):
     """Default reference is per-gene cross-tissue mean (RAVEN arrayData.threshold default).
 

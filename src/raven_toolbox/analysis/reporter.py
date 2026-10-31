@@ -121,8 +121,8 @@ def reporter_metabolites(
         Gene id to differential-expression p-value, as described above.
     gene_fold_changes : Mapping[str, float] or None
         Gene id to log fold change. The default ``None`` returns only the ``"all"`` result.
-        Genes missing from the mapping count as fold change 0 and fall in the up-regulated
-        subset.
+        A gene with a p-value but no entry here, or a NaN entry, is in neither subset (RAVEN takes
+        one fold change per gene, and a NaN fold change satisfies neither ``>= 0`` nor ``< 0``).
     """
     given = {g: float(p) for g, p in gene_pvalues.items() if p is not None and not math.isnan(p)}
     invalid = [(g, p) for g, p in given.items() if not 0.0 <= p <= 1.0]
@@ -143,8 +143,10 @@ def reporter_metabolites(
     if gene_fold_changes is not None and any(
         v != 0 and not math.isnan(v) for g, v in gene_fold_changes.items() if g in scored
     ):
-        up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) >= 0}
-        down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) < 0}
+        # A scored gene without a fold change, like one with a NaN fold change, is in
+        # neither subset.
+        up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, math.nan) >= 0}
+        down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, math.nan) < 0}
         results.append(_reporter_one(model, up, "up"))
         results.append(_reporter_one(model, down, "down"))
     return results
