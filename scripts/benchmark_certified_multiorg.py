@@ -35,6 +35,7 @@ from raven_toolbox.localization import (  # noqa: E402
     load_deeploc,
 )
 from raven_toolbox.manipulation.compartments import merge_compartments  # noqa: E402
+from raven_toolbox.utils.gpr import set_gene_rule  # noqa: E402
 
 
 def _fix_notes_gpr(model):
@@ -44,7 +45,7 @@ def _fix_notes_gpr(model):
         ga = r.notes.get("GENE_ASSOCIATION")
         if ga:
             rule = re.sub(r"\bOR\b", "or", re.sub(r"\bAND\b", "and", ga)).strip().strip("()").strip()
-            r.gene_reaction_rule = rule
+            set_gene_rule(r, rule)
     cobra.manipulation.remove_genes(model, [g for g in model.genes if not g.reactions], remove_reactions=False)
 
 

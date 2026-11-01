@@ -305,6 +305,17 @@ def test_run_supporth_command(fake_run, fastas, tmp_path):
     assert not (tmp_path / "out" / "prefixed_inputs").exists()
 
 
+def test_run_supporth_threads_default_to_every_available_cpu(fake_run, fastas, tmp_path, monkeypatch):
+    """As RAVEN's runSuppOrth, which passes feature('numcores')'s assigned count."""
+    import os
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(7)), raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    run_supporth("bug", fastas["bug"], "templateGEM", fastas["templateGEM"], tmp_path / "out",
+                 supporth="suppOrth")
+    assert fake_run["cmd"][fake_run["cmd"].index("-t") + 1] == "7"
+
+
 def test_run_supporth_default_support(fake_run, fastas, tmp_path):
     run_supporth("bug", fastas["bug"], "templateGEM", fastas["templateGEM"], tmp_path / "out",
                  supporth="suppOrth")

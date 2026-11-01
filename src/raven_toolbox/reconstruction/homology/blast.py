@@ -1,8 +1,9 @@
-"""Run BLAST+ / DIAMOND (or load precomputed hits) into a homology hits table.
+"""Run BLAST+ or DIAMOND, or load precomputed hits, into a homology hits table.
 
 Each producer returns the bidirectional hits DataFrame (``HIT_COLUMNS``) consumed by
 :func:`~raven_toolbox.reconstruction.homology.get_model_from_homology`. Binaries are
-located via :func:`raven_toolbox.binaries.resolve_binary` (arg → env → PATH → bundled).
+located via :func:`raven_toolbox.binaries.resolve_binary` (argument, environment variable,
+PATH, bundled binary, in that order).
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ _FIELD_TO_HIT = {
 
 
 def _parse_tabular(text: str, from_id: str, to_id: str, sep: str) -> pd.DataFrame:
-    """Parse one BLAST/DIAMOND tabular output into hit rows for one direction."""
+    """Parse one BLAST or DIAMOND tabular output into hit rows for one direction."""
     if not text.strip():
         return pd.DataFrame(columns=HIT_COLUMNS)
     # round_trip parses each number exactly, as RAVEN does: the default parser can read
@@ -44,6 +45,14 @@ def _as_list(x):
     return [x] if isinstance(x, (str, Path)) else list(x)
 
 
+def _available_cpus() -> int:
+    """Number of CPUs this process may run on, the count MATLAB's ``feature('numcores')``
+    reports as assigned by the OS and RAVEN passes to the aligners."""
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
+    return max(1, os.cpu_count() or 1)
+
+
 def _run(cmd: list[str]) -> str:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -58,29 +67,55 @@ def run_blast(
     ref_fastas: Sequence[str | Path],
     *,
     evalue: float = 1e-4,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     blastp: str | Path | None = None,
     makeblastdb: str | Path | None = None,
 ) -> pd.DataFrame:
     """Bidirectional BLAST+ between an organism and template organisms.
 
-    ``model_ids`` and ``ref_fastas`` are parallel: ``ref_fastas[i]`` is the
-    reference proteome for template ``model_ids[i]``.
+    Returns the hits DataFrame, filtered at ``evalue``. Requires BLAST+
+    (``blastp``, ``makeblastdb``). ``threads`` defaults to every CPU the process
+    may use, as in RAVEN's ``getBlast``.
 
-    Returns the hits DataFrame (filtered at
-    ``evalue``). Requires BLAST+ (`blastp`, `makeblastdb`).
+    The default ``evalue`` of 1e-4 equals the ``-evalue 10e-5`` that MATLAB
+    RAVEN's ``getBlast`` hardcodes. Here ``evalue`` is an argument. The cutoff is
+    a pre-filter; the ``max_evalue``, ``min_align_len`` and ``min_identity``
+    arguments of
+    :func:`~raven_toolbox.reconstruction.homology.homology.get_model_from_homology`
+    apply stricter limits downstream.
 
-    The default matches MATLAB RAVEN's ``getBlast``, which hardcodes
-    ``-evalue 10e-5`` -- that is 1e-4, not 1e-5. Unlike RAVEN's, this one is an
-    argument, so a stricter search stays available; it's also a loose
-    pre-filter only, dominated downstream by
-    :func:`~raven_toolbox.reconstruction.homology.homology.get_model_from_homology`'s
-    much stricter ``max_evalue``/``min_align_len``/``min_identity``.
+    Parameters
+    ----------
+    organism_id : str
+        Identifier of the organism. It is written to the ``from_id`` column of the hits from
+        the organism to a template and to the ``to_id`` column of the hits in the other
+        direction.
+    fasta : str or Path
+        Protein FASTA file of the organism.
+    model_ids : Sequence[str]
+        Identifiers of the template models, written to the ``from_id`` and ``to_id`` columns.
+        The sequence is parallel to ``ref_fastas`` and must have the same length, otherwise
+        :class:`ValueError` is raised.
+    ref_fastas : Sequence[str or Path]
+        Protein FASTA files of the templates. ``ref_fastas[i]`` is the reference proteome for
+        template ``model_ids[i]``. A single path is accepted as a list of one.
+    evalue : float
+        E-value cutoff passed to ``blastp``. Default 1e-4.
+    threads : int or None
+        Number of threads passed to ``blastp``. Default ``None``, which uses every CPU the
+        process may use.
+    blastp : str or Path or None
+        Path of the ``blastp`` binary. Default ``None``, which resolves the binary with
+        :func:`raven_toolbox.binaries.resolve_binary`.
+    makeblastdb : str or Path or None
+        Path of the ``makeblastdb`` binary. Default ``None``, which resolves the binary with
+        :func:`raven_toolbox.binaries.resolve_binary`.
     """
     model_ids = list(model_ids)
     ref_fastas = _as_list(ref_fastas)
     if len(model_ids) != len(ref_fastas):
         raise ValueError("model_ids and ref_fastas must have the same length.")
+    threads = _available_cpus() if threads is None else threads
     blastp = resolve_binary("blastp", binary=blastp)
     makeblastdb = resolve_binary("makeblastdb", binary=makeblastdb)
     outfmt = "10 " + " ".join(_OUTFMT_FIELDS)  # 10 = CSV
@@ -112,30 +147,55 @@ def run_diamond(
     ref_fastas: Sequence[str | Path],
     *,
     evalue: float = 1e-3,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     sensitivity: str = "--more-sensitive",
     diamond: str | Path | None = None,
 ) -> pd.DataFrame:
     """Bidirectional DIAMOND between an organism and template organisms.
 
-    ``model_ids`` and ``ref_fastas`` are parallel: ``ref_fastas[i]`` is the
-    reference proteome for template ``model_ids[i]``. ``sensitivity`` is
-    passed straight through as a DIAMOND CLI flag (e.g. ``"--more-sensitive"``,
-    ``"--sensitive"``, or ``""`` to use DIAMOND's default fast mode).
+    Returns the hits DataFrame. Requires DIAMOND. ``threads`` defaults to
+    every CPU the process may use, as in RAVEN's ``getDiamond``.
 
-    Returns the hits DataFrame. Requires DIAMOND.
+    The default ``evalue`` of 1e-3 equals DIAMOND's own default, which MATLAB
+    RAVEN's ``getDiamond`` uses because it passes no ``--evalue``. ``run_blast``
+    uses 1e-4, following ``getBlast``. Neither cutoff has been calibrated
+    against data, unlike the KO-assignment cutoffs of
+    :func:`~raven_toolbox.reconstruction.kegg.assign_kos`, where measurement justified
+    diverging from RAVEN.
 
-    The default matches MATLAB RAVEN's ``getDiamond``, which passes no
-    ``--evalue`` at all and so inherits DIAMOND's own default of 1e-3. Stated
-    explicitly here rather than left implicit, since the two aligners disagree:
-    ``run_blast`` uses 1e-4, following ``getBlast``. Neither cutoff has been
-    calibrated against data on either side -- unlike the KO-assignment cutoffs,
-    where measurement did justify diverging from RAVEN.
+    Parameters
+    ----------
+    organism_id : str
+        Identifier of the organism. It is written to the ``from_id`` column of the hits from
+        the organism to a template and to the ``to_id`` column of the hits in the other
+        direction.
+    fasta : str or Path
+        Protein FASTA file of the organism.
+    model_ids : Sequence[str]
+        Identifiers of the template models, written to the ``from_id`` and ``to_id`` columns.
+        The sequence is parallel to ``ref_fastas`` and must have the same length, otherwise
+        :class:`ValueError` is raised.
+    ref_fastas : Sequence[str or Path]
+        Protein FASTA files of the templates. ``ref_fastas[i]`` is the reference proteome for
+        template ``model_ids[i]``. A single path is accepted as a list of one.
+    evalue : float
+        E-value cutoff passed to ``diamond blastp``. Default 1e-3.
+    threads : int or None
+        Number of threads passed to ``diamond blastp``. Default ``None``, which uses every CPU
+        the process may use.
+    sensitivity : str
+        DIAMOND command-line flag appended unchanged to the ``diamond blastp`` command, for
+        example ``"--more-sensitive"`` or ``"--sensitive"``. ``""`` appends no flag and
+        selects DIAMOND's default fast mode. Default ``"--more-sensitive"``.
+    diamond : str or Path or None
+        Path of the ``diamond`` binary. Default ``None``, which resolves the binary with
+        :func:`raven_toolbox.binaries.resolve_binary`.
     """
     model_ids = list(model_ids)
     ref_fastas = _as_list(ref_fastas)
     if len(model_ids) != len(ref_fastas):
         raise ValueError("model_ids and ref_fastas must have the same length.")
+    threads = _available_cpus() if threads is None else threads
     diamond = resolve_binary("diamond", binary=diamond)
 
     frames = []
@@ -159,9 +219,16 @@ def run_diamond(
 
 
 def blast_from_table(source: str | Path | pd.DataFrame) -> pd.DataFrame:
-    """Load a precomputed homology hits table (CSV path or DataFrame, not Excel).
+    """Load a precomputed homology hits table from a CSV path or a DataFrame (not Excel).
 
     Must contain the ``HIT_COLUMNS`` columns.
+
+    Parameters
+    ----------
+    source : str or Path or pandas.DataFrame
+        A DataFrame, or the path of a CSV file. The columns ``from_gene`` and ``to_gene`` of
+        a CSV are read as text, and numbers are parsed exactly. A table that lacks a column of
+        ``HIT_COLUMNS`` raises :class:`ValueError`.
     """
     # Force gene-id columns to str: an all-numeric gene-id column (e.g. Entrez ids)
     # would otherwise be read as int64 and never match the string gene ids in a model.

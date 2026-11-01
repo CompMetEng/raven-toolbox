@@ -1,24 +1,22 @@
-"""Flux-vs-expression change significance — port of RAVEN's ``getFluxZ`` and
+"""Significance of flux and expression changes: port of RAVEN's ``getFluxZ`` and
 ``analyzeSampling``.
 
 Both operate on the output of a random-sampling run comparing two conditions
-(e.g. :func:`~raven_toolbox.analysis.random_sampling`): :func:`get_flux_z`
+(for example :func:`~raven_toolbox.analysis.random_sampling`): :func:`get_flux_z`
 turns two sets of sampled flux vectors into a per-reaction Z-score for
 whether flux increased or decreased between them, and :func:`analyze_sampling`
 combines that Z-score with a per-reaction gene-expression t-score to say
 whether a reaction's flux and expression changed together, only one of them
-changed, or they moved in opposite directions.
+changed, or they changed in opposite directions.
 
-``analyzeSampling.m`` calls ``getFluxZ.m`` directly and cannot be usefully
-ported without it (CompMetEng/raven-gecko-parity#41), so both are ported
-together here.
+``analyzeSampling.m`` calls ``getFluxZ.m`` directly, so both are ported
+together (CompMetEng/raven-gecko-parity#41).
 
-Sample orientation is *samples × reactions* (rows are samples, columns are
-reaction ids) — the ``cobra.sampling`` convention
-:func:`~raven_toolbox.analysis.random_sampling` already returns, and the
-transpose of RAVEN's own reactions × samples arrays. This is a deliberate
-adaptation, not a literal port of the axis RAVEN happens to reduce over: it
-lets a sampling result be passed straight through with no manual transpose.
+Samples are oriented as samples × reactions (rows are samples, columns are
+reaction ids), the ``cobra.sampling`` convention that
+:func:`~raven_toolbox.analysis.random_sampling` returns. RAVEN's arrays are
+reactions × samples, the transpose. A sampling result can be passed
+without transposing.
 """
 from __future__ import annotations
 
@@ -48,8 +46,8 @@ def get_flux_z(solutions_a: pd.DataFrame, solutions_b: pd.DataFrame) -> pd.Serie
     Parameters
     ----------
     solutions_a:
-        Sampled flux vectors for the reference condition, *samples × reactions*
-        (e.g. ``random_sampling(...).samples``).
+        Sampled flux vectors for the reference condition, samples × reactions
+        (for example ``random_sampling(...).samples``).
     solutions_b:
         Sampled flux vectors for the test condition, same reaction columns.
 
@@ -59,12 +57,11 @@ def get_flux_z(solutions_a: pd.DataFrame, solutions_b: pd.DataFrame) -> pd.Serie
         Z-score per reaction (indexed by ``solutions_a``'s columns): positive
         when flux increased from A to B, negative when it decreased, 0 when
         the means are equal, clamped to ``[-100, 100]``. A reaction with zero
-        variance in both conditions gets exactly ``±100`` rather than a
-        division by zero.
+        variance in both conditions and different means gets ``±100``.
 
     Notes
     -----
-    A flux *decrease* with no variance in either condition scores ``-100``,
+    A flux decrease with no variance in either condition scores ``-100``,
     the same sign the general formula gives, as in RAVEN's ``getFluxZ``.
     """
     reaction_ids = _check_same_reactions(solutions_a, solutions_b)
@@ -99,37 +96,36 @@ def analyze_sampling(
         t-score for the change in gene expression, one per reaction, in the
         same order as ``solutions_a``'s columns. Positive means expression
         increased, negative means it decreased. A p-value can be converted
-        to this by the inverse error function, choosing the sign by hand
-        (the p-value alone does not carry direction).
+        to this by the inverse error function, with the sign chosen by hand
+        because the p-value does not carry direction.
     df:
         Degrees of freedom for the expression t-test.
     solutions_a, solutions_b:
-        Sampled flux vectors for the reference and test condition, *samples ×
-        reactions* — see :func:`get_flux_z`.
+        Sampled flux vectors for the reference and test condition, samples ×
+        reactions; see :func:`get_flux_z`.
 
     Returns
     -------
     pd.DataFrame
         Indexed by reaction id, with columns:
 
-        - ``concordant`` — probability flux and expression both changed
+        - ``concordant``: probability that flux and expression both changed
           significantly, in the same direction (RAVEN's ``pR``).
-        - ``expression_only`` — probability expression changed significantly
-          but flux did not, or they changed in opposite directions (``pH``).
-        - ``flux_only_or_discordant`` — probability flux changed
-          significantly but expression did not, or they changed in opposite
+        - ``expression_only``: probability that expression changed significantly
+          but flux did not, or that they changed in opposite directions (``pH``).
+        - ``flux_only_or_discordant``: probability that flux changed
+          significantly but expression did not, or that they changed in opposite
           directions (``pM``).
 
     Notes
     -----
-    Two simplifications relative to ``analyzeSampling.m``: it computes an
-    "opposite flux direction" branch (``pM=erf(|Z|)``, ``pH=(1-pM)*...``,
-    ``pR=0``) whose results are unconditionally overwritten by the very next
-    branch before ``scores`` is ever read — dead code, verified by tracing
-    every assignment, not replicated here. And it bundles its own ``tcdf``
-    (a pure-MATLAB fallback for when the Statistics Toolbox isn't installed);
-    this uses ``scipy.stats.t.cdf`` directly, which is exact and always
-    available.
+    Two differences from ``analyzeSampling.m``. First, ``analyzeSampling.m``
+    computes an "opposite flux direction" branch (``pM=erf(|Z|)``,
+    ``pH=(1-pM)*...``, ``pR=0``) whose results are unconditionally overwritten
+    by the next branch before ``scores`` is read; this dead code is not
+    replicated. Second, ``analyzeSampling.m`` bundles its own ``tcdf`` (a
+    pure-MATLAB fallback for when the Statistics Toolbox is not installed); this
+    function uses ``scipy.stats.t.cdf``.
     """
     reaction_ids = _check_same_reactions(solutions_a, solutions_b)
     tex = np.asarray(t_expression, dtype=float)

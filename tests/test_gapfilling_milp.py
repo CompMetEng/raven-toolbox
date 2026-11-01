@@ -196,3 +196,82 @@ def test_selection_that_does_not_restore_growth_is_reported(growth_gap, monkeypa
     result = fill_gaps_milp(draft, template, min_growth=0.005, verbose=False)
     assert result.added_reactions == ["r_missing"]
     assert result.exit_status == "not_restored"
+
+
+def _rxn(rid, mets, lb=0, ub=1000):
+    r = cobra.Reaction(rid, lower_bound=lb, upper_bound=ub)
+    r.add_metabolites({_met(m): c for m, c in mets.items()})
+    return r
+
+
+def test_growth_floor_is_on_the_weighted_objective():
+    """With objective coefficient 2 the floor applies to 2 * v, not to v."""
+    draft = cobra.Model("draft")
+    draft.add_reactions([_rxn("EX_A", {"A_c": 1}, 0, 10), _rxn("BIO", {"B_c": -1})])
+    draft.objective = {draft.reactions.BIO: 2.0}
+    template = cobra.Model("template")
+    template.add_reactions([_rxn("T1", {"A_c": -1, "B_c": 1})])
+    result = fill_gaps_milp(draft, template, min_growth=15, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["T1"]
+
+
+def test_growth_floor_is_shared_by_several_objective_reactions():
+    """A floor of 5 on BIO + BIO2 is met by one of them, so one template reaction suffices."""
+    draft = cobra.Model("draft")
+    draft.add_reactions([
+        _rxn("EX_A", {"A_c": 1}, 0, 10),
+        _rxn("BIO", {"B_c": -1}),
+        _rxn("BIO2", {"C_c": -1}),
+    ])
+    draft.objective = {draft.reactions.BIO: 1.0, draft.reactions.BIO2: 1.0}
+    template = cobra.Model("template")
+    template.add_reactions([_rxn("T1", {"A_c": -1, "B_c": 1}), _rxn("T2", {"A_c": -1, "C_c": 1})])
+    result = fill_gaps_milp(draft, template, min_growth=5, verbose=False)
+    assert result.exit_status == "optimal"
+    assert len(result.added_reactions) == 1
+
+
+def test_template_lower_bound_is_only_forced_when_selected():
+    """T2 has lb 1 but is not needed, so it is not added."""
+    draft = cobra.Model("draft")
+    draft.add_reactions([
+        _rxn("EX_A", {"A_c": 1}, 0, 10),
+        _rxn("BIO", {"B_c": -1}),
+        _rxn("EX_C", {"C_c": -1}),
+    ])
+    draft.objective = "BIO"
+    template = cobra.Model("template")
+    template.add_reactions([
+        _rxn("T1", {"A_c": -1, "B_c": 1}),
+        _rxn("T2", {"A_c": -1, "C_c": 1}, 1, 1000),
+    ])
+    result = fill_gaps_milp(draft, template, min_growth=5, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["T1"]
+
+
+def test_template_reaction_with_a_draft_id_is_renamed():
+    """A template reaction named like a draft reaction is a separate candidate."""
+    draft = cobra.Model("draft")
+    draft.add_reactions([_rxn("R1", {"a_c": -1, "b_c": 1}), _rxn("Rname", {"b_c": -1})])
+    draft.objective = "R1"
+    template = cobra.Model("template")
+    template.add_reactions([_rxn("Rname", {"a_c": 1})])
+    result = fill_gaps_milp(draft, template, min_growth=1, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["Rname_template"]
+    assert "Rname_template" in result.model.reactions
+    assert {m.id: c for m, c in result.model.reactions.Rname.metabolites.items()} == {"b_c": -1}
+
+
+def test_finite_template_bounds_are_not_capped_by_big_m():
+    """A template reaction with ub 5000 can carry a growth floor of 1500 although big_m is 1000."""
+    draft = cobra.Model("draft")
+    draft.add_reactions([_rxn("EX_A", {"A_c": 1}, 0, 5000), _rxn("BIO", {"B_c": -1}, 0, 5000)])
+    draft.objective = "BIO"
+    template = cobra.Model("template")
+    template.add_reactions([_rxn("T1", {"A_c": -1, "B_c": 1}, 0, 5000)])
+    result = fill_gaps_milp(draft, template, min_growth=1500, big_m=1000, verbose=False)
+    assert result.exit_status == "optimal"
+    assert result.added_reactions == ["T1"]

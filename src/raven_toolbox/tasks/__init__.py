@@ -1,9 +1,9 @@
 """Metabolic task definition, parsing, and checking.
 
-* :class:`Task` + :func:`parse_task_list` — the task-list file format.
-* :func:`check_tasks` + :class:`TaskResult` — run tasks against a model.
-* :func:`find_task_essential_reactions` + :class:`EssentialReactionsResult` — reactions
-  a model must use to satisfy a task list (the input for (f)tINIT's task layer).
+* :class:`Task` and :func:`parse_task_list`: the task-list file format.
+* :func:`check_tasks` and :class:`TaskResult`: run tasks against a model.
+* :func:`find_task_essential_reactions` and :class:`EssentialReactionsResult`: reactions
+  a model must use to satisfy a task list (the input for the task layer of (f)tINIT).
 """
 from raven_toolbox.tasks.check import (
     EssentialReactionsResult,

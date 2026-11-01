@@ -4,8 +4,8 @@ RAVEN keeps ``version`` and ``date`` on the model itself (``model.version``,
 ``model.date``). A cobra model has no such attributes, so raven-toolbox keeps them in
 ``model.notes``: ``notes["version"]`` and ``notes["metaData"]`` (which holds ``date`` and
 the descriptive fields). :func:`write_yaml_model` reads the version from the first and the
-date from the second, so setting them by hand means touching both. These two functions are
-the one place that does it.
+date from the second, so both entries change together. :func:`get_model_metadata` and
+:func:`set_model_metadata` read and write them.
 """
 from __future__ import annotations
 
@@ -19,13 +19,18 @@ __all__ = ["get_model_metadata", "set_model_metadata"]
 
 
 def get_model_metadata(model: cobra.Model) -> dict:
-    """Everything the model stores as metadata, as a plain dict (a copy).
+    """All metadata of the model as a plain dict (a copy).
 
-    That is ``version``, ``date`` and the descriptive fields, plus whatever else a file read
-    with :func:`read_yaml_model` put in ``metaData`` (for example ``id``, ``name`` and the
+    The dict holds ``version``, ``date`` and the descriptive fields, and any other entry that
+    :func:`read_yaml_model` put in ``metaData`` (for example ``id``, ``name`` and the
     default bounds). ``version`` is taken from ``notes["version"]``, falling back to
     ``notes["metaData"]``, the same order :func:`write_yaml_model` uses. Fields the model
     does not carry are absent.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose ``notes`` are read. The model is not changed.
     """
     notes = model.notes or {}
     meta = dict(notes.get("metaData") or {})
@@ -46,13 +51,15 @@ def set_model_metadata(
 
     Parameters
     ----------
-    version
-        Model version, e.g. ``"1.2.0"``.
-    date
+    model : cobra.Model
+        Model whose ``notes["version"]`` and ``notes["metaData"]`` are updated in place.
+    version : str or None
+        Model version, for example ``"1.2.0"``.
+    date : str or datetime.date or None
         Model date, as ``YYYY-MM-DD`` or a ``datetime.date`` (a ``datetime`` is reduced to its
-        date). Anything else raises. The YAML writer stamps today's date only when the model
-        has none, so pass one when the date should change.
-    **fields
+        date). Any other value raises ``ValueError``. The YAML writer stamps today's date only
+        when the model has none.
+    **fields : str
         Descriptive ``metaData`` fields: ``givenName``, ``familyName``, ``authors``,
         ``email``, ``organization``, ``taxonomy``, ``note`` and ``sourceUrl``.
 

@@ -1,10 +1,12 @@
 """Add transport reactions between compartments.
 
-cobra has no transport-reaction primitive. For each metabolite this matches the
-species by *name* across compartments (the source in ``from_compartment`` and its
-same-named twin in each target compartment), optionally creating the target
-metabolite, and
-builds a ``-1 from / +1 to`` reaction with a sequential ``tr_0001`` ID.
+cobra has no transport-reaction function. For each metabolite, the function matches the
+species by name across compartments (the source in ``from_compartment`` and the metabolite
+with the same name in each target compartment), optionally creates the target metabolite, and
+builds a ``-1 from / +1 to`` reaction with a sequential ``tr_0001`` ID. As in RAVEN's
+``addTransport``, the subsystem of each reaction names the two compartments:
+``Transport between <from> and <to>`` for a reversible reaction and
+``Transport from <from> to <to>`` for an irreversible one (the compartment ids are used).
 """
 from __future__ import annotations
 
@@ -19,11 +21,10 @@ from raven_toolbox.manipulation.add import _new_met_id
 
 
 def _index_by_name(mets: Iterable[Metabolite], compartment: str) -> dict[str, Metabolite]:
-    """Index metabolites by name, warning when a name is duplicated.
+    """Index metabolites by name, with a warning when a name is duplicated.
 
-    Same-name duplicates in a single compartment are unusual but legal in
-    cobra; a plain dict keyed by name would silently drop all but one, so
-    this warns and keeps the first.
+    cobra allows several metabolites with the same name in one compartment. A dict keyed by
+    name holds one of them, so the function warns and keeps the first.
     """
     out: dict[str, list[Metabolite]] = {}
     for m in mets:
@@ -76,22 +77,24 @@ def add_transport_reactions(
 
     Parameters
     ----------
-    from_compartment
+    model : cobra.Model
+        Model the reactions are added to, in place.
+    from_compartment : str
         Source compartment id.
-    to_compartments
+    to_compartments : str or Iterable of str
         Target compartment id(s).
-    metabolite_names
+    metabolite_names : str or Iterable of str or None
         Names of metabolites to transport. Default: every metabolite in
         ``from_compartment``.
-    reversible
+    reversible : bool
         If True (default), bounds span the cobra configuration default
         (reversible); otherwise lower bound 0.
-    only_to_existing
+    only_to_existing : bool
         If True (default), only transport a metabolite into a target
         compartment where a same-named metabolite already exists. If False,
-        create the missing target metabolite (copying name/formula/charge/
-        annotation from the source) before adding the transport.
-    id_prefix
+        create the missing target metabolite (with name, formula, charge and
+        annotation of the source) before adding the transport.
+    id_prefix : str
         Prefix for the sequential reaction IDs (``tr_0001``, ...).
 
     Returns
@@ -159,6 +162,11 @@ def add_transport_reactions(
             rxn = Reaction(next_id())
             rxn.name = f"{name} transport, {from_name}-{to_name}"
             rxn.bounds = bounds
+            rxn.subsystem = (
+                f"Transport between {from_compartment} and {to_comp}"
+                if reversible
+                else f"Transport from {from_compartment} to {to_comp}"
+            )
             added.append(rxn)
             pending_coeffs.append({src: -1, dst: 1})
 

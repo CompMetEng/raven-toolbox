@@ -8,8 +8,7 @@ the ``HIT_COLUMNS`` table that
 :func:`~raven_toolbox.reconstruction.homology.get_model_from_homology` takes, and
 :func:`run_supporth` runs the ``suppOrth`` command and reads its output.
 
-SuppOrth is an external tool and is not a Python dependency of raven-toolbox: nothing
-here imports it. Install it with
+SuppOrth is an external tool; raven-toolbox does not import it. Install it with
 ``pip install 'git+https://github.com/fma91/SuppOrth.git@stand_alone'`` followed by
 ``suppOrth install``. Its predictors run on Linux and macOS.
 """
@@ -27,6 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from raven_toolbox.reconstruction.homology.blast import _available_cpus
 from raven_toolbox.reconstruction.homology.hits import HIT_COLUMNS
 
 SOURCE = "SuppOrth"
@@ -141,12 +141,12 @@ def hits_from_supporth(
         ``keep_default_na=False`` or pass the path.
     organism_id
         SuppOrth species label of the organism to build a model for: the FASTA file
-        name without extension, or the ``--labels`` value. It becomes ``from_id`` /
+        name without extension, or the ``--labels`` value. It becomes ``from_id`` or
         ``to_id`` unless ``species_to_model`` maps it to another id.
     species_to_model
         SuppOrth species label to model id. A label mapped to ``None`` is left out.
-        When given, every label in the table must be a key. When ``None``, labels are
-        used as model ids.
+        When given, every label in the table must be present in the mapping. When ``None``,
+        labels are used as model ids.
     min_support
         Minimum number of predictors that found the pair (``Lv_support``). SuppOrth has
         already filtered the table with its own ``--supportLv`` and
@@ -155,8 +155,8 @@ def hits_from_supporth(
         Predictors that must all have found the pair, by column name
         (``"orthofinder"``, ``"sonicparanoid"``, ``"broccoli"``, ``"oma"``).
     min_identity, max_evalue
-        Filters on SuppOrth's alignment values. A pair without an alignment hit fails
-        both.
+        Filters on SuppOrth's alignment values: identity at least ``min_identity`` and
+        e-value at most ``max_evalue``. A pair without an alignment hit fails both.
     protein_to_gene
         Protein id to model gene id, as a dict, a JSON file, or a two-column
         tab-separated file (lines starting with ``#`` are skipped). Proteins missing
@@ -331,24 +331,12 @@ def run_supporth(
     support_lv: int | None = None,
     identity_filter: float = 80.0,
     alignment: str = "diamond",
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     extra_args: Sequence[str] = (),
     supporth: str | os.PathLike | None = None,
     **reader_kwargs,
 ) -> pd.DataFrame:
-    """Run SuppOrth on an organism and template proteomes and read its consensus.
-
-    ``model_ids`` and ``ref_fastas`` are parallel: ``ref_fastas[i]`` is the proteome
-    of template ``model_ids[i]``, with FASTA ids equal to that model's gene ids (or
-    mapped to them with ``protein_to_gene``). The ids are passed to SuppOrth as
-    ``--labels``, so the table uses them as species labels.
-
-    ``support_lv`` and ``identity_filter`` are SuppOrth's ``--supportLv`` and
-    ``--identity_filter``: a pair is kept if at least ``support_lv`` predictors found
-    it, or if its identity is above ``identity_filter``. ``support_lv`` defaults to
-    3, or to the number of ``tools`` when fewer are selected. ``extra_args`` are
-    appended to the command, for example ``["--resume"]`` or
-    ``["--oma", "path/to/Output"]``. Output is written to ``outdir``.
+    r"""Run SuppOrth on an organism and template proteomes and read its consensus.
 
     SuppOrth requires protein ids to be unique over all proteomes. When two FASTA
     files share an id (for example two templates of the same species), every id is
@@ -357,18 +345,69 @@ def run_supporth(
     contains the prefixed ids. SuppOrth's console output is written to
     ``outdir/run_supporth.log``.
 
-    Remaining keyword arguments go to :func:`hits_from_supporth`.
-
     Requires the ``suppOrth`` command, found from ``supporth``, then the
     ``RAVEN_SUPPORTH`` environment variable, then PATH. SuppOrth's predictors do not
-    run on Windows; use WSL or a Linux host, and read the result with
-    :func:`hits_from_supporth`.
+    run on Windows. On Windows, SuppOrth can run under WSL or on a Linux host, and its
+    ``suppOrth.tsv`` can be read with :func:`hits_from_supporth`.
+
+    Parameters
+    ----------
+    organism_id : str
+        SuppOrth species label of the organism to build a model for. It is also the id of the
+        organism in the returned hits. It must be non-empty, not ``"."`` or ``".."``, have no
+        leading or trailing space, contain none of ``,``, ``/`` and ``\``, and differ from
+        every id in ``model_ids``; otherwise :class:`ValueError` is raised.
+    fasta : str or Path
+        Protein FASTA file of the organism. A ``.gz`` file is read as gzip when the ids are
+        checked.
+    model_ids : Sequence[str]
+        Ids of the template models, with the same restrictions as ``organism_id``. The ids are
+        passed to SuppOrth as ``--labels``, so the table uses them as species labels. The
+        sequence is parallel to ``ref_fastas`` and must have the same length, otherwise
+        :class:`ValueError` is raised. At least one template is needed.
+    ref_fastas : Sequence[str or Path]
+        Protein FASTA files of the templates. ``ref_fastas[i]`` is the proteome of template
+        ``model_ids[i]``, with FASTA ids equal to that model's gene ids (or mapped to them with
+        ``protein_to_gene``). A single path is accepted as a list of one.
+    outdir : str or Path
+        Output directory of SuppOrth. It is created when it does not exist. It receives
+        ``suppOrth.tsv`` and ``run_supporth.log``.
+    tools : str or Sequence[str]
+        Predictors to run, passed to SuppOrth as ``--tools``: a comma-separated string or a
+        sequence of names. ``"all"`` selects ``orthofinder``, ``sonicparanoid`` and
+        ``broccoli``. Default ``"all"``.
+    support_lv : int or None
+        SuppOrth's ``--supportLv``: a pair is kept if at least ``support_lv`` predictors found
+        it, or if its identity is above ``identity_filter``. It must be between 1 and 4,
+        otherwise :class:`ValueError` is raised. Default ``None``, which uses 3, or the number
+        of ``tools`` when fewer are selected. A warning is issued when it is larger than the
+        number of ``tools`` and ``extra_args`` does not contain ``"--oma"``.
+    identity_filter : float
+        SuppOrth's ``--identity_filter`` in percent: a pair is kept if its identity is above
+        this value, or if at least ``support_lv`` predictors found it. Default 80.0.
+    alignment : str
+        Aligner, passed to SuppOrth as ``--alignment``. Default ``"diamond"``.
+    threads : int or None
+        Number of threads, passed to SuppOrth as ``-t``. Default ``None``, which uses every CPU
+        the process may use, as in RAVEN's ``runSuppOrth``.
+    extra_args : Sequence[str]
+        Arguments appended to the ``suppOrth run`` command, for example ``["--resume"]`` or
+        ``["--oma", "path/to/Output"]``. Default: none.
+    supporth : str or os.PathLike or None
+        Path of the ``suppOrth`` command. Default ``None``, which uses the ``RAVEN_SUPPORTH``
+        environment variable, then ``suppOrth`` or ``supporth`` on PATH. A missing command
+        raises :class:`FileNotFoundError`.
+    **reader_kwargs : dict
+        Keyword arguments forwarded to :func:`hits_from_supporth` (``species_to_model``,
+        ``min_support``, ``require_tools``, ``min_identity``, ``max_evalue`` and
+        ``protein_to_gene``).
     """
     if sys.platform == "win32":
         raise NotImplementedError(
             "SuppOrth's predictors run on Linux and macOS only. Run SuppOrth under WSL or on "
             "a Linux host, and read suppOrth.tsv with hits_from_supporth()."
         )
+    threads = _available_cpus() if threads is None else threads
     organism_id = str(organism_id)
     model_ids = [model_ids] if isinstance(model_ids, str) else [str(m) for m in model_ids]
     ref_fastas = [ref_fastas] if isinstance(ref_fastas, (str, Path)) else list(ref_fastas)

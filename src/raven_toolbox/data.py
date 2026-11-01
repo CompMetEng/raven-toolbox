@@ -1,18 +1,18 @@
 """Fetch and cache published data artefacts (KEGG reference model, tables, HMMs).
 
-The mirror of :mod:`raven_toolbox.binaries` for *data*: a version-pinned registry of
+The counterpart of :mod:`raven_toolbox.binaries` for data: a version-pinned registry of
 downloadable artefacts, fetched on first use, SHA256-verified, and cached under
-platformdirs so end users never rebuild them from a KEGG dump (that is the
-maintainer's job — see docs/maintaining_kegg_data.md).
+platformdirs so end users do not rebuild them from a KEGG dump (maintainers build them;
+see docs/maintaining_kegg_data.md).
 
 Resolution for any artefact file:
 
     explicit local dir  →  cached copy  →  download from the registry (verify,
         cache)  →  FileNotFoundError with guidance
 
-The registry is **empty until the artefacts are published** (same as
-``binaries._REGISTRY``); until then ``ensure_data_file`` raises an actionable
-error. Cache layout::
+The registry lists the ``kegg`` and ``transporters`` datasets. A dataset that is not
+registered makes ``ensure_data_file`` raise ``FileNotFoundError`` with guidance. Cache
+layout::
 
     $XDG_CACHE_HOME/raven_toolbox/data/<dataset>-<version>/<filename>
     (or ~/.cache/raven_toolbox/data/... if XDG_CACHE_HOME is unset)
@@ -98,8 +98,10 @@ def _data_cache_dir() -> Path:
 def _maybe_autoload(registry: dict) -> None:
     """Populate the default registry from ``$RAVEN_PYTHON_MANIFEST`` on first use, if set.
 
-    Fires only when the caller relies on the default (still-empty) ``_DATA_REGISTRY`` and
-    the environment variable points at a manifest. Local import avoids an import cycle with
+    Fires only when the caller uses the default ``_DATA_REGISTRY``, that registry is empty
+    and the environment variable points at a manifest. The registry as shipped lists the
+    ``kegg`` and ``transporters`` datasets, so the manifest is loaded only when the
+    registry has been emptied. Local import avoids an import cycle with
     :mod:`raven_toolbox.manifest`.
     """
     if registry is _DATA_REGISTRY and not registry and os.environ.get("RAVEN_PYTHON_MANIFEST"):
@@ -131,12 +133,12 @@ def ensure_data_file(
 
     Looks the file up in the registry for ``dataset`` (at ``version`` or the
     registry's default), downloads it to the version-pinned cache directory,
-    verifies its SHA256, and returns the path. Re-uses an already-cached copy.
+    verifies its SHA256, and returns the path. Reuses an already-cached copy.
 
     A freshly downloaded file is always SHA256-checked. ``verify`` additionally
-    re-checks an *already-cached* file's SHA256 (a mismatch — i.e. a corrupted
-    cache — discards it and re-downloads); it is off by default so the common
-    cache-hit path stays fast.
+    re-checks the SHA256 of an already-cached file (a mismatch means a corrupted cache, and
+    the file is discarded and downloaded again); it is off by default, so a cache hit does
+    not compute the hash.
     """
     registry = _DATA_REGISTRY if registry is None else registry
     bundle = _bundle(dataset, registry)
@@ -174,11 +176,11 @@ def ensure_kegg_data(*, version: str | None = None, registry: dict | None = None
     """Ensure the core KEGG artefacts are cached; return their directory.
 
     Fetches the single ``<version>_core.tar.gz`` bundle (the gene-free reference
-    model + the KO/reaction/organism-gene tables of :data:`CORE_KEGG_FILES`),
+    model + the KO, reaction and organism-gene tables of :data:`CORE_KEGG_FILES`),
     SHA256-verifies it, and extracts the version-prefixed members into the cache
-    directory on first use — ready to pass as the ``artefact_dir`` of
+    directory on first use. The returned directory can be passed as the ``artefact_dir`` of
     :func:`get_kegg_model_for_organism_from_artefacts`. The HMM libraries and the
-    taxonomy file are *separate* artefacts (see :func:`ensure_kegg_hmm_library`,
+    taxonomy file are separate artefacts (see :func:`ensure_kegg_hmm_library`,
     :func:`ensure_kegg_taxonomy`).
     """
     registry = _DATA_REGISTRY if registry is None else registry
@@ -204,12 +206,11 @@ def ensure_kegg_hmm_library(
 
     ``domain`` is ``"prokaryotes"`` or ``"eukaryotes"``. Fetches the gzipped
     concatenated library ``<version>_<domain>.hmm.gz`` and decompresses it once
-    (cached). Returns the path to the ``.hmm`` flatfile — the argument for
-    :func:`run_hmmsearch`, which searches it directly (no ``hmmpress`` needed).
+    (cached). Returns the path to the ``.hmm`` flatfile, which is the argument for
+    :func:`run_hmmsearch`; it searches the flatfile directly, without ``hmmpress``.
 
-    Shipping the gzip flatfile keeps the download ~10x smaller than a binary index,
-    stays portable across HMMER versions/platforms, and lets the same artefact serve
-    MATLAB RAVEN.
+    The gzip flatfile is ~10x smaller than a binary index, is portable across HMMER
+    versions and platforms, and serves MATLAB RAVEN as well.
     """
     registry = _DATA_REGISTRY if registry is None else registry
     ver = version or _bundle("kegg", registry)["version"]
@@ -227,10 +228,10 @@ def ensure_kegg_taxonomy(*, version: str | None = None, registry: dict | None = 
     """Ensure the KEGG ``taxonomy`` artefact is cached; return its (gzipped) path.
 
     The gzipped KEGG ``taxonomy`` file is the source for domain classification and for
-    regenerating the phylogenetic distance matrix — RAVEN's ``keggPhylDist``, which GECKO
-    uses to pick the closest organism for kcat assignment — via
-    :func:`raven_toolbox.reconstruction.kegg.phyl_dist` (which reads ``.gz`` directly). So
-    that capability needs only this published artefact, no MATLAB ``.mat`` file.
+    regenerating the phylogenetic distance matrix (RAVEN's ``keggPhylDist``, which GECKO
+    uses to pick the closest organism for kcat assignment) via
+    :func:`raven_toolbox.reconstruction.kegg.phyl_dist`, which reads ``.gz`` directly. That
+    capability needs only this published artefact and no MATLAB ``.mat`` file.
     """
     registry = _DATA_REGISTRY if registry is None else registry
     ver = version or _bundle("kegg", registry)["version"]

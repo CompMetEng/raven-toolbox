@@ -67,3 +67,20 @@ def test_expression_per_gene_reference():
     expr = {"g": 20.0}
     s = gene_scores_from_expression(expr, {"g": 5.0})
     assert s["g"] == pytest.approx(5 * math.log(4))
+
+
+def test_expression_zero_reference_scores_like_raven():
+    s = gene_scores_from_expression({"zero": 0.0, "one": 1.0, "ten": 10.0}, 0.0)
+    assert s == {"zero": -5.0, "one": 10.0, "ten": 10.0}
+
+
+def test_expression_missing_level_gets_no_score():
+    s = gene_scores_from_expression({"g": math.nan, "h": None, "k": 2.0}, 1.0)  # type: ignore[dict-item]
+    assert set(s) == {"k"}
+
+
+def test_nan_gene_score_is_left_out_of_the_rule(gpr_model):
+    scores = score_reactions_from_genes(gpr_model, {"g1": math.nan, "g2": math.nan, "g3": math.nan})
+    assert set(scores.values()) == {-2.0}
+    partial = score_reactions_from_genes(gpr_model, {"g1": 1.0, "g2": math.nan, "g3": 3.0})
+    assert not any(math.isnan(v) for v in partial.values())

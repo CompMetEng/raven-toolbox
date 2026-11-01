@@ -12,9 +12,9 @@ _NAME_COMP_RE = re.compile(r"^(?P<name>.+)\[(?P<comp>[^\[\]]+)\]$")
 def parse_name_comp(token: str) -> tuple[str, str | None]:
     """Split a ``name[comp]`` token into ``(name, compartment)``.
 
-    This is the one genuinely cobra-absent sliver of RAVEN ``getIndexes``'
-    ``metcomps`` mode and ``addRxns`` eqnType 3: resolving a metabolite written
-    as its *name* plus a compartment in square brackets, e.g. ``"ATP[c]"``.
+    This covers the part of the ``metcomps`` mode of RAVEN ``getIndexes`` and of ``addRxns``
+    eqnType 3 that cobra lacks: reading a metabolite written as its name plus a compartment
+    in square brackets, for example ``"ATP[c]"``.
 
     Returns ``(name, None)`` when there is no trailing ``[...]``.
 
@@ -34,14 +34,13 @@ def parse_name_comp(token: str) -> tuple[str, str | None]:
 
 
 def subsystem_to_str(value) -> str:
-    """Coerce a reaction ``subsystem`` to cobra's canonical ``str`` form.
+    """Convert a reaction ``subsystem`` to a ``str``.
 
-    cobra defines ``Reaction.subsystem`` as a plain string, but RAVEN/MATLAB and
-    "messy" YAML sometimes deliver a list/tuple of subsystem names (a reaction can
-    belong to several). This collapses any such value to a single ``;``-joined
-    string of its parts — losing no data, unlike taking only the first — and returns
-    ``""`` for an empty/None subsystem. Used wherever a subsystem is rendered or
-    compared so the handling is identical across modules.
+    cobra defines ``Reaction.subsystem`` as a string. RAVEN, MATLAB and YAML input can supply
+    a list or tuple of subsystem names, since a reaction can belong to several. A list or
+    tuple becomes one string of its non-blank parts joined by ``;``. ``None`` gives ``""``;
+    any other value is converted with ``str``. The modules that render or compare subsystems
+    call this function, so they handle subsystems identically.
 
     Examples
     --------

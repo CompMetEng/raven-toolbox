@@ -67,11 +67,11 @@ def _name_keyed_model() -> cobra.Model:
 
 def test_merge_compartments_collapses_to_one():
     """A_c + A_m collapse to one species; B_c + B_m to another; transport A_c↔A_m self-cancels and is
-    dropped. No copy lived in the (default, synthetic) merged compartment 's', so each merged id is an
-    existing id adapted to it: A_s, B_s."""
+    dropped. No copy lived in the merged compartment 's', so each merged metabolite keeps the id that
+    sorts first: A_c, B_c."""
     m = _two_compartment_model()
     merged, deleted, dupes = merge_compartments(m)
-    assert {x.id for x in merged.metabolites} == {"A_s", "B_s"}
+    assert {x.id for x in merged.metabolites} == {"A_c", "B_c"}
     # The transport reaction collapsed (A → A) and was deleted.
     assert "tr_A" in deleted
     # r_c and r_m are now both A → B; one of them gets deduplicated.
@@ -111,6 +111,10 @@ def test_merge_compartments_keeps_single_met_reactions_when_asked():
     # With keep, sym survives as a one-met reaction (consumes H).
     assert "sym" not in deleted_keep
     assert "sym" in {r.id for r in merged_keep.reactions}
+    merged_default, deleted_default, _ = merge_compartments(m)
+    # The default is RAVEN's deleteRxnsWithOneMet default, false.
+    assert "sym" in {r.id for r in merged_default.reactions}
+    assert deleted_default == deleted_keep
 
 
 def test_merge_compartments_keeps_pre_existing_exchange_reactions():
@@ -159,8 +163,8 @@ def test_merge_compartments_default_key_cannot_unify_name_keyed_model():
     suffix-stripping key leaves every metabolite distinct — nothing collapses. This is the failure
     the base_metabolite override exists to fix."""
     merged, deleted, _ = merge_compartments(_name_keyed_model())
-    # nothing unifies (4 distinct species); each existing id is adapted to the merged compartment 's'.
-    assert {x.id for x in merged.metabolites} == {"s_1_s", "s_2_s", "s_3_s", "s_4_s"}
+    # nothing unifies (4 distinct species); each metabolite keeps its own id.
+    assert {x.id for x in merged.metabolites} == {"s_1", "s_2", "s_3", "s_4"}
     assert deleted == []  # tr_A (s_1 -> s_2) still spans two distinct mets, not collapsed
 
 
@@ -170,8 +174,8 @@ def test_merge_compartments_base_metabolite_unifies_by_name():
     A->B reactions deduplicate — the same outcome as suffix-keyed ids get by default."""
     merged, deleted, dupes = merge_compartments(
         _name_keyed_model(), base_metabolite=lambda m: m.name)
-    # merged id is inherited from an existing member (adapted to 's'), NOT synthesised from the name key.
-    assert {x.id for x in merged.metabolites} == {"s_1_s", "s_3_s"}
+    # merged id is the id of a member, NOT synthesised from the name key.
+    assert {x.id for x in merged.metabolites} == {"s_1", "s_3"}
     assert "tr_A" in deleted
     surviving = {r.id for r in merged.reactions}
     assert len(surviving & {"r_c", "r_m"}) == 1
@@ -199,7 +203,7 @@ def test_merge_by_name_inherits_legal_ids_despite_punctuated_names():
     m.add_reactions([r, tr])
     merged, deleted, _ = merge_compartments(m, base_metabolite=lambda mm: mm.name)
     ids = {x.id for x in merged.metabolites}
-    assert ids == {"x1_s", "x3_s"}       # inherited from x1/x3, adapted to 's' — never the raw name
+    assert ids == {"x1", "x3"}           # inherited from x1/x3, never the raw name
     assert "tr" in deleted               # the two punctuated copies unified, so the transport cancels
     merged.slim_optimize()               # must not raise while building the solver problem
 
@@ -210,6 +214,95 @@ def test_merge_into_existing_compartment_keeps_that_compartments_ids():
     m = _two_compartment_model()  # A_c/A_m/B_c/B_m
     merged, _, _ = merge_compartments(m, merged_id="c", merged_name="cytosol")
     assert {x.id for x in merged.metabolites} == {"A_c", "B_c"}  # the 'c' copies' ids survive
+
+
+def _acetyl_coa_model(first: tuple[str, str], second: tuple[str, str]) -> cobra.Model:
+    """Two copies of acetyl-CoA, given as (id, compartment) in model order, and X_c:
+    R1 X_c => first copy, R2 second copy => X_c."""
+    m = cobra.Model("accoa")
+    a = cobra.Metabolite(first[0], name="acetyl-CoA", compartment=first[1])
+    b = cobra.Metabolite(second[0], name="acetyl-CoA", compartment=second[1])
+    x = cobra.Metabolite("X_c", name="X", compartment="c")
+    m.add_metabolites([a, b, x])
+    r1 = cobra.Reaction("R1", lower_bound=0, upper_bound=1000)
+    r1.add_metabolites({x: -1, a: 1})
+    r2 = cobra.Reaction("R2", lower_bound=0, upper_bound=1000)
+    r2.add_metabolites({b: -1, x: 1})
+    m.add_reactions([r1, r2])
+    return m
+
+
+def test_merge_compartments_keeps_the_id_that_sorts_first():
+    """The merged metabolite keeps the id that sorts first, whatever the order of the copies in
+    the model (RAVEN's mergeCompartments applies the same rule)."""
+    for order in ((("ACCOA_m", "m"), ("ACCOA_c", "c")), (("ACCOA_c", "c"), ("ACCOA_m", "m"))):
+        merged, _, _ = merge_compartments(_acetyl_coa_model(*order),
+                                          base_metabolite=lambda mm: mm.name)
+        assert {x.id for x in merged.metabolites} == {"ACCOA_c", "X_c"}
+        assert merged.metabolites.ACCOA_c.compartment == "s"
+
+
+def test_merge_compartments_prefers_the_copy_in_the_merged_compartment():
+    """A copy already in the merged compartment keeps its id, even when another copy's id sorts
+    before it."""
+    merged, _, _ = merge_compartments(_acetyl_coa_model(("ACCOA_c", "c"), ("ACCOA_z", "s")),
+                                      base_metabolite=lambda mm: mm.name)
+    assert {x.id for x in merged.metabolites} == {"ACCOA_z", "X_c"}
+
+
+def test_merge_compartments_keeps_the_annotation_and_notes_of_the_chosen_copy():
+    """RAVEN keeps every field of the kept row, metMiriams included."""
+    m = _acetyl_coa_model(("ACCOA_m", "m"), ("ACCOA_c", "c"))
+    m.metabolites.ACCOA_m.annotation = {"chebi": "CHEBI:1"}
+    m.metabolites.ACCOA_c.annotation = {"chebi": "CHEBI:2", "kegg.compound": "C00024"}
+    m.metabolites.ACCOA_c.notes = {"note": "cytosolic copy"}
+    merged, _, _ = merge_compartments(m, base_metabolite=lambda mm: mm.name)
+    kept = merged.metabolites.ACCOA_c
+    assert dict(kept.annotation) == {"chebi": "CHEBI:2", "kegg.compound": "C00024"}
+    assert kept.notes == {"note": "cytosolic copy", "merged_base_id": "ACCOA"}
+    kept.annotation["chebi"] = "changed"
+    assert m.metabolites.ACCOA_c.annotation["chebi"] == "CHEBI:2"
+
+
+def test_merge_compartments_stores_the_base_id_of_each_merged_metabolite():
+    """The base id is the kept copy's id without the suffix of the compartment it came from."""
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    merged, _, _ = merge_compartments(_two_compartment_model())
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in merged.metabolites} == {"A_c": "A", "B_c": "B"}
+    named, _, _ = merge_compartments(_name_keyed_model(), base_metabolite=lambda x: x.name)
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in named.metabolites} == {"s_1": "s_1", "s_3": "s_3"}
+
+
+def test_merge_compartments_stores_the_own_id_when_two_base_ids_coincide():
+    """X_c (name X) and X_m (name X mito) are kept apart by a name key; their base ids are both X,
+    so each stores its own id and the two stay distinct species."""
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    m = cobra.Model("m")
+    m.add_metabolites([cobra.Metabolite("X_c", name="X", compartment="c"),
+                       cobra.Metabolite("X_m", name="X mito", compartment="m"),
+                       cobra.Metabolite("Y_c", name="Y", compartment="c")])
+    merged, _, _ = merge_compartments(m, base_metabolite=lambda x: x.name)
+    assert {x.id: x.notes[MERGED_BASE_ID_NOTE] for x in merged.metabolites} == {
+        "X_c": "X_c", "X_m": "X_m", "Y_c": "Y"}
+
+
+def test_merged_base_id_survives_copy_and_model_files(tmp_path):
+    from raven_toolbox.io import read_yaml_model, write_yaml_model
+    from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+
+    m = _two_compartment_model()
+    m.metabolites.A_c.notes = {"note": "free text"}
+    merged, _, _ = merge_compartments(m)
+    write_yaml_model(merged, tmp_path / "m.yml")
+    cobra.io.write_sbml_model(merged, str(tmp_path / "m.xml"))
+    for model in (merged.copy(), read_yaml_model(tmp_path / "m.yml"),
+                  cobra.io.from_json(cobra.io.to_json(merged)),
+                  cobra.io.read_sbml_model(str(tmp_path / "m.xml"))):
+        assert model.metabolites.A_c.notes[MERGED_BASE_ID_NOTE] == "A"
+        assert model.metabolites.B_c.notes[MERGED_BASE_ID_NOTE] == "B"
+    assert read_yaml_model(tmp_path / "m.yml").metabolites.A_c.notes["note"] == "free text"
 
 
 # ----------------------------------------------------------------- copy_to_compartment

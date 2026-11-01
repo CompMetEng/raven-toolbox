@@ -106,7 +106,7 @@ def main() -> None:
 
     log(f"ftinit() starting (series={args.series})")
     t0 = time.perf_counter()
-    model = ftinit(prep, rxn_scores, gene_scores=gene_scores, series=args.series,
+    model = ftinit(prep, rxn_scores=rxn_scores, gene_scores=gene_scores, series=args.series,
                    seed=1234, time_limit=args.time_limit, verbose=True)
     extract_seconds = time.perf_counter() - t0
     log(f"ftinit built in {extract_seconds:.0f}s: "

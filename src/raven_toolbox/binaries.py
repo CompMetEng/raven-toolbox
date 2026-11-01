@@ -1,14 +1,15 @@
 """Locate and provision external command-line binaries (BLAST+, DIAMOND, …).
 
-Shared across tools (not homology-specific). Resolution order for any executable::
+The module is shared across tools. Resolution order for any executable::
 
     explicit path arg  →  env var (RAVEN_PYTHON_<TOOL>)  →  shutil.which (PATH)
       →  ensure_binary  (download the version-pinned ZIP from a raven_toolbox release,
                          verify SHA256, cache, return the path)
       →  FileNotFoundError with install guidance
 
-So a pre-installed/conda binary always wins; the bundled ZIP is the zero-setup
-fallback. See https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/maintaining_binaries.md
+A pre-installed or conda binary takes precedence over the bundled ZIP, which is the
+zero-setup fallback. See
+https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/maintaining_binaries.md
 for how the release ZIPs and the registry are produced and updated.
 """
 from __future__ import annotations
@@ -116,7 +117,7 @@ _AUTOFETCH_OFF = {"0", "false", "no", "off"}
 
 
 def platform_key() -> str:
-    """Return the ``<os>-<arch>`` key used in the registry (e.g. ``linux-x86_64``)."""
+    """Return the ``<os>-<arch>`` key used in the registry (for example ``linux-x86_64``)."""
     system = {"linux": "linux", "darwin": "macos", "windows": "windows"}.get(
         platform.system().lower(), platform.system().lower()
     )
@@ -163,11 +164,11 @@ def _sha256(path: Path) -> str:
 def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
     """Extract ``zf`` into ``dest_dir``, rejecting members that escape it.
 
-    ``ZipFile.extractall`` has no path-traversal guard (unlike tarfile's
-    ``filter="data"`` used in reconstruction/kegg/download.py), so a malicious or
+    ``ZipFile.extractall`` has no path-traversal guard (unlike the tarfile
+    ``filter="data"`` used in ``reconstruction/kegg/download.py``), so a malicious or
     corrupt archive could write outside the cache via absolute paths, ``..``, or
-    symlink members. SHA256 + HTTPS already make a hostile archive unlikely; this
-    is defence in depth.
+    symlink members. The SHA256 check and HTTPS make a hostile archive unlikely; this
+    check is an additional layer.
     """
     dest = dest_dir.resolve()
     for info in zf.infolist():
@@ -187,9 +188,9 @@ def _make_executable(path: Path) -> None:
     """Add the execute bit for everyone who can already read the file.
 
     ZIP archives carry Unix permissions in a field ``zipfile`` does not restore,
-    so every extracted file arrives non-executable on Linux and macOS. Derived
-    from the read bits rather than set to a fixed 0o755 so a restrictive umask
-    is not silently widened.
+    so every extracted file is non-executable on Linux and macOS. Each execute bit
+    is set where the matching read bit is set, and no fixed mode such as 0o755 is
+    applied, so a restrictive permission is not widened.
     """
     mode = path.stat().st_mode
     path.chmod(mode | ((mode & 0o444) >> 2))
@@ -201,7 +202,7 @@ def ensure_binary(executable: str, *, registry: dict | None = None) -> Path:
     Consults the registry for the current platform, downloads the pinned ZIP,
     verifies its SHA256, extracts it into the cache, and returns the executable
     path. Raises ``FileNotFoundError`` if no bundle for this platform is hosted.
-    Pass ``registry`` to consult an alternate bundle registry instead of the
+    Pass ``registry`` to consult an alternate bundle registry in place of the
     built-in one (mainly for tests or a custom manifest).
     """
     registry = _REGISTRY if registry is None else registry
@@ -278,9 +279,9 @@ def autofetch_enabled() -> bool:
     """Whether lazy first-use downloads are allowed.
 
     On by default (the zero-setup behaviour). Set ``RAVEN_PYTHON_AUTOFETCH`` to
-    ``0``/``false``/``no``/``off`` (any case) to disable, so :func:`resolve_binary`
-    stops at PATH and never reaches the network — for air-gapped or
-    strictly conda/system-managed setups.
+    ``0``, ``false``, ``no`` or ``off`` (any case) to disable, so :func:`resolve_binary`
+    stops at PATH and never reaches the network. This suits air-gapped or
+    conda-managed or system-managed setups.
     """
     val = os.environ.get(_AUTOFETCH_ENV)
     return val is None or val.strip().lower() not in _AUTOFETCH_OFF
@@ -290,8 +291,8 @@ def resolve_binary(executable: str, *, binary: str | os.PathLike | None = None) 
     """Resolve an executable to a path: arg → env var → PATH → bundled ZIP → error.
 
     The bundled-ZIP step is skipped when auto-fetch is disabled
-    (:func:`autofetch_enabled`); resolution then stops at PATH with an actionable
-    error instead of downloading.
+    (:func:`autofetch_enabled`); resolution then stops at PATH and raises an actionable
+    error without downloading.
     """
     if binary is not None:
         return os.fspath(binary)
@@ -325,9 +326,10 @@ class BinaryStatus:
     """Outcome of provisioning one executable.
 
     ``status`` is one of ``"present"`` (already on PATH / via env var),
-    ``"downloaded"`` (fetched from a bundle just now), ``"unavailable"`` (no bundle
-    hosted for this OS/arch — install via conda/WSL2), or ``"error"`` (download or
-    verification failed). ``detail`` is the path (present/downloaded) or message.
+    ``"downloaded"`` (fetched from a bundle in this call), ``"unavailable"`` (no bundle
+    hosted for this OS and architecture; install via conda or WSL2), or ``"error"`` (download or
+    verification failed). ``detail`` is the path for the statuses ``"present"`` and
+    ``"downloaded"`` and a message otherwise.
     """
 
     executable: str
@@ -362,9 +364,9 @@ def provision_binaries(
     With ``prefer_existing`` (default) a tool already on PATH or pointed at by its
     env var is left as-is (``"present"``) and not downloaded. Otherwise the bundle
     is fetched via :func:`ensure_binary` (``registry``, if given, is forwarded to
-    it in place of the built-in registry). Never raises for an individual tool —
-    a missing platform bundle becomes ``"unavailable"`` and a failed download
-    ``"error"``, so a caller can report the whole set at once.
+    it in place of the built-in registry). A missing platform bundle is recorded as
+    ``"unavailable"`` and a failed download as ``"error"``, so a caller can report the
+    whole set at once.
     """
     out: list[BinaryStatus] = []
     for exe in executables:

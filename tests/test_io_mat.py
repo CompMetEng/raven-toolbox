@@ -68,6 +68,11 @@ def _struct(path, varname):
     return raw[varname]
 
 
+def test_read_model_has_raven_solver_tolerance(model, tmp_path):
+    path = write_matlab_model(model, tmp_path / "m.mat", varname="m")
+    assert read_matlab_model(path).tolerance == 1e-9
+
+
 def test_writes_raven_field_names(model, tmp_path):
     """RAVEN's names, not COBRA's: id/name/eccodes/geneShortNames."""
     path = write_matlab_model(model, tmp_path / "m.mat", varname="m")

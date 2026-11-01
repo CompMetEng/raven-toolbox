@@ -1,15 +1,16 @@
-"""Remove reactions that leak mass from nothing — port of RAVEN's ``removeBadRxns``.
+"""Remove reactions that produce or consume mass from nothing (RAVEN ``removeBadRxns``).
 
-Repeatedly probes the model with
-:func:`~raven_toolbox.gapfilling.find_leak_metabolite` (produce, then consume),
-and each time a leak is found, blames and deletes one of the flux-carrying
-reactions the probe used — preferring one that is elementally unbalanced
-(:func:`~raven_toolbox.utils.get_elemental_balance`) over one whose balance
-could not even be determined, over an arbitrary one — then repeats until no
-leak remains. Intended for a *closed* model (no open exchange reactions): the
-docstring's own worked example is two versions of a DNA-polymerisation
-reaction recorded with different, incompatible stoichiometric conventions,
-which together let the model manufacture matter with the exchanges shut.
+The function probes the model repeatedly with :func:`~raven_toolbox.gapfilling.find_leak_metabolite`
+(first production, then consumption). Each time a leak is found, it selects one of the flux-carrying
+reactions of the probe solution at random and removes it. Elementally unbalanced reactions
+(:func:`~raven_toolbox.utils.get_elemental_balance`) are candidates first; with ``rxn_rules`` 2 or
+3, reactions with an undetermined balance are candidates when none is unbalanced, and with
+``rxn_rules`` 3 any flux-carrying reaction is. The search for a direction ends when no leak remains.
+With ``rxn_rules`` 1 or 2 it also ends, with a warning and while a leak remains, when no unbalanced
+candidate (for ``rxn_rules`` 2, no unbalanced or undetermined candidate) is in the probe
+solution. The function is intended for a closed model (no open exchange reactions). An example is
+a model with two versions of a DNA-polymerisation reaction that use incompatible stoichiometric
+conventions: together they produce matter while all exchanges are closed.
 """
 from __future__ import annotations
 
@@ -38,16 +39,16 @@ def remove_bad_reactions(
     ignore_int_bounds: bool = False,
     print_report: bool = False,
 ) -> list[str]:
-    """Remove reactions that let ``model`` produce/consume metabolites from nothing.
+    """Remove reactions that let ``model`` produce or consume metabolites from nothing.
 
     Modifies ``model`` in place.
 
     Parameters
     ----------
     model:
-        Model to clean up. Should not allow uptake/excretion for the search
-        to be meaningful — import it closed, or close it first (see
-        :func:`~raven_toolbox.manipulation.close_model`).
+        Model to clean up. The search expects a model without uptake and excretion; it warns about
+        open exchange reactions and continues. Close the model first with
+        :func:`~raven_toolbox.manipulation.close_model`.
     rxn_rules:
         Which reactions may be removed (default 1):
 
@@ -60,7 +61,7 @@ def remove_bad_reactions(
         the leak search; forwarded to
         :func:`~raven_toolbox.gapfilling.find_leak_metabolite`.
     is_names:
-        If True, ``ignore_mets`` holds metabolite names rather than ids.
+        If True, ``ignore_mets`` holds metabolite names; otherwise it holds ids.
     balance_elements:
         Elements to check when deciding whether a reaction is unbalanced
         (default carbon, phosphorus, sulfur, nitrogen, oxygen). A reaction
@@ -84,14 +85,11 @@ def remove_bad_reactions(
 
     Notes
     -----
-    ``removeBadRxns.m``'s ``refModel`` option (checking that a deletion keeps
-    a reference model feasible) is not ported: it is an unsupported stub in
-    RAVEN itself, which only warns that the feature "is currently not
-    supported" and otherwise ignores it. When more than one reaction ties
-    for "the" culprit, the one removed is picked at random (via the
-    standard library's shared :mod:`random` state, matching RAVEN's own use
-    of its default random generator) — a real source of non-determinism
-    inherited from the original algorithm, not introduced by this port.
+    The ``refModel`` option of RAVEN's ``removeBadRxns`` (checking that a deletion keeps a
+    reference model feasible) is not available. RAVEN itself only warns that the feature "is
+    currently not supported" and ignores it. When several reactions are candidates, the removed
+    one is chosen at random with the :mod:`random` state of the standard library, so the result
+    varies between runs unless that state is seeded.
     """
     open_exchanges = [r for r in model.boundary if r.lower_bound != 0 or r.upper_bound != 0]
     if open_exchanges:

@@ -1,15 +1,16 @@
-"""Sub-cellular localisation — predictor-agnostic, partial-update friendly.
+"""Sub-cellular localisation: predictor-independent placement of reactions in compartments.
 
 :func:`predict_localization` is the score-driven MILP entry point; :func:`assign_compartments`
-is the functionality-constrained variant (a flux-free placement master plus real-FBA certification,
-with optional gap-fill, transport pruning and sound reaction-level multi-localisation). :func:`load_deeploc`,
-:func:`load_mulocdeep` and :func:`load_compartments` parse modern predictor / evidence-database
-outputs into the ``gene × compartment`` :class:`LocalizationScores` DataFrame the algorithm
-consumes (pass :data:`DEFAULT_COMPARTMENT_MAP` to map labels to your model's compartment ids).
+is the functionality-constrained variant (a flux-free placement master and FBA certification,
+with optional gap-fill, transport pruning and reaction-level multi-localisation validated by FVA).
+:func:`load_deeploc`, :func:`load_mulocdeep` and :func:`load_compartments` parse predictor and
+evidence-database outputs into the ``gene × compartment`` :class:`LocalizationScores` DataFrame
+that the algorithms consume (:data:`DEFAULT_COMPARTMENT_MAP` maps labels to the compartment ids of
+the model).
 
 For sequence-based predictors (DeepLoc 2.1, MULocDeep), :func:`prepare_deeploc_input` writes a FASTA
-of your model's gene sequences (fetched from UniProtKB, headers = gene ids) ready to run, closing the
-loop with :func:`load_deeploc`.
+of the gene sequences of the model (fetched from UniProtKB, headers are the gene ids) as input to
+the predictor, and :func:`load_deeploc` reads the output.
 """
 from raven_toolbox.localization.assign import (
     AssignmentProposal,

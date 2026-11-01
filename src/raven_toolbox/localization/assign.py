@@ -1,38 +1,65 @@
 """Shared data structures and materialisation for compartment assignment.
 
-This module holds the pieces the compartment-assignment method builds on, independent of how
+This module holds the pieces that the compartment-assignment method builds on, independent of how
 placement is decided:
 
-* :class:`AssignmentProposal` — the outcome of an assignment (per-reaction / per-gene compartments,
+* :class:`AssignmentProposal`: the outcome of an assignment (per-reaction and per-gene compartments,
   added transports and gap-fill reactions, and a growth certificate);
-* :class:`GrowthCondition` — a soft multi-medium growth requirement;
-* :func:`apply_assignment` — materialise a proposal into a compartmentalised :class:`cobra.Model`
-  (a deep copy): move reactions to their compartments, duplicate them for multi-localisation, add the
-  star-topology transports, and pull in any gap-fill reactions.
+* :class:`GrowthCondition`: a soft multi-medium growth requirement;
+* :func:`apply_assignment`: materialise a proposal into a compartmentalised :class:`cobra.Model`
+  (a deep copy). It moves reactions to their compartments, duplicates them for multi-localisation,
+  adds the star-topology transports and adds any gap-fill reactions.
 
-Placement itself is decided by :func:`raven_toolbox.localization.assign_compartments`, whose acceptance
-test is a real FBA on the materialised model — so :func:`apply_assignment` (the materialised model) is
-authoritative for functionality. Localisation
-evidence is an agnostic ``gene x compartment`` score table
-(:class:`raven_toolbox.localization.scores.LocalizationScores`) — any predictor or database.
-
-Built on raven-toolbox + cobra.
+Placement is decided by :func:`raven_toolbox.localization.assign_compartments`, which accepts a
+placement only if an FBA on the model built by :func:`apply_assignment` reaches the growth floor.
+Localisation evidence is a ``gene x compartment`` score table
+(:class:`raven_toolbox.localization.scores.LocalizationScores`) from any predictor or database.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 import cobra
+
+from raven_toolbox.manipulation.compartments import MERGED_BASE_ID_NOTE
+from raven_toolbox.utils.gpr import set_gene_rule
 
 __all__ = ["AssignmentProposal", "GrowthCondition", "apply_assignment"]
 
 
 # --------------------------------------------------------------------------- helpers
 def _base_met(m: cobra.Metabolite) -> str:
+    """The default compartment-agnostic key of a metabolite.
+
+    The base id that :func:`~raven_toolbox.manipulation.merge_compartments` stored in
+    ``notes["merged_base_id"]``, if there is one; otherwise the id without the trailing
+    ``_<compartment>`` suffix of the metabolite's own compartment.
+    """
+    stored = (m.notes or {}).get(MERGED_BASE_ID_NOTE)
+    if isinstance(stored, str) and stored:
+        return stored
     if m.compartment and m.id.endswith(f"_{m.compartment}"):
         return m.id[: -(len(m.compartment) + 1)]
     return m.id
+
+
+def _check_unique_keys(metabolites: Iterable[cobra.Metabolite],
+                       base: Callable[[cobra.Metabolite], str]) -> None:
+    """Raise :class:`ValueError` when two metabolites in one compartment have the same key, which
+    would make them one species."""
+    seen: dict[tuple[str, str], str] = {}
+    clashes: list[str] = []
+    for m in metabolites:
+        key = (base(m), m.compartment)
+        if key in seen and seen[key] != m.id:
+            clashes.append(f"{seen[key]} and {m.id} (key {key[0]!r} in {key[1]!r})")
+        else:
+            seen.setdefault(key, m.id)
+    if clashes:
+        raise ValueError("metabolites with the same key in one compartment: "
+                         + "; ".join(clashes[:5])
+                         + "; pass a base_metabolite that tells them apart")
 
 
 def _rxn_compartment(rxn: cobra.Reaction) -> str | None:
@@ -42,21 +69,22 @@ def _rxn_compartment(rxn: cobra.Reaction) -> str | None:
 
 @dataclass(frozen=True)
 class GrowthCondition:
-    """An extra medium the placement must also support, checked when certifying functionality.
+    """An extra medium that the placement must also support, checked when certifying functionality.
 
-    :func:`assign_compartments` materialises the placement and confirms it reaches
-    ``min_growth`` by a real FBA not only on the primary medium but on each ``GrowthCondition`` medium
-    too — so a transport or placement has to serve **every** condition that needs it, which keeps
-    alternative-carbon-source pathways (respiration, β-oxidation, the glyoxylate cycle, ...) genuinely
-    connected rather than stranded in flux-dead islands that single-medium growth cannot see.
+    :func:`assign_compartments` materialises the placement and confirms that it reaches
+    ``min_growth`` by an FBA on the primary medium and on each ``GrowthCondition`` medium.
+    A transport or placement therefore has to serve every condition that needs it, which
+    keeps alternative-carbon-source pathways (respiration, β-oxidation, the glyoxylate cycle, ...)
+    connected to the rest of the network.
 
     Parameters
     ----------
     name:
-        Short label for the condition, used in the per-condition growth report. Distinct per condition.
+        Short label for the condition, used in the per-condition growth report. Unique per
+        condition.
     medium:
         ``exchange_reaction_id -> max uptake (>= 0)``. Exchanges not listed are closed for uptake,
-        so ``medium`` fully specifies the environment (carbon source *and* supplements).
+        so ``medium`` fully specifies the environment (carbon source and supplements).
     min_growth:
         Biomass floor this condition must reach on the materialised model.
     """
@@ -77,27 +105,29 @@ class AssignmentProposal:
     gene_compartments:
         ``gene_id -> [compartments]``.
     added_transports:
-        ``(base_metabolite_id, compartment)`` pairs needing a transport to/from
-        ``default_compartment``.
+        ``(base_metabolite_id, compartment)`` pairs that need a transport between the compartment
+        and ``default_compartment``.
     added_reactions:
-        ids of gap-fill reactions pulled from the ``universal`` model to keep the
+        ids of gap-fill reactions taken from the ``universal`` model to make the
         compartmentalised network functional.
     unplaced_reactions:
-        relocate-set reactions with no scored gene support (placed by function only).
+        relocate-set reactions that have genes, none of which has a score (the placement master
+        places them without gene evidence).
     objective:
-        placement-master objective (localisation score − transport − multi-penalty − gap-fill cost).
+        objective value of the placement. ``assign_compartments`` leaves it at the default ``0.0``.
     min_growth:
         the growth floor enforced.
     status:
-        solver status (``"optimal"``, ``"infeasible"``, ...) plus ``"certified"`` / ``"uncertified"``
-        — the placement's functionality was (or was not) confirmed by a real FBA on the materialised
-        model.
+        solver status (``"optimal"``, ``"infeasible"``, ...), ``"certified"`` or ``"uncertified"``.
+        The last two state whether an FBA on the materialised model confirmed the functionality of
+        the placement.
     certified:
-        ``True`` iff ``apply_assignment`` + FBA reaches the growth floor on **every** medium.
+        ``True`` if and only if ``apply_assignment`` followed by FBA reaches the growth floor on
+        every medium.
     growths:
         set by :func:`assign_compartments`: the materialised biomass flux per medium
-        (``"__primary__"`` plus each :class:`GrowthCondition` name), so the caller can see *how far*
-        an uncertified placement fell short without re-running FBA.
+        (``"__primary__"`` and each :class:`GrowthCondition` name), which shows how far
+        an uncertified placement fell short.
     """
 
     placements: dict[str, list[str]] = field(default_factory=dict)
@@ -117,15 +147,33 @@ def apply_assignment(
     base_metabolite: Callable[[cobra.Metabolite], str] | None = None,
     universal: cobra.Model | None = None,
 ) -> cobra.Model:
-    """Build the compartmentalised model from a proposal (deep copy; original untouched).
+    """Build the compartmentalised model from a proposal (deep copy; the original is unchanged).
 
-    ``default_compartment`` is the hub compartment star-topology transports route through. Pass the
-    same ``base_metabolite`` and ``universal`` used in :func:`assign_compartments` so the same
-    compartment-agnostic keying is used (existing per-compartment metabolites are reused rather than
-    duplicated) and the chosen gap-fill reactions are added.
+    The same ``base_metabolite`` and ``universal`` as in :func:`assign_compartments` give the same
+    compartment-agnostic keying (existing per-compartment metabolites are reused and not duplicated)
+    and add the chosen gap-fill reactions. Raises :class:`ValueError` when two metabolites in one
+    compartment of ``model`` have the same key.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model the proposal was computed for. It is copied; the original is unchanged.
+    proposal : AssignmentProposal
+        Placements, added transports and added gap-fill reactions to apply.
+    default_compartment : str
+        Hub compartment of the star-topology transports in ``proposal.added_transports``
+        (default ``"c"``).
+    base_metabolite : callable or None
+        Maps a metabolite to its compartment-agnostic key. The default key is the base id that
+        :func:`~raven_toolbox.manipulation.merge_compartments` stored on a merged metabolite,
+        otherwise the id without the suffix of the metabolite's own compartment.
+    universal : cobra.Model or None
+        Reaction database that contains the ids in ``proposal.added_reactions``. When ``None``,
+        no gap-fill reactions are added.
     """
     out = model.copy()
     base = base_metabolite if base_metabolite is not None else _base_met
+    _check_unique_keys(out.metabolites, base)
 
     # (base key, compartment) -> existing metabolite, so a reaction moved into a compartment
     # reuses the species already there instead of creating a parallel duplicate.
@@ -138,10 +186,13 @@ def apply_assignment(
         met = index.get(key)
         if met is None:
             new_id = f"{template.id}__{compartment}"
-            met = (out.metabolites.get_by_id(new_id) if new_id in out.metabolites
-                   else cobra.Metabolite(new_id, name=template.name, compartment=compartment,
-                                         formula=template.formula, charge=template.charge))
-            if new_id not in out.metabolites:
+            if new_id in out.metabolites:
+                met = out.metabolites.get_by_id(new_id)
+            else:
+                met = cobra.Metabolite(new_id, name=template.name, compartment=compartment,
+                                       formula=template.formula, charge=template.charge)
+                if MERGED_BASE_ID_NOTE in (template.notes or {}):
+                    met.notes[MERGED_BASE_ID_NOTE] = template.notes[MERGED_BASE_ID_NOTE]
                 out.add_metabolites([met])
             index[key] = met
         return met
@@ -174,7 +225,7 @@ def _add_universal_reaction(model, urxn, resolve):
     # copy, leaving the gap-fill reaction a disconnected island. Keying on (base, compartment) lands on
     # the species already there.
     new.add_metabolites({resolve(m, m.compartment): coeff for m, coeff in urxn.metabolites.items()})
-    new.gene_reaction_rule = urxn.gene_reaction_rule
+    set_gene_rule(new, urxn.gpr)
 
 
 def _move_reaction(rxn, compartment, resolve):
@@ -193,7 +244,7 @@ def _duplicate_reaction(model, rxn, compartment, resolve):
                          lower_bound=rxn.lower_bound, upper_bound=rxn.upper_bound)
     model.add_reactions([dup])
     dup.add_metabolites({resolve(m, compartment): coeff for m, coeff in rxn.metabolites.items()})
-    dup.gene_reaction_rule = rxn.gene_reaction_rule
+    set_gene_rule(dup, rxn.gpr)
 
 
 def _add_transport(model, base_key, compartment, default_compartment, index, resolve, n):

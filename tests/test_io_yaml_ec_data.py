@@ -12,12 +12,14 @@ Covers:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import cobra
 import numpy as np
 import pytest
 from cobra.io.yaml import yaml as cobra_yaml
+from ruamel.yaml import YAMLError
 from scipy import sparse
 
 from raven_toolbox.io import EcData, read_yaml_model, write_yaml_model
@@ -203,6 +205,50 @@ def test_save_round_trip_preserves_all_ec_fields(tmp_path):
     assert reloaded.ec.rxn_enz_mat[0, 0] == 1.0
 
 
+def _make_ec_model_with_enzymeless_rxn() -> cobra.Model:
+    """`_make_ec_model` plus a second ec reaction whose rxn_enz_mat row is empty."""
+    model = _make_ec_model()
+    ec = model.ec
+    mat = sparse.lil_matrix((2, 1), dtype=float)
+    mat[0, 0] = 1.0
+    model.ec = EcData(
+        gecko_light=False,
+        rxns=["R1", "R2"],
+        kcat=np.array([42.0, 7.0]),
+        source=["manual", "standard"],
+        notes=["", ""],
+        eccodes=["1.1.1.1", ""],
+        genes=ec.genes,
+        enzymes=ec.enzymes,
+        mw=ec.mw,
+        sequence=ec.sequence,
+        concs=ec.concs,
+        rxn_enz_mat=mat.tocsr(),
+    )
+    return model
+
+
+def test_save_omits_enzymes_of_rxn_without_enzymes(tmp_path):
+    out = tmp_path / "out.yml"
+    write_yaml_model(_make_ec_model_with_enzymeless_rxn(), out)
+    text = out.read_text()
+    assert text.count("- enzymes:") == 2  # R1 (ec-rxns) and P1 (ec-enzymes)
+    assert "!!omap []" not in text.split("ec-rxns:")[1]
+    block = re.split(r'- id: "?R2"?\n', text)[-1].split("ec-enzymes:")[0]
+    assert "enzymes" not in block
+    assert "standard" in block
+
+
+def test_save_round_trip_rxn_without_enzymes(tmp_path):
+    out = tmp_path / "out.yml"
+    write_yaml_model(_make_ec_model_with_enzymeless_rxn(), out)
+    reloaded = read_yaml_model(out)
+    assert reloaded.ec.rxns == ["R1", "R2"]
+    assert reloaded.ec.kcat.tolist() == [42.0, 7.0]
+    assert reloaded.ec.source == ["manual", "standard"]
+    assert reloaded.ec.rxn_enz_mat.toarray().tolist() == [[1.0], [0.0]]
+
+
 def test_save_skips_nan_and_empty_optional_fields(tmp_path):
     """NaN mw/concs and empty source/notes/eccodes/sequence get omitted
     from the YAML to keep files compact."""
@@ -295,6 +341,7 @@ def test_legacy_reverse_direction_prot_flipped(tmp_path):
             "metabolites": {"prot_P1": -1, "prot_pool": 1},  # swapped signs
             "lower_bound": -1000.0,
             "upper_bound": 0.0,
+            "objective_coefficient": 2.0,
         }
     )
     with pytest.warns(UserWarning, match="reverse-direction"):
@@ -306,6 +353,27 @@ def test_legacy_reverse_direction_prot_flipped(tmp_path):
     coefs = {m.id: c for m, c in r.metabolites.items()}
     assert coefs["prot_P1"] == 1.0
     assert coefs["prot_pool"] == -1.0
+    # The objective coefficient changes sign with the flux.
+    assert r.objective_coefficient == -2.0
+
+
+def test_forward_prot_reaction_with_negative_lower_bound_not_flipped(tmp_path):
+    """The sign of the ``prot_pool`` coefficient decides, not the bounds."""
+    doc = _minimal_model_doc()
+    doc["metabolites"].append({"id": "prot_P1", "name": "prot", "compartment": "c"})
+    doc["metabolites"].append({"id": "prot_pool", "name": "pool", "compartment": "c"})
+    doc["reactions"].append(
+        {
+            "id": "usage_prot_P1",
+            "metabolites": {"prot_P1": 1, "prot_pool": -1},
+            "lower_bound": -1000.0,
+            "upper_bound": 1000.0,
+        }
+    )
+    model = read_yaml_model(_write_yaml(doc, tmp_path / "m.yml"))
+    r = model.reactions.get_by_id("usage_prot_P1")
+    assert (r.lower_bound, r.upper_bound) == (-1000.0, 1000.0)
+    assert {m.id: c for m, c in r.metabolites.items()}["prot_pool"] == -1.0
 
 
 def test_legacy_bare_sequence_root_merged(tmp_path):
@@ -432,3 +500,145 @@ def test_validate_catches_coupling_matrix_shape_drift():
 def test_empty_gecko_light_flag_propagates():
     assert EcData.empty(1, 1, gecko_light=True).gecko_light is True
     assert EcData.empty(1, 1).gecko_light is False
+
+
+# --------------------------------------------------------------------------- #
+# Files as GECKO and RAVEN write them
+# --------------------------------------------------------------------------- #
+
+_GECKO_FILE = """\
+---
+!!omap
+- metabolites:
+  - !!omap
+    - id: "a"
+    - name: "A"
+    - compartment: "c"
+- reactions:
+  - !!omap
+    - id: "R1"
+    - lower_bound: 0
+    - upper_bound: 1000
+    - metabolites: !!omap
+      - a: -1
+- genes: []
+- compartments: !!omap
+  - c: "cytoplasm"
+- ec-rxns:
+  - !!omap
+    - id: "std"
+    - kcat: 10
+    - source: "custom"
+    - notes: {note}{enzymes_line}
+  - !!omap
+    - id: "enz"
+    - kcat: 5
+    - enzymes: !!omap
+      - P1: 1
+- ec-enzymes:
+  - !!omap
+    - genes: "G1"
+    - enzymes: "P1"
+    - mw: 30000
+    - sequence: "MAGIC"
+"""
+
+
+@pytest.mark.parametrize(
+    "enzymes_line",
+    ["", "\n    - enzymes: !!omap", "\n    - enzymes: !!omap []"],
+    ids=["missing", "omap", "omap-empty-flow"],
+)
+def test_load_reaction_with_empty_enzymes_omap(tmp_path, enzymes_line):
+    # An ec reaction without enzymes has no `enzymes` entry. Files written by earlier
+    # GECKO and RAVEN versions carry `- enzymes: !!omap` with nothing under it, and
+    # earlier raven-toolbox versions wrote `!!omap []`. All three read as no enzymes.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='"ok"', enzymes_line=enzymes_line), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.rxns == ["std", "enz"]
+    assert model.ec.enzymes == ["P1"]
+    assert model.ec.rxn_enz_mat.toarray().tolist() == [[0.0], [1.0]]
+
+
+def test_load_notes_in_doubled_quotes_keep_one_pair(tmp_path):
+    # An older writer put quotes around a note that carried its own, giving `""text""`,
+    # which is not valid YAML. readYAMLmodel.m strips one pair and keeps the other.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='""Putative: lowest kcat.""', enzymes_line=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == '"Putative: lowest kcat."'
+    assert model.ec.rxns == ["std", "enz"]
+
+
+def test_doubled_quotes_unescape_like_matlab_and_keep_apostrophes(tmp_path):
+    path = tmp_path / "m.yml"
+    note = '""it\'s a \\\\ and \\"inner\\" one""'
+    path.write_text(_GECKO_FILE.format(note=note, enzymes_line=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == '"it\'s a \\ and "inner" one"'
+
+
+@pytest.mark.parametrize(
+    "note, expected",
+    [
+        ('"a "b" c"', 'a "b" c'),
+        ('"say "hi""', 'say "hi"'),
+        ('"a \\"b\\" and "c" end"', 'a "b" and "c" end'),
+        ('"x \\\\ "y" it\'s"', 'x \\ "y" it\'s'),
+        ('"trailing "q""', 'trailing "q"'),
+    ],
+)
+def test_interior_unescaped_quote_is_kept_like_matlab(tmp_path, note, expected):
+    # readYAMLmodel.m strips the outer pair of quotes and keeps every quote inside.
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note=note, enzymes_line=""), encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes[0] == expected
+    assert model.ec.rxns == ["std", "enz"]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("'it's'", "it's"),
+        ("'a 'b' c'", "a 'b' c"),
+        ("'it's ''x'' z'", "it's 'x' z"),
+        ("'say \"hi\" it's'", 'say "hi" it\'s'),
+    ],
+)
+def test_interior_apostrophe_in_single_quoted_value_is_kept_like_matlab(tmp_path, value, expected):
+    # readYAMLmodel.m strips the outer pair of quotes and turns each '' into ', keeping a lone '.
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note='"ok"', enzymes_line="").replace('- name: "A"', f"- name: {value}")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == expected
+    assert model.ec.rxns == ["std", "enz"]
+
+
+def test_valid_single_quoted_values_are_read_unchanged(tmp_path):
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note="'a ''b'' c'", enzymes_line="").replace('- name: "A"', "- name: 'it''s'")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.metabolites.get_by_id("a").name == "it's"
+    assert model.ec.notes[0] == "a 'b' c"
+
+
+def test_valid_quoted_scalars_are_read_unchanged_next_to_a_repaired_one(tmp_path):
+    path = tmp_path / "m.yml"
+    text = _GECKO_FILE.format(note='"a "b" c"', enzymes_line="").replace(
+        '- source: "custom"', '- source: "cu\\\\st\\"om"'
+    ).replace("- id: \"enz\"", "- id: \"enz\"\n    - notes: \"fine\\n\"")
+    path.write_text(text, encoding="utf-8")
+    model = read_yaml_model(path)
+    assert model.ec.notes == ['a "b" c', "fine\n"]
+    assert model.ec.source[0] == 'cu\\st"om'
+
+
+def test_invalid_yaml_other_than_doubled_quotes_still_raises(tmp_path):
+    path = tmp_path / "m.yml"
+    path.write_text(_GECKO_FILE.format(note='"ok"', enzymes_line="").replace("kcat: 10", "kcat: [10"), encoding="utf-8")
+    with pytest.raises(YAMLError):
+        read_yaml_model(path)

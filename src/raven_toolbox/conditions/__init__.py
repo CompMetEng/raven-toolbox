@@ -1,14 +1,13 @@
-"""Apply named "condition" presets — bound diffs, biomass edits, etc.
+"""Apply named condition presets: bound changes, biomass edits and similar.
 
-A *condition* is a YAML file (or pre-parsed dict) describing a set of
-deterministic modifications to apply to a cobra model: a prelude that
-resets exchange bounds, edits to a cofactor pseudoreaction
-(metabolite removals + automatic charge rebalancing), a per-reaction
-bounds diff, and an optional biomass-stoichiometry delta.
+A condition is a YAML file (or a parsed dict) that describes deterministic
+modifications to a cobra model: a prelude that resets exchange bounds, edits to a
+cofactor pseudoreaction (metabolite removals and charge rebalancing), a
+per-reaction bounds change, and an optional biomass-stoichiometry delta.
 
-Yeast-GEM was the first consumer; the schema is documented in
-:func:`apply_condition` and is meant to be reusable for any GEM that
-wants to keep its condition presets as data rather than code.
+The schema is documented in the module docstring of
+``raven_toolbox.conditions.apply`` and applies to any GEM; yeast-GEM uses it for its
+condition presets.
 """
 from raven_toolbox.conditions.apply import (
     DEFAULT_RESET_EXCHANGES_UPPER_BOUND,

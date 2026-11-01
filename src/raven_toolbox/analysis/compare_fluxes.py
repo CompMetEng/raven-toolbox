@@ -1,13 +1,11 @@
-"""Flux differences between two conditions — port of RAVEN's ``compareFluxes``.
+"""Flux differences between two conditions: port of RAVEN's ``compareFluxes``.
 
 Compares two flux distributions for the same model and reports every reaction
-whose flux moved by more than ``cutoff``, largest change first, labelling the
-ones that were turned on, turned off or reversed direction. Optionally
-restricted to the reactions touching a given list of metabolite *names*.
+whose flux changed by more than ``cutoff``, largest change first, labelling the
+reactions that were turned on, turned off or reversed direction. The comparison can be
+restricted to the reactions touching a given list of metabolite names.
 
-The result is a tidy DataFrame plus id lists, rather than RAVEN's printed table
-— the console rendering is presentation, and a DataFrame is what downstream
-analysis actually wants.
+The result is a DataFrame plus id lists; RAVEN's printed table is not reproduced.
 """
 from __future__ import annotations
 
@@ -31,12 +29,14 @@ class CompareFluxesResult:
     ``changed`` holds one row per reaction whose ``|flux2 - flux1|`` exceeded the
     cutoff, sorted by ``abs_delta`` descending, with columns ``reaction``,
     ``name``, ``flux1``, ``flux2``, ``abs_delta``, ``rel_change`` and ``type``.
-    ``rel_change`` is ``(flux2 - flux1) / |flux1|``, and is ``NaN`` when the
-    reference flux is below the cutoff — the reaction has no baseline to be
-    relative to. ``type`` is ``"on"``, ``"off"``, ``"flip"`` or ``""``.
+    ``rel_change`` is ``(flux2 - flux1) / |flux1|``, and is ``NaN`` when
+    ``|flux1|`` is below the cutoff, because the reaction has no baseline. ``type`` is
+    ``"on"``, ``"off"``, ``"flip"`` or ``""``.
 
-    ``turned_on`` / ``turned_off`` / ``flipped`` are reaction-id lists in the
-    model's own order, not the sorted order of ``changed``.
+    ``turned_on``, ``turned_off`` and ``flipped`` are reaction-id lists in the
+    model's own order, not the sorted order of ``changed``. ``missing_metabolites`` lists
+    the names of ``metabolite_list`` that match no metabolite, and ``n_considered`` is the
+    number of reactions compared.
     """
 
     changed: pd.DataFrame
@@ -76,20 +76,19 @@ def compare_fluxes(
     model:
         The model both flux vectors are for.
     reference:
-        Flux for the reference condition (e.g. wild type), indexed by reaction id.
+        Flux for the reference condition (for example wild type), indexed by reaction id.
         Every reaction in the model must be present.
     comparison:
-        Flux for the condition being compared against it (e.g. a mutant).
+        Flux for the condition being compared against it (for example a mutant).
     cutoff:
-        A reaction is *active* when ``|flux| > cutoff``, and *changed* when
+        A reaction is active when ``|flux| > cutoff``, and changed when
         ``|flux2 - flux1| > cutoff``. Both comparisons are strict.
     metabolite_list:
-        Metabolite *names*, compared case-insensitively against
+        Metabolite names, compared case-insensitively against
         ``Metabolite.name``. If given, only reactions touching at least one of
-        them are compared; every other reaction is left out of the result
-        entirely rather than reported as unchanged. A name matching no
-        metabolite is reported in
-        :attr:`CompareFluxesResult.missing_metabolites` rather than raising.
+        them are compared; every other reaction is omitted from the result.
+        A name matching no metabolite is reported in
+        :attr:`CompareFluxesResult.missing_metabolites` and does not raise.
 
     Returns
     -------

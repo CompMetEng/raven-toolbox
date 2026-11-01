@@ -1,16 +1,16 @@
 """Task gap-filling for ftINIT.
 
-After ftINIT extracts a context-specific model, some metabolic tasks may no longer be
-feasible (the scoring removed reactions a task needs). :func:`fill_tasks` restores
-feasibility by adding back the **minimum-cost** set of reactions from the reference
-(template) model — cost = ``−score``, so high-scoring reactions are preferred — one
-task at a time, only for tasks that are actually infeasible (a cheap LP check gates
-the expensive MILP), accumulating additions across tasks.
+After ftINIT extracts a context-specific model, some metabolic tasks may be infeasible,
+because the scoring removed reactions that a task needs. :func:`fill_tasks` restores
+feasibility by adding back the minimum-cost set of reactions from the reference
+(template) model. The cost of a reaction is ``-min(score, -0.1)``, so high-scoring reactions
+are preferred. The function handles one task at a time, only tasks that are infeasible (a
+cheap LP check precedes the expensive MILP), and accumulates the additions across tasks.
 
-This is a different MILP from ftINIT's main extraction: it *adds* reactions to satisfy
-the task's ranged metabolite bounds (RAVEN's two-column ``b``), rather than selecting
-which to keep by expression score. Exchange reactions are not used to fill gaps (task
-inputs/outputs come from the task's ``b``), so they are excluded as candidates.
+This MILP differs from the main extraction of ftINIT: it adds reactions to satisfy the
+task's ranged metabolite bounds (RAVEN's two-column ``b``) and does not select reactions by
+expression score. Exchange reactions are no candidates, because the task inputs and outputs
+come from the task's ``b``.
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from raven_toolbox.tasks.check import (
     apply_task_constraints,
     task_name_maps,
 )
+from raven_toolbox.utils.gpr import set_gene_rule
 
 _FILL_TIME_LIMIT = 300.0  # RAVEN ftINITFillGapsMILP TimeLimit (per task)
 _FILL_SEED = 26           # RAVEN ftINITFillGapsMILP Seed
@@ -40,12 +41,8 @@ _MAX_SCORE = -0.1       # RAVEN min(score, -0.1): every added reaction costs ≥
 
 # A resolve_ties tie-break phase is adopted whether it proves or times out (see
 # _resolve_ties_fill), so it is given a fraction of the primary fill's own budget rather
-# than the full amount again: a phase that would not converge within the full budget has
-# been observed (on genome-scale Human-GEM) to still not converge, only slower; a phase
-# that does converge does so far inside either budget (a pure integer count/id-rank
-# objective with a 0.4 absolute gap). Not independently tuned — see the ftINIT
-# reproducibility study on raven-docs for the experiment that would calibrate this
-# properly instead of halving on general principle.
+# than the full amount again: a phase that does converge does so far inside either budget
+# (a pure integer count/id-rank objective with a 0.4 absolute gap). Not tuned.
 _TIE_BREAK_TIME_FRACTION = 0.5
 
 
@@ -59,12 +56,14 @@ class TaskFillResult:
 
 
 def _feasible(model: cobra.Model, task: Task, name_to_id, comp_to_ids) -> bool:
-    """Is ``task`` feasible in ``model`` (boundaries closed)? Tested in place, then reverted.
+    """Whether ``task`` is feasible in ``model`` (boundaries closed).
 
-    Avoids copying the (genome-scale) model for each of the task list's feasibility checks
-    — the copy dominated gap-fill runtime. ``with model:`` reverts the closed boundaries and
-    everything ``apply_task_constraints`` does through cobra's API; the untracked direct
-    metabolite mass-balance bound edits are snapshotted and restored (as in check_tasks).
+    The test runs in place and is reverted. It avoids copying the (genome-scale) model for
+    each feasibility check of the task list, because a model copy per check takes longer than
+    the check.
+    ``with model:`` reverts the closed boundaries and everything ``apply_task_constraints``
+    does through cobra's API; the untracked direct edits of the metabolite mass-balance bounds
+    are saved and restored (as in check_tasks).
     """
     bounds, missing = _metabolite_bounds(task, name_to_id, comp_to_ids)
     if missing:
@@ -89,11 +88,11 @@ def _add_reference_reactions(
 ) -> None:
     """Add ``rxn_ids`` from ``reference_model`` to ``target`` by reconstruction.
 
-    ``cobra.Reaction.copy()`` deep-copies through the reaction↔metabolite graph and hits the
-    recursion limit on large (and, on newer Python, even small) models, so the reactions are
-    rebuilt from their id/bounds/stoichiometry/GPR instead — matching RAVEN's ``addRxns``
-    (which adds reactions from equations, not by copying objects). Metabolites the reactions
-    need that are missing from ``target`` are created first.
+    The reactions are rebuilt from their id, name, bounds, stoichiometry and GPR, because
+    ``cobra.Reaction.copy()`` deep-copies through the reaction-metabolite graph and reaches the
+    recursion limit on large models (and, on newer Python, on small ones too). This matches
+    RAVEN's ``addRxns``, which adds reactions from equations and does not copy objects.
+    Metabolites that the reactions need and that are missing from ``target`` are created first.
     """
     have = {m.id for m in target.metabolites}
     new_mets: dict[str, cobra.Metabolite] = {}
@@ -115,14 +114,15 @@ def _add_reference_reactions(
     target.add_reactions([new for new, _ in built])
     for new, src in built:
         new.add_metabolites({target.metabolites.get_by_id(m.id): c for m, c in src.metabolites.items()})
-        new.gene_reaction_rule = src.gene_reaction_rule
+        set_gene_rule(new, src.gpr)
 
 
 def _set_fill_solver(model: cobra.Model, time_limit: float | None, seed: int) -> None:
-    """Match RAVEN ``ftINITFillGapsMILP``: single-threaded, fixed seed, tight integrality.
+    """Set the solver parameters of RAVEN ``ftINITFillGapsMILP``.
 
-    The seed matters: the MILP is degenerate (many equal-cost fills), and a fixed seed
-    makes the chosen reactions reproducible run to run.
+    The parameters are one thread, a fixed seed and tight integrality. The MILP is degenerate
+    (many equal-cost fills), so a fixed seed makes the chosen reactions reproducible between
+    runs.
     """
     try:  # Gurobi-specific; harmless on other backends
         params = model.solver.problem.Params
@@ -136,29 +136,33 @@ def _set_fill_solver(model: cobra.Model, time_limit: float | None, seed: int) ->
             model.solver.configuration.timeout = int(time_limit)
 
 
-def _snapshot_solver_params(model: cobra.Model):
-    """Save whatever :func:`_set_fill_solver` is about to overwrite.
+_GUROBI_FILL_PARAMS = ("Threads", "Seed", "IntFeasTol", "TimeLimit", "MIPGap", "MIPGapAbs")
 
-    ``model.solver.problem.Params`` (Gurobi) and ``model.solver.configuration.timeout``
-    (the generic optlang fallback) are raw solver state, not cobra/optlang model
-    attributes — ``with model:`` does not know about them and will not revert them on
-    exit, unlike everything else :func:`_gap_fill_task` touches on a shared reference
-    model. Pair with :func:`_restore_solver_params`.
+
+def _snapshot_solver_params(model: cobra.Model):
+    """Save the solver state that :func:`_set_fill_solver` and :func:`_resolve_ties_fill` set.
+
+    ``model.solver.problem.Params`` (Gurobi) and ``model.solver.configuration.timeout`` (the
+    generic optlang fallback) are raw solver state. ``with model:`` does not revert them on
+    exit, unlike the other changes that :func:`_gap_fill_task` makes to a shared reference
+    model. :func:`_restore_solver_params` restores the saved state. The Gurobi parameters are
+    ``Threads``, ``Seed``, ``IntFeasTol``, ``TimeLimit``, ``MIPGap`` and ``MIPGapAbs``.
     """
     try:  # Gurobi-specific; harmless on other backends
         params = model.solver.problem.Params
-        return "gurobi", (params.Threads, params.Seed, params.IntFeasTol, params.TimeLimit)
+        return "gurobi", {name: getattr(params, name) for name in _GUROBI_FILL_PARAMS}
     except Exception:  # noqa: BLE001
         return "generic", model.solver.configuration.timeout
 
 
 def _restore_solver_params(model: cobra.Model, saved) -> None:
-    """Undo :func:`_set_fill_solver`, from a snapshot taken by :func:`_snapshot_solver_params`."""
+    """Undo the parameter changes of a gap-fill, from a :func:`_snapshot_solver_params` snapshot."""
     kind, value = saved
     if kind == "gurobi":
         try:  # noqa: BLE001 - if this now fails, the params were never changed either
             params = model.solver.problem.Params
-            params.Threads, params.Seed, params.IntFeasTol, params.TimeLimit = value
+            for name, parameter_value in value.items():
+                setattr(params, name, parameter_value)
         except Exception:  # noqa: BLE001
             pass
     else:
@@ -168,11 +172,12 @@ def _restore_solver_params(model: cobra.Model, saved) -> None:
 def _resolve_ties_fill(work, prob, candidates, cost_expr, time_limit) -> list[str] | None:
     """Pin the degenerate min-cost gap-fill to a single, reproducible set (on ``work``).
 
-    Like the extraction MILP, the fill has many equal-cost solutions and the solver returns
-    an arbitrary one (seed/version dependent). Hold the cost at its optimum, then lexicographically
-    minimise the number of added reactions and then their summed id rank — both integer
-    objectives, provable with a cheap absolute gap below 1. Returns the chosen reaction ids,
-    or ``None`` if a phase did not converge (the caller then keeps the arbitrary min-cost fill).
+    Like the extraction MILP, the fill has many equal-cost solutions, and the solver returns
+    an arbitrary one that depends on the seed and the solver version. The function holds the
+    cost at its optimum, then lexicographically minimises the number of added reactions and
+    then their summed id rank; both are integer objectives, provable with a cheap absolute gap
+    below 1. Returns the chosen reaction ids, or ``None`` if a phase did not converge (the
+    caller then keeps the arbitrary min-cost fill).
     """
     yvars = {cid: work.variables[f"_fill_{cid}"] for cid in candidates}
     primary_cost = work.objective.value or 0.0
@@ -247,39 +252,33 @@ def _gap_fill_task(
 ) -> list[str]:
     """Min-cost reference reactions that make ``task`` feasible (RAVEN ``ftINITFillGaps``).
 
-    The MILP runs directly on ``reference_model``, closed and holding every candidate
-    reaction already, rather than copying candidates into the target model one at a
-    time (mirrors RAVEN's ``fullModel = tRefModel``) — copying the (thousands of)
-    candidate reactions into a genome-scale model per task dominates runtime and can
-    overflow the recursion limit, so a per-task copy risks never returning an
-    incumbent within the time limit.
+    The MILP runs directly on ``reference_model``, which is closed and holds every candidate
+    reaction already (as RAVEN's ``fullModel = tRefModel``). Copying thousands of candidate
+    reactions into a genome-scale model for each task dominates runtime and can overflow the
+    recursion limit. A copy of ``reference_model`` per task is also expensive on a
+    Gurobi-backed model: ``cobra.Model.copy()`` deep-copies through pickle's ``__getstate__``
+    and ``__setstate__``, which rebuild every variable and constraint from its sympy
+    expression one at a time, and on a genome-scale reference model that rebuild takes more
+    time than the MILP solve itself.
 
-    Everything done to ``reference_model`` here is reverted before returning, same
-    as if it were never touched: closing boundaries, the added binary variables and
-    constraints, and the objective are all cobra/optlang context-tracked and undone
-    by ``with reference_model:`` on the way out. Two things are not tracked and are
-    snapshotted/restored by hand instead — the metabolite constraint bounds
-    ``apply_task_constraints`` edits directly (same as :func:`_feasible`), and the
-    raw Gurobi parameters :func:`_set_fill_solver` sets (``model.solver.problem.Params``
-    is not a cobra/optlang attribute cobra's context system knows about). This matters
-    because ``reference_model`` is ``prep.ref_model`` — shared and reused across every
-    sample built from the same :class:`~raven_toolbox.init.PrepData`, so a change that
-    leaked out of one task's gap-fill (single-threaded, 300 s time limit) would still
-    be sitting there for the next sample's extraction.
+    The closed boundaries, the added binary variables and constraints, and the objective are
+    tracked by cobra and optlang contexts and undone by ``with reference_model:`` on the way
+    out. Two changes are not tracked and are saved and restored by hand: the metabolite
+    constraint bounds that ``apply_task_constraints`` edits directly (as in :func:`_feasible`),
+    and the raw Gurobi parameters ``Threads``, ``Seed``, ``IntFeasTol`` and ``TimeLimit`` that
+    :func:`_set_fill_solver` sets (``model.solver.problem.Params`` is not part of the cobra
+    context system). With ``resolve_ties=True`` on Gurobi, :func:`_resolve_ties_fill` also sets
+    ``MIPGap`` to 0.0 and ``MIPGapAbs`` to 0.4; these two are saved and restored as well.
+    ``reference_model`` is ``prep.ref_model``, which is shared by every sample built from the
+    same :class:`~raven_toolbox.init.PrepData`, so the restored parameters keep the gap-fill of
+    one task (single-threaded, 300 s time limit) from persisting into the extraction of the
+    next sample.
 
-    A prior version copied ``reference_model`` per call instead of mutating it in
-    place, since that copy is what RAVEN's ``fullModel = tRefModel`` does too and it
-    is cheap there — MATLAB arrays copy in a memcpy. ``cobra.Model.copy()`` on a
-    Gurobi-backed model is not that: it deep-copies through pickle's
-    ``__getstate__``/``__setstate__``, which rebuilds every variable and constraint
-    from its sympy expression one at a time, and on a genome-scale reference model
-    that rebuild dominated gap-fill runtime far more than the MILP solve itself (the
-    same lesson :func:`_feasible` already applied to the per-task feasibility check,
-    just not yet extended to this, the more expensive of the two copies it replaced).
-
-    Every reference reaction not already ``present`` in the target model is gated by a binary
-    (off ⇒ no flux) and its cost minimised subject to the task's ranged metabolite bounds.
-    Returns the ids of the reactions the MILP turns on.
+    Every non-boundary reference reaction that is not in ``present_ids`` is gated by a binary
+    (off means no flux), and the cost is minimised subject to the ranged metabolite bounds of
+    the task. Returns the ids of the reactions that the MILP turns on. Raises
+    :class:`~cobra.exceptions.OptimizationError` when there is no candidate, when the task
+    cannot be applied to the reference, or when the MILP finds no solution.
     """
     saved_solver_params = _snapshot_solver_params(reference_model)
     try:
@@ -359,38 +358,61 @@ def fill_tasks(
     mutate_in_place: bool = False,
     verbose: bool = False,
 ) -> TaskFillResult:
-    """Add minimum-cost reference reactions so every task is feasible in ``model``.
+    """Add minimum-cost reference reactions that make the tasks feasible in ``model``.
 
-    Port of RAVEN ``fitTasks`` with ``gapFillMode`` ``'preMerged'`` (ftINIT's mode): task by
-    task, if a task is infeasible in the (growing) model, :func:`_gap_fill_task` finds the
-    minimum-cost set of reference
-    reactions that restores it and they are added, carrying forward so later tasks see the
-    earlier additions. ``reference_model`` supplies the candidates (its reactions not yet in
-    the model, excluding exchange/boundary reactions); ``rxn_scores`` (original reaction id →
-    score) sets each candidate's cost as ``−min(score, −0.1)`` (missing → cost 1).
-    ``should_fail`` tasks are ignored. Each gap-fill MILP is single-threaded with a fixed
-    ``seed`` and bounded by ``time_limit`` (RAVEN's 300 s). ``resolve_ties`` (opt-in) pins the
-    degenerate min-cost fill to the fewest, lowest-id reactions so the added set does not
-    depend on the solver seed/version — see :func:`_resolve_ties_fill`. At genome scale its
-    own phases can themselves exhaust ``time_limit``; when that happens the (still-adopted)
-    incumbent is an unproven tie-break and a warning is raised, same as the main extraction.
+    Port of RAVEN ``fitTasks`` with ``gapFillMode`` ``'preMerged'`` (the mode of ftINIT).
+    Task by task, if a task is infeasible in the growing model, :func:`_gap_fill_task` finds
+    the minimum-cost set of reference reactions that restores it, and the function adds them;
+    later tasks see the earlier additions. ``reference_model`` supplies the candidates (its
+    reactions not yet in the model, excluding exchange and boundary reactions). Tasks with
+    ``should_fail`` are ignored. Each gap-fill MILP is single-threaded, uses a fixed ``seed`` and
+    is bounded by ``time_limit`` (RAVEN's 300 s).
 
-    Boundary reactions are closed while testing/solving each task, so task inputs and outputs
-    come solely from the task's ranged metabolite bounds (RAVEN gap-fills the exchange-free
-    model). The returned model keeps its boundary reactions. Tasks that could not be filled
-    are returned in ``failed_tasks`` **and** raised as a warning — a non-empty list means the
-    context model cannot perform those tasks, which callers should not ignore silently.
+    Boundary reactions are closed while testing and solving each task, so the task inputs and
+    outputs come solely from the ranged metabolite bounds of the task (RAVEN gap-fills the
+    exchange-free model). The returned model keeps its boundary reactions. Tasks that could not
+    be filled are listed in ``failed_tasks`` and reported with a warning; the model cannot
+    perform those tasks.
 
-    ``mutate_in_place`` (default ``False``) skips the initial ``model.copy()`` and gap-fills
-    ``model`` directly, returning it as ``TaskFillResult.model``. Copying a genome-scale,
-    Gurobi-backed model is itself expensive (see :func:`_gap_fill_task`'s docstring for the
-    same lesson applied to ``reference_model``), so a caller that already holds a disposable
-    copy it will not use again — :func:`raven_toolbox.init.ftinit`, whose own ``out`` is
-    exactly that — should pass ``mutate_in_place=True`` to avoid paying for a second one.
-    Leave it ``False`` (the default) whenever the caller still needs ``model`` afterward.
-
-    ``verbose`` prints one line per task (added count and running total, matching RAVEN
-    ``fitTasks``'s per-task report), silent by default.
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to gap-fill. It is copied first unless ``mutate_in_place`` is ``True``.
+    reference_model : cobra.Model
+        Model that supplies the candidate reactions. After each gap-fill, the Gurobi parameters
+        ``Threads``, ``Seed``, ``IntFeasTol`` and ``TimeLimit`` (the generic solver timeout on
+        other solvers) are restored. With ``resolve_ties=True`` on Gurobi, ``MIPGap`` and
+        ``MIPGapAbs`` are restored as well.
+    tasks : Iterable[Task]
+        Tasks to make feasible in the result. Tasks with ``should_fail`` are skipped. A task
+        that cannot be gap-filled stays infeasible, is listed in ``failed_tasks`` and gives a
+        warning.
+    rxn_scores : Mapping[str, float] or None
+        Keyword-only; default ``None``. Score of each reference reaction, keyed by original
+        reaction id. The cost of a candidate is ``-min(score, -0.1)``, and a missing score
+        gives cost 1. ``None`` gives every candidate cost 1.
+    time_limit : float or None
+        Keyword-only; default 300 s (RAVEN's value). Time limit of each gap-fill MILP in
+        seconds. ``None`` sets no limit with Gurobi. At genome scale the tie-break phases of
+        ``resolve_ties`` can exhaust it; the incumbent is then an unproven tie-break and a
+        warning is issued, as in the main extraction.
+    seed : int
+        Keyword-only; default 26 (RAVEN's value). Random seed of each gap-fill MILP. It is
+        applied to Gurobi only and ignored by other solvers.
+    resolve_ties : bool
+        Keyword-only; default ``False``. When ``True``, the degenerate min-cost fill is
+        pinned to the fewest, lowest-id reactions, so that the added set does not depend on
+        the solver seed or version (see :func:`_resolve_ties_fill`).
+    mutate_in_place : bool
+        Keyword-only; default ``False``. When ``True``, ``model`` is gap-filled directly and
+        returned as ``TaskFillResult.model``; otherwise ``model`` is copied first and stays
+        unchanged. Copying a genome-scale, Gurobi-backed model is expensive (see
+        :func:`_gap_fill_task` for the same effect on ``reference_model``).
+        :func:`raven_toolbox.init.ftinit` passes ``True`` because its ``out`` is a disposable
+        copy.
+    verbose : bool
+        Keyword-only; default ``False``. Prints one line per task that is not skipped (added
+        count and running total).
     """
     scores = dict(rxn_scores or {})
     tasks = list(tasks)

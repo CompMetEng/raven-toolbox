@@ -95,3 +95,26 @@ def test_remove_genes_absent_gene_is_noop(model):
 def test_remove_genes_bad_policy(model):
     with pytest.raises(ValueError, match="blocked_reactions"):
         remove_genes(model, ["G1"], blocked_reactions="explode")
+
+
+def test_remove_genes_default_constrains_as_raven(model):
+    n_reactions = len(model.reactions)
+    blocked = remove_genes(model, ["G1"])
+    assert blocked == ["R1"]
+    assert len(model.reactions) == n_reactions
+    r1 = model.reactions.get_by_id("R1")
+    assert r1.bounds == (0, 0)
+    assert r1.gene_reaction_rule == ""
+
+
+def test_remove_genes_drops_unused_genes(model):
+    model.genes.append(cobra.Gene("G9"))  # orphan gene, not requested
+    remove_genes(model, ["G1"])
+    # G2 was named by R1, which is kept (constrained), so it stays; G9 goes.
+    assert sorted(g.id for g in model.genes) == ["G2", "G3", "G4"]
+
+
+def test_remove_genes_remove_mode_drops_genes_of_deleted_reactions(model):
+    model.genes.append(cobra.Gene("G9"))
+    remove_genes(model, ["G1"], blocked_reactions="remove")
+    assert sorted(g.id for g in model.genes) == ["G3", "G4"]

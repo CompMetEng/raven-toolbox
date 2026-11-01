@@ -109,6 +109,21 @@ def test_tasks_optional_and_passed_through(two_models):
     assert bool(res.tasks.loc["make_E", "A"]) is False
 
 
+def test_tasks_with_a_repeated_id_keep_their_own_results(two_models):
+    """The task matrix is filled by position: two tasks with one id get their own rows."""
+    for m in two_models:
+        for met in ("D_c", "E_c"):
+            if met in [x.id for x in m.metabolites]:
+                m.add_boundary(m.metabolites.get_by_id(met), type="demand")
+    makes_e = Task(id="BS", inputs=[("A[c]", 0.0, 1000.0)], outputs=[("E[c]", 1.0, 1.0)])
+    makes_d = Task(id="BS", inputs=[("A[c]", 0.0, 1000.0)], outputs=[("D[c]", 1.0, 1.0)])
+    res = compare_models(two_models, tasks=[makes_e, makes_d])
+    assert res.tasks is not None
+    assert list(res.tasks.index) == ["BS", "BS"]
+    assert res.tasks.iloc[0].tolist() == [False, True]    # only B makes E
+    assert res.tasks.iloc[1].tolist() == [True, False]    # only A makes D
+
+
 def test_duplicate_or_missing_model_id_disambiguated():
     """Two models with the same id (or empty id) should get distinct labels."""
     a = _mk("", [("r1", {"X_c": -1, "Y_c": 1}, None)])

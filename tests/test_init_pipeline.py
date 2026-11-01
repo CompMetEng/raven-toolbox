@@ -3,12 +3,14 @@
 Oracles: RAVEN tinitTests T0001/T0002 on testModel with the default '1+1' schedule.
 """
 
+import cobra
 from tinit_oracles import (
     TEST_MODEL_FTINIT_NO_TASKS,
     TEST_MODEL_FTINIT_SPONT_R7_R10,
     TEST_MODEL_FTINIT_WITH_TASK,
     TEST_MODEL_SCORES,
     TEST_MODEL_TASK_ESSENTIAL_MERGED,
+    _build,
     expr_for_rxn_score,
     make_test_model,
     make_test_task,
@@ -22,6 +24,7 @@ from raven_toolbox.init import (
     score_reactions_from_genes,
 )
 from raven_toolbox.init.score import gene_scores_from_expression
+from raven_toolbox.tasks import Task
 
 
 def _scores(model):
@@ -53,7 +56,14 @@ def test_get_init_steps_default():
     assert steps[0].ignore_mask == (1, 1, 1, 1, 1, 1, 1, 0)
     assert steps[1].how_to_use_prev == "essential"
     assert steps[1].ignore_mask == (1, 0, 0, 0, 1, 0, 0, 0)
-    assert len(get_init_steps("full")) == 1
+    full = get_init_steps("full")
+    assert len(full) == 1
+    assert full[0].milp_runs == ({"mip_gap": 0.0004, "time_limit": 10000, "abs_gap": 10.0},)
+
+
+def test_get_init_steps_full_ignores_no_metabolites():
+    assert get_init_steps("full", mets_to_ignore=["H2O"])[0].mets_to_ignore == ()
+    assert get_init_steps("1+1", mets_to_ignore=["H2O"])[0].mets_to_ignore == ("H2O",)
 
 
 # --------------------------------------------------------------------------- #
@@ -63,7 +73,7 @@ def test_ftinit_no_tasks_matches_oracle():
     """T0001: testModel, no tasks, '1+1' → {R1,R4,R6,R8,R9,R10}."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
 
@@ -71,7 +81,7 @@ def test_ftinit_with_spontaneous_matches_oracle():
     """T0001 variant: R7,R10 spontaneous → the path through R2/R7, {R1,R2,R4,R6,R7,R8}."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s", spontaneous=["R7", "R10"])
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_SPONT_R7_R10)
 
 
@@ -81,7 +91,7 @@ def test_ftinit_with_task_matches_oracle():
     prep = prep_init_model(model, [make_test_task()], ext_comp="s")
     # Essentials map to merged ids {R1, R7} (RAVEN T0002).
     assert prep.essential_rxns == set(TEST_MODEL_TASK_ESSENTIAL_MERGED)
-    out = ftinit(prep, _scores(model))
+    out = ftinit(prep, rxn_scores=_scores(model))
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_WITH_TASK)
 
 
@@ -89,7 +99,7 @@ def test_full_series_runs():
     """The single-step 'full' series also produces a feasible subnetwork."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model), series="full")
+    out = ftinit(prep, rxn_scores=_scores(model), series="full")
     assert len(out.reactions) >= 1
 
 
@@ -104,7 +114,7 @@ def test_pipeline_with_gene_scores_and_tasks_wires_up():
     model = make_test_model()
     gene_scores = gene_scores_from_expression(expr_for_rxn_score(TEST_MODEL_SCORES), 1.0)
     prep = prep_init_model(model, [make_test_task()], ext_comp="s")
-    out = ftinit(prep, _scores(model), gene_scores=gene_scores)
+    out = ftinit(prep, rxn_scores=_scores(model), gene_scores=gene_scores)
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_WITH_TASK)
 
 
@@ -228,7 +238,7 @@ def test_ftinit_prove_abs_gap_matches_oracle():
     """prove_abs_gap: one near-proven-optimal solve per step, still gives T0001."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out = ftinit(prep, _scores(model), prove_abs_gap=0.05)
+    out = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05)
     assert {r.id for r in out.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
 
@@ -236,10 +246,83 @@ def test_ftinit_resolve_ties_matches_oracle_and_is_stable():
     """resolve_ties (+ prove_abs_gap): preserves T0001, identical across repeated runs."""
     model = make_test_model()
     prep = prep_init_model(model, ext_comp="s")
-    out1 = ftinit(prep, _scores(model), prove_abs_gap=0.05, resolve_ties=True)
-    out2 = ftinit(prep, _scores(model), prove_abs_gap=0.05, resolve_ties=True)
+    out1 = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05, resolve_ties=True)
+    out2 = ftinit(prep, rxn_scores=_scores(model), prove_abs_gap=0.05, resolve_ties=True)
     assert {r.id for r in out1.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
     assert {r.id for r in out1.reactions} == {r.id for r in out2.reactions}
+
+
+def _two_merged_paths_model():
+    """a[c] reaches m[c] by path P (Rm, Rc) or path Q (Rn, Rb); each path is one linear merge group.
+
+    Model order and group numbers put P first ({R1, R2} is group 1, P group 2, Q group 3), and
+    the merged reactions are named by their first members Rm and Rn, but the smallest original
+    id of Q (Rb) sorts before that of P (Rc). The model is that of RAVEN's tINIT test
+    ftINITResolveTiesRanksMergedRxnBySmallestOriginalId.
+    """
+    mets = {"as": ("a", "s"), "ac": ("a", "c"), "xc": ("x", "c"), "yc": ("y", "c"),
+            "mc": ("m", "c"), "ec": ("e", "c"), "es": ("e", "s")}
+    rxns = {
+        "R1": ({"as": 1}, 0, 1000, ""),
+        "R2": ({"as": -1, "ac": 1}, -1000, 1000, ""),
+        "Rm": ({"ac": -1, "xc": 1}, -1000, 1000, "Gm"),
+        "Rc": ({"xc": -1, "mc": 1}, -1000, 1000, "Gc"),
+        "Rn": ({"ac": -1, "yc": 1}, -1000, 1000, "Gn"),
+        "Rb": ({"yc": -1, "mc": 1}, -1000, 1000, "Gb"),
+        "E": ({"mc": -1, "ec": 1}, 0, 1000, "GE"),
+        "R7": ({"ec": -1, "es": 1}, 0, 1000, "G7"),
+        "R8": ({"es": -1}, 0, 1000, ""),
+    }
+    return _build("twoPaths", mets, rxns, "R8")
+
+
+def test_ftinit_resolve_ties_ranks_a_merged_reaction_by_its_smallest_original_id():
+    """The tie between P and Q goes to Q, whose smallest member id Rb sorts first.
+
+    Ranking by the merged reaction's id (Rm, Rn), by model order or by group number would keep P.
+    """
+    model = _two_merged_paths_model()
+    prep = prep_init_model(model, [make_test_task()], ext_comp="s")
+    groups = prep.group_of
+    assert groups["Rm"] == groups["Rc"] < groups["Rn"] == groups["Rb"]
+    assert {"Rm", "Rn"} <= {r.id for r in prep.min_model.reactions}
+    scores = score_reactions_from_genes(
+        model, {"Gm": -1.0, "Gc": -1.0, "Gn": -1.0, "Gb": -1.0, "GE": 5.0, "G7": 5.0})
+    out = ftinit(prep, rxn_scores=scores, resolve_ties=True)
+    kept = {r.id for r in out.reactions}
+    assert {"Rn", "Rb"} <= kept
+    assert kept.isdisjoint({"Rm", "Rc"})
+
+
+def test_ftinit_pins_fluxes_in_every_step_but_the_last(monkeypatch):
+    """ftinit runs the flux phases of resolve_ties in each step whose fluxes a later step
+    reads and skips them in the last step, as RAVEN's tINIT test
+    ftINITPinsFluxesInEveryStepButTheLast checks."""
+    import importlib
+
+    ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
+    model = _two_merged_paths_model()
+    prep = prep_init_model(model, [make_test_task()], ext_comp="s")
+    step, seen = [-1], []
+    real_step, real_run = ftinit_mod._solve_step, ftinit_mod.run_ftinit
+
+    def step_spy(*args, **kwargs):
+        step[0] += 1
+        return real_step(*args, **kwargs)
+
+    def run_spy(*args, **kwargs):
+        seen.append((step[0], kwargs["_pin_fluxes"]))
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(ftinit_mod, "_solve_step", step_spy)
+    monkeypatch.setattr(ftinit_mod, "run_ftinit", run_spy)
+    scores = score_reactions_from_genes(
+        model, {"Gm": -1.0, "Gc": -1.0, "Gn": -1.0, "Gb": -1.0, "GE": 5.0, "G7": 5.0})
+    out = ftinit(prep, rxn_scores=scores, resolve_ties=True, fill_gaps=False)
+    n_steps = len(get_init_steps())
+    assert {s for s, _ in seen} == set(range(n_steps))
+    assert all(pin == (s < n_steps - 1) for s, pin in seen)
+    assert {"Rn", "Rb"} <= {r.id for r in out.reactions}
 
 
 # --------------------------------------------------------------------------- #
@@ -271,11 +354,11 @@ def test_metabolomics_name_resolves_through_the_merge():
     prep, model = _merged_producer_prep()
     scores = _scores(model)
 
-    baseline = ftinit(prep, scores, fill_gaps=False)
+    baseline = ftinit(prep, rxn_scores=scores, fill_gaps=False)
     assert not ({"R3", "R5"} & {r.id for r in baseline.reactions})
     assert {r.id for r in baseline.reactions} == set(TEST_MODEL_FTINIT_NO_TASKS)
 
-    boosted = ftinit(prep, scores, fill_gaps=False, metabolomics=["b"], prod_weight=5.0)
+    boosted = ftinit(prep, rxn_scores=scores, fill_gaps=False, metabolomics=["b"], prod_weight=5.0)
     kept_ids = {r.id for r in boosted.reactions}
     assert {"R3", "R5"} <= kept_ids  # merge group survives whole (all-or-nothing)
 
@@ -286,5 +369,148 @@ def test_metabolomics_unknown_name_warns():
 
     prep, model = _merged_producer_prep()
     with pytest.warns(UserWarning, match="matched no metabolite"):
-        ftinit(prep, _scores(model), fill_gaps=False,
+        ftinit(prep, rxn_scores=_scores(model), fill_gaps=False,
               metabolomics=["not_a_real_metabolite"])
+
+
+def test_prep_keeps_the_template_bounds_and_directions_on_ref_model():
+    """Tightening reversibility and orienting essentials only affect the merged model; the
+    reference model, from which ftinit extracts the output, keeps the template's bounds,
+    stoichiometry and objective coefficients."""
+    import cobra
+
+    from raven_toolbox.tasks import Task
+
+    m = cobra.Model("keep")
+    a, b, c = (cobra.Metabolite(x, name=x, compartment="s") for x in "abc")
+    m.add_metabolites([a, b, c])
+    ex_a = cobra.Reaction("EX_a", lower_bound=-1000, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    ex_c = cobra.Reaction("EX_c", lower_bound=0, upper_bound=1000)
+    ex_c.add_metabolites({c: -1})
+    r1 = cobra.Reaction("R1", lower_bound=-1000, upper_bound=1000)
+    r1.add_metabolites({a: -1, b: 1})
+    r1.gene_reaction_rule = "g1"
+    r2 = cobra.Reaction("R2", lower_bound=-1000, upper_bound=1000)
+    r2.add_metabolites({b: -1, c: 1})
+    r2.gene_reaction_rule = "g2"
+    m.add_reactions([ex_a, ex_c, r1, r2])
+    task = Task(id="mk_c", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("c[s]", 1.0, 1000.0)])
+
+    def state(model):
+        return {
+            r.id: (r.bounds, {mt.id: co for mt, co in r.metabolites.items()}, r.objective_coefficient)
+            for r in model.reactions
+        }
+
+    template = state(m)
+    prep = prep_init_model(m, [task], ext_comp="s")
+    assert state(prep.ref_model) == template
+    assert state(m) == template  # the template itself is not modified
+
+
+def _bounds_and_stoichiometry(model):
+    return {
+        r.id: (r.bounds, {mt.id: co for mt, co in r.metabolites.items()}, r.objective_coefficient)
+        for r in model.reactions
+    }
+
+
+def test_prep_restores_an_essential_reaction_that_was_flipped_to_forward():
+    """A task forces R1 in its written reverse direction; the orientation is undone on ref_model."""
+    import cobra
+
+    from raven_toolbox.tasks import Task, find_task_essential_reactions
+
+    m = cobra.Model("flip")
+    a, b, c = (cobra.Metabolite(x, name=x, compartment="s") for x in "abc")
+    m.add_metabolites([a, b, c])
+    ex_a = cobra.Reaction("EX_a", lower_bound=-1000, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    ex_c = cobra.Reaction("EX_c", lower_bound=0, upper_bound=1000)
+    ex_c.add_metabolites({c: -1})
+    r1 = cobra.Reaction("R1", lower_bound=-1000, upper_bound=1000)
+    r1.add_metabolites({a: 1, b: -1})  # b <=> a, but the task needs a -> b
+    r1.gene_reaction_rule = "g1"
+    r2 = cobra.Reaction("R2", lower_bound=-1000, upper_bound=1000)
+    r2.add_metabolites({b: -1, c: 1})
+    r2.gene_reaction_rule = "g2"
+    m.add_reactions([ex_a, ex_c, r1, r2])
+    task = Task(id="mk_c", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("c[s]", 1.0, 1000.0)])
+
+    essential = find_task_essential_reactions(m.copy(), [task], close_boundaries=True).reactions
+    assert essential["R1"] == -1  # precondition: the forced direction is the reverse one
+
+    template = _bounds_and_stoichiometry(m)
+    prep = prep_init_model(m, [task], ext_comp="s")
+    assert _bounds_and_stoichiometry(prep.ref_model) == template
+
+
+def test_prep_restores_a_reversible_reaction_that_can_only_run_backwards():
+    """constrain_reversible flips a reversible reaction whose only feasible flux is
+    negative; the template's bounds and stoichiometry come back on ref_model."""
+    import cobra
+
+    from raven_toolbox.manipulation import simplify_model
+
+    m = cobra.Model("backwards")
+    a, b = (cobra.Metabolite(x, name=x, compartment="s") for x in "ab")
+    m.add_metabolites([a, b])
+    ex_b = cobra.Reaction("EX_b", lower_bound=0, upper_bound=1000)
+    ex_b.add_metabolites({b: 1})
+    ex_a = cobra.Reaction("EX_a", lower_bound=0, upper_bound=1000)
+    ex_a.add_metabolites({a: -1})
+    r = cobra.Reaction("R", lower_bound=-1000, upper_bound=1000)
+    r.add_metabolites({a: -1, b: 1})  # a <=> b, but only b -> a is feasible
+    r.gene_reaction_rule = "g1"
+    m.add_reactions([ex_b, ex_a, r])
+
+    tightened = m.copy()
+    simplify_model(tightened, constrain_reversible=True)
+    assert tightened.reactions.R.lower_bound >= 0  # precondition: the pass changes R
+
+    template = _bounds_and_stoichiometry(m)
+    prep = prep_init_model(m, None, ext_comp="s")
+    assert _bounds_and_stoichiometry(prep.ref_model) == template
+
+
+def _dead_end_task_model():
+    """A to B to C, and a dead end B to U that a task names as its output."""
+    m = cobra.Model("t")
+    for name, comp in (("A", "e"), ("B", "c"), ("C", "c"), ("U", "c")):
+        m.add_metabolites([cobra.Metabolite(f"{name}_{comp}", name=name, compartment=comp)])
+    spec = [("EXA", (0, 1000), {"A_e": 1}), ("R1", (0, 1000), {"A_e": -1, "B_c": 1}),
+            ("R2", (-1000, 1000), {"B_c": -1, "C_c": 1}), ("EXC", (0, 1000), {"C_c": -1}),
+            ("R4", (0, 1000), {"B_c": -1, "U_c": 1})]
+    for rid, bounds, stoich in spec:
+        r = cobra.Reaction(rid)
+        m.add_reactions([r])
+        r.bounds = bounds
+        r.add_metabolites({m.metabolites.get_by_id(k): v for k, v in stoich.items()})
+    return m
+
+
+def test_ftinit_output_has_no_metabolite_without_a_reaction():
+    # The task keeps U in the reference model although its only reaction is removed by the
+    # first simplification; RAVEN's final removeReactions(..., true, true) drops it again.
+    task = Task(id="MAKE_U", inputs=[("A[e]", 0.0, 1000.0)], outputs=[("U[c]", 0.0, 1000.0)])
+    prep = prep_init_model(_dead_end_task_model(), [task], ext_comp="e", scale=False)
+    assert "U[c]" in [f"{m.name}[{m.compartment}]" for m in prep.ref_model.metabolites]
+    out = ftinit(prep, rxn_scores={"R1": 1.0, "R2": 1.0})
+    assert [t.id for t in prep.tasks] == ["MAKE_U"]
+    assert {r.id for r in out.reactions} == {"EXA", "R1", "R2", "EXC"}
+    assert [m.id for m in out.metabolites] == ["A_e", "B_c", "C_c"]
+    assert all(m.reactions for m in out.metabolites)
+
+
+def test_ftinit_output_has_no_gene_without_a_reaction_also_without_simplification():
+    # prep_init_model(simplify=False) keeps a template gene that no reaction uses; RAVEN's final
+    # removeReactions(..., true, true) drops every gene without a reaction.
+    from cobra.core.gene import Gene
+
+    m = _dead_end_task_model()
+    m.genes.append(Gene("GX"))
+    prep = prep_init_model(m, None, ext_comp="e", scale=False, simplify=False)
+    assert "GX" in prep.ref_model.genes
+    out = ftinit(prep, rxn_scores={"R1": 1.0, "R2": 1.0})
+    assert "GX" not in out.genes

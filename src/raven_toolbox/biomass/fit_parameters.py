@@ -1,18 +1,14 @@
-"""Fit stoichiometric parameters (e.g. maintenance ATP) — port of RAVEN's
+"""Fit stoichiometric parameters (for example maintenance ATP); port of RAVEN's
 ``fitParameters``.
 
-Fits one or more unknown coefficients in the stoichiometric matrix (a
-maintenance ATP cost is the usual example) by nonlinear least squares: for
-each experimental data point, a set of reactions is fixed to measured flux
-values, the model is re-solved, and the resulting flux at another set of
-reactions is compared against its own measured values. The parameters are
-whatever values make those predicted fluxes best match the measurements
-across every data point at once.
+Fits one or more unknown coefficients in the stoichiometric matrix (for example a
+maintenance ATP cost) by nonlinear least squares. For each experimental data point,
+a set of reactions is fixed to measured flux values, the model is re-solved, and the
+resulting flux at another set of reactions is compared with its measured values. The
+fitted parameters minimise the residual sum of squares over all data points.
 
-``plotFitting`` has no port: it is a plotting convenience with no bearing on
-the fit itself, and pulling in a plotting library for it would be a poor
-trade for something a caller can already do with the returned
-``resulting_fluxes`` and their own measurements.
+RAVEN's ``plotFitting`` has no counterpart. The returned ``resulting_fluxes`` hold
+the predicted fluxes for plotting against the measurements.
 """
 from __future__ import annotations
 
@@ -29,17 +25,16 @@ __all__ = ["ParameterPosition", "FitParametersResult", "fit_parameters"]
 
 @dataclass(frozen=True)
 class ParameterPosition:
-    """Where one fitted parameter's coefficient goes in the model.
+    """The model coefficients that one fitted parameter sets.
 
     Attributes
     ----------
     entries:
-        ``(reaction_id, metabolite_id)`` pairs this parameter's magnitude is
-        written to.
+        ``(reaction_id, metabolite_id)`` pairs whose coefficient is set from this
+        parameter.
     negative:
-        Per entry, whether that coefficient is ``-parameter`` rather than
-        ``+parameter`` (to tell production from consumption at the same
-        magnitude) — same length and order as ``entries``.
+        Per entry, whether the coefficient is ``-parameter`` (consumption) or
+        ``+parameter`` (production). Same length and order as ``entries``.
     """
 
     entries: tuple[tuple[str, str], ...]
@@ -52,27 +47,25 @@ class ParameterPosition:
 
 @dataclass
 class FitParametersResult:
-    """Outcome of a :func:`fit_parameters` call.
+    """Result of a :func:`fit_parameters` call.
 
     Parameters
     ----------
     parameters:
         Fitted parameter magnitudes, same order as ``parameter_positions``.
-        Always non-negative — sign is carried entirely by
+        Always non-negative; the sign of each coefficient comes from
         :attr:`ParameterPosition.negative`.
     fitness_score:
         The residual sum of squares at the fitted parameters.
     success:
-        Whether the optimizer reports convergence
-        (``scipy.optimize.OptimizeResult.success``). RAVEN's own ``exitFlag``
-        (``fminsearch``'s 1/0/-1 codes) has no equivalent worth carrying
-        over: different optimizer, different convergence bookkeeping.
+        Whether the optimiser reports convergence
+        (``scipy.optimize.OptimizeResult.success``). RAVEN's ``exitFlag``
+        (the ``fminsearch`` codes 1, 0 and -1) has no counterpart.
     model:
         Copy of the input model with the fitted parameters applied.
     resulting_fluxes:
-        The fitted model's own predicted flux at ``rxns_to_fit``, one row per
-        data point, columns in ``rxns_to_fit`` order — what a caller would
-        plot against ``values_to_fit`` to see the fit.
+        Flux of the fitted model at ``rxns_to_fit``, one row per data point and
+        one column per reaction in ``rxns_to_fit`` order.
     """
 
     parameters: np.ndarray
@@ -142,13 +135,13 @@ def fit_parameters(
     Parameters
     ----------
     model:
-        Model to fit against. Never modified — the fitted model is returned
-        separately.
+        Model to fit against. It is not modified; the fitted model is returned
+        in the result.
     x_rxns:
-        Ids of the reactions that get fixed (both bounds) to a measured
+        Ids of the reactions whose lower and upper bounds are fixed to a measured
         value at each data point.
     x_values:
-        Measured values for ``x_rxns``, shaped *data points × len(x_rxns)*,
+        Measured values for ``x_rxns``, shaped as the number of data points by ``len(x_rxns)``,
         columns in ``x_rxns`` order.
     rxns_to_fit:
         Ids of the reactions whose predicted flux is compared against
@@ -159,11 +152,11 @@ def fit_parameters(
     parameter_positions:
         One :class:`ParameterPosition` per fitted parameter.
     fit_to_ratio:
-        Fit the ratio of predicted to measured value instead of the absolute
-        difference, so a large flux does not dominate the residual sum of
-        squares just by being large (default True).
+        When True (default), the residual is the predicted flux divided by the
+        measured value minus 1. When False, it is the predicted minus the
+        measured flux.
     initial_guess:
-        Starting value for each parameter (default all ones).
+        Starting value for each parameter (default 1 for every parameter).
 
     Returns
     -------

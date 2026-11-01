@@ -1,10 +1,18 @@
 """Tests for metabolic tasks (Phase 4a): parse_task_list + check_tasks."""
+import re
+
 import cobra
 import pytest
 
 from raven_toolbox.tasks import Task, check_tasks, parse_task_list
 
-TASK_TSV = (
+
+def _tsv(text):
+    """Prefix every line with an empty comment-marker column; ID may not be the first column."""
+    return "".join("\t" + line + "\n" for line in text.splitlines())
+
+
+TASK_TSV = _tsv(
     "ID\tDESCRIPTION\tIN\tIN UB\tOUT\tOUT LB\tEQU\tSHOULD FAIL\n"
     "T1\tgrowth\tglc[e];o2[e]\t10\tbio[c]\t1\t\t\n"
     "T2\tinfeasible\t\t\tatp[c]\t1\t\ttrue\n"
@@ -53,15 +61,38 @@ def test_parse_missing_id_column(tmp_path):
         parse_task_list(p)
 
 
+def test_parse_id_in_first_column_raises(tmp_path):
+    """The first column is reserved for comment markers, as in RAVEN's parseTaskList."""
+    p = tmp_path / "first.txt"
+    p.write_text("ID\tDESCRIPTION\tIN\tOUT\nT1\td\tA[c]\tB[c]\n")
+    with pytest.raises(ValueError, match="must have a column named ID that is not the first column"):
+        parse_task_list(p)
+
+
+def test_parse_keeps_rows_with_text_in_a_column_before_id(tmp_path):
+    """Only the first column holds comment markers; a DESCRIPTION column before ID
+    does not drop the row."""
+    p = tmp_path / "desc_first.txt"
+    p.write_text("\tDESCRIPTION\tID\tIN\tOUT\n\tdesc\tT1\tA[c]\tB[c]\n")
+    (task,) = parse_task_list(p)
+    assert task.id == "T1" and task.description == "desc"
+
+
+def test_parse_skips_rows_with_a_comment_marker_in_the_first_column(tmp_path):
+    p = tmp_path / "marker.txt"
+    p.write_text("\tID\tIN\tOUT\n#\tSECTION\t\t\n\tT1\tA[c]\tB[c]\n")
+    assert [t.id for t in parse_task_list(p)] == ["T1"]
+
+
 def test_parse_warns_on_data_row_before_first_id(tmp_path):
     """Continuation rows appearing before the first task ID are malformed input;
     parse_task_list warns instead of silently dropping them."""
     p = tmp_path / "orphan.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tDESCRIPTION\tIN\tIN UB\tOUT\tOUT UB\tSHOULD FAIL\n"
         "\t\tglc[e]\t10\t\t\t\n"        # orphan data row, no ID seen yet
         "T1\tgrowth\t\t\tbio[c]\t1\t\n"
-    )
+    ))
     with pytest.warns(UserWarning, match="no task ID has been seen yet"):
         tasks = parse_task_list(p)
     assert [t.id for t in tasks] == ["T1"]
@@ -169,6 +200,28 @@ def test_unknown_metabolite_reported(model):
     assert not res.passed and "unknown metabolite" in res.error
 
 
+def test_in_and_out_with_nonzero_lower_bounds_raises(model):
+    task = Task("21", "protons", inputs=[("A[c]", 1, 1)], outputs=[("A[c]", 1, 1)])
+    with pytest.raises(ValueError, match=r'The IN LB and OUT LB in "\[21\] protons" cannot be '
+                                         "nonzero for the same metabolite"):
+        check_tasks(model, [task])
+
+
+def test_in_and_out_with_one_zero_lower_bound_runs(model):
+    task = Task("io", inputs=[("A[c]", 0, 1000)], outputs=[("A[c]", 1, 1000)])
+    (res,) = check_tasks(model, [task])
+    assert res.error is None
+
+
+@pytest.mark.parametrize("side", ["inputs", "outputs"])
+def test_metabolite_listed_twice_on_one_side_raises(model, side):
+    task = Task("dup", "twice", **{side: [("A[c]", 0, 10), ("a[C]", 0, 20)]})
+    word = "input(s)" if side == "inputs" else "output(s)"
+    with pytest.raises(ValueError, match=rf'some {re.escape(word)} in "\[dup\] twice" are '
+                                         "defined more than one time"):
+        check_tasks(model, [task])
+
+
 def test_open_exchange_is_closed_so_task_controls_io(model):
     # An open sink would let B leave for free, but check_tasks closes all boundary
     # reactions first. The task defines input A but no output for B, so B must still
@@ -181,9 +234,88 @@ def test_open_exchange_is_closed_so_task_controls_io(model):
 
 def test_check_tasks_accepts_a_file_path(model, tmp_path):
     p = tmp_path / "t.txt"
-    p.write_text(
+    p.write_text(_tsv(
         "ID\tDESCRIPTION\tIN\tOUT\tOUT LB\n"
         "make_B\tconvert\tA[c]\tB[c]\t1\n"
-    )
+    ))
     results = check_tasks(model, p)  # path, parsed internally
     assert _by_id(results)["make_B"].passed
+
+
+# --------------------------------------------------------------------------- #
+# Parity with RAVEN parseTaskList / checkTasks (flags, lists, CHANGED, duplicates)
+# --------------------------------------------------------------------------- #
+def test_parse_flags_false_texts(tmp_path):
+    p = tmp_path / "flags.txt"
+    p.write_text(_tsv(
+        "ID\tSHOULD FAIL\tPRINT FLUX\n"
+        "A\tfalse\t0\n"
+        "B\tNo\tFALSE\n"
+        "C\tyes\t1\n"
+        "D\t\tTRUE\n"
+    ))
+    flags = {t.id: (t.should_fail, t.print_fluxes) for t in parse_task_list(p)}
+    assert flags == {"A": (False, False), "B": (False, False), "C": (True, True), "D": (False, True)}
+
+
+def test_parse_semicolon_lists_are_trimmed_and_drop_empty_items(tmp_path):
+    p = tmp_path / "lists.txt"
+    p.write_text(_tsv(
+        "ID\tIN\tIN UB\tCHANGED RXN\tCHANGED UB\n"
+        "T1\tA[c]; B[c];\t5\t;r1 ; r2\t10\n"
+    ))
+    (t,) = parse_task_list(p)
+    assert t.inputs == [("A[c]", 0.0, 5.0), ("B[c]", 0.0, 5.0)]
+    assert [c[0] for c in t.changed] == ["r1", "r2"]
+
+
+def test_parse_empty_changed_bounds_are_none(tmp_path):
+    p = tmp_path / "changed.txt"
+    p.write_text(_tsv("ID\tCHANGED RXN\tCHANGED LB\tCHANGED UB\nT1\tr1\t\t10\nT2\tr1\t-5\t\nT3\tr1\t1\t2\n"))
+    t1, t2, t3 = parse_task_list(p)
+    assert t1.changed == [("r1", None, 10.0)]
+    assert t2.changed == [("r1", -5.0, None)]
+    assert t3.changed == [("r1", 1.0, 2.0)]
+
+
+def test_parse_headers_ignore_case_and_whitespace(tmp_path):
+    p = tmp_path / "hdr.txt"
+    p.write_text(_tsv(" id \tIn\t in ub \nT1\tA[c]\t7\n"))
+    (t,) = parse_task_list(p)
+    assert t.inputs == [("A[c]", 0.0, 7.0)]
+
+
+def test_parse_xls_gives_a_clear_error(tmp_path):
+    p = tmp_path / "old.xls"
+    p.write_bytes(b"")
+    with pytest.raises(ValueError, match=r"\.xls.*not supported.*\.xlsx"):
+        parse_task_list(p)
+
+
+def test_empty_changed_bound_leaves_reaction_bound_alone(model):
+    """A None bound keeps the reaction's own bound; r1 is [0, 1000]."""
+    inputs, outputs = [("A[c]", 0, 1000)], [("B[c]", 1, 1000)]
+    keep_lb = Task("keep_lb", inputs=inputs, outputs=outputs, changed=[("r1", None, 1000.0)])
+    (res,) = check_tasks(model, [keep_lb])
+    assert res.passed
+    # UB 0 with the LB left at 0 blocks r1, so B cannot be made.
+    ub_zero = Task("ub_zero", inputs=inputs, outputs=outputs, changed=[("r1", None, 0.0)])
+    (res2,) = check_tasks(model, [ub_zero])
+    assert not res2.passed
+    # The model passed in is not modified.
+    assert model.reactions.r1.bounds == (0, 1000)
+
+
+def test_duplicate_name_comp_warns_and_constrains_all():
+    m = cobra.Model("dup")
+    a1, a2, b = _met("A1_c", "A"), _met("A2_c", "A"), _met("B_c", "B")
+    m.add_metabolites([a1, a2, b])
+    r1 = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r1.add_metabolites({a1: -1, b: 1})
+    r2 = cobra.Reaction("r2", lower_bound=0, upper_bound=1000)
+    r2.add_metabolites({a2: -1, b: 1})
+    m.add_reactions([r1, r2])
+    task = Task("dup", inputs=[("A[c]", 0, 1000)], outputs=[("B[c]", 1, 1000)])
+    with pytest.warns(UserWarning, match=r"matches 2 model metabolites.*RAVEN constrains only the first"):
+        (res,) = check_tasks(m, [task])
+    assert res.passed

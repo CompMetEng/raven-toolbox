@@ -2,22 +2,26 @@
 
 Writes the model in several formats into the Standard-GEM folder structure (a
 ``model/`` directory with one subfolder per format), ready to commit to a
-Git-maintained model repository (Metabolic Atlas / Human-GEM / yeast-GEM style),
-plus a ``dependencies.txt`` recording tool versions.
+Git-maintained model repository (Metabolic Atlas, Human-GEM and yeast-GEM style),
+and a ``dependencies.txt`` that records tool versions.
 
-Thin orchestration over the writers raven_toolbox already exposes: ``write_yaml_model``,
-cobra's ``write_sbml_model``, ``write_matlab_model``, ``export_to_excel``, plus a
-single-file reaction table (txt).
+The module calls the existing writers ``write_yaml_model``, cobra's ``write_sbml_model``,
+``write_matlab_model`` and ``export_to_excel``, and adds a single-file reaction table (txt).
 """
 from __future__ import annotations
 
 import datetime
 import importlib.metadata as _md
+import math
 import platform
+import re
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
 import cobra
+import libsbml
+import numpy as np
 from cobra.core import Group
 
 from raven_toolbox.io.excel import _equation, export_to_excel
@@ -50,14 +54,14 @@ _SBML_NOTE_LABELS = {
 def _for_sbml(model: cobra.Model) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
 
-    Two things are lost otherwise, both silently:
+    Two kinds of information would be missing from the SBML file otherwise:
 
     * **subSystems.** RAVEN reads them from the SBML groups package, which
       cobra writes from ``model.groups``. A model read with read_yaml_model
-      carries its subsystems on the reaction instead, so without groups the
-      SBML has no subsystem information at all.
-    * **rxnNotes / rxnReferences / rxnConfidenceScores.** Present in the
-      file, but under cobra's key names rather than the labels RAVEN parses.
+      carries its subsystems on the reaction, so without groups the
+      SBML has no subsystem information.
+    * **rxnNotes, rxnReferences and rxnConfidenceScores.** The file contains them under
+      cobra's key names, while RAVEN parses other labels.
 
     The model passed in is not changed.
     """
@@ -127,15 +131,111 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     return out
 
 
+def _write_sbml(model: cobra.Model, path: Path) -> None:
+    """Write ``model`` as SBML with each gene product's fbc:label set to the gene name.
+
+    cobra's writer sets fbc:label to the gene product id (``G_<id>``), while RAVEN's
+    exportModel writes the gene short name there, and RAVEN's importModel reads
+    geneShortNames from fbc:label before fbc:name. cobra writes the gene name as
+    fbc:name, or the id when the gene has no name, so copying fbc:name into fbc:label
+    keeps the id as label for unnamed genes. cobra reads gene ids from fbc:id and
+    names from fbc:name, so the label does not change what cobra reads back.
+    """
+    cobra.io.write_sbml_model(_for_sbml(model), str(path))
+    doc = libsbml.readSBMLFromFile(str(path))
+    for gene_product in doc.getModel().getPlugin("fbc").getListOfGeneProducts():
+        gene_product.setLabel(gene_product.getName())
+    libsbml.writeSBMLToFile(doc, str(path))
+
+
+def _shortest(value: float) -> str:
+    """The shortest text that reads back as ``value`` (1/3 is 0.3333333333333333).
+
+    The rule is the same as in RAVEN's exportForGit. A bound is not rounded in the file.
+    """
+    if math.isinf(value):
+        return "Inf" if value > 0 else "-Inf"
+    if math.isnan(value):
+        return "NaN"
+    if value == math.floor(value) and abs(value) < 1e15:
+        return str(int(value))
+    for digits in range(1, 18):
+        text = f"{value:.{digits}g}"
+        if float(text) == value:
+            return text
+    return repr(value)
+
+
 def _write_txt(model: cobra.Model, path: Path) -> None:
-    """Single-file, human-readable reaction table (RAVEN exportForGit txt)."""
+    """Single-file, human-readable reaction table (RAVEN exportForGit txt).
+
+    Bounds and objective coefficients are written with the digits needed to read them back
+    unchanged, and no field is padded.
+    """
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("Rxn name\tFormula\tGene-reaction association\tLB\tUB\tObjective\n")
+        fh.write("Rxn id\tFormula\tGene-reaction association\tLB\tUB\tObjective\n")
         for r in model.reactions:
             fh.write(
-                f"{r.id}\t{_equation(r)}\t{r.gene_reaction_rule}\t"
-                f"{r.lower_bound:g}\t{r.upper_bound:g}\t{r.objective_coefficient:g}\n"
+                f"{r.id}\t{_equation(r).strip()}\t{r.gene_reaction_rule}\t"
+                f"{_shortest(r.lower_bound)}\t{_shortest(r.upper_bound)}\t"
+                f"{_shortest(r.objective_coefficient)}\n"
             )
+
+
+def _write_dependencies(path: Path, model: cobra.Model) -> None:
+    """Versions of everything that writes the files, then the model's own version and date.
+
+    The order is fixed and nothing depends on the time of the export, so the same model
+    exported twice gives the same file.
+    """
+    lines = [
+        ("python", platform.python_version()),
+        ("cobra", _version("cobra")),
+        ("libSBML", libsbml.getLibSBMLDottedVersion()),
+        ("ruamel.yaml", _version("ruamel.yaml")),
+        ("scipy", _version("scipy")),
+        ("openpyxl", _version("openpyxl")),
+        ("raven_toolbox", _version("raven_toolbox")),
+    ]
+    meta = get_model_metadata(model)
+    for key in ("version", "date"):
+        if meta.get(key) is not None:
+            lines.append((f"model_{key}", str(meta[key])))
+    with open(path, "w", encoding="utf-8") as fh:
+        for name, value in lines:
+            fh.write(f"{name}\t{value}\n")
+
+
+def _check_main_branch() -> None:
+    """Raise when raven_toolbox is a git checkout that is not on ``main`` or ``master``.
+
+    The checkout is the repository whose top level holds this package as
+    ``src/raven_toolbox`` next to a ``pyproject.toml`` named ``raven-toolbox``. A package
+    outside such a checkout, including one installed in the ignored virtual environment of
+    an unrelated repository, passes. GECKO is not checked.
+    """
+    package = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(package), *args], capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    try:
+        top = Path(git("rev-parse", "--show-toplevel")).resolve()
+        if (top / "src" / "raven_toolbox").resolve() != package:
+            return
+        pyproject = (top / "pyproject.toml").read_text(encoding="utf-8")
+        if not re.search(r'^name\s*=\s*"raven-toolbox"', pyproject, re.MULTILINE):
+            return
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    except (OSError, subprocess.CalledProcessError):
+        return
+    if branch not in ("main", "master"):
+        raise RuntimeError(
+            f"raven_toolbox is on branch '{branch}', not main or master. Check out the main "
+            "branch before submitting a model to Git."
+        )
 
 
 def export_for_git(
@@ -143,7 +243,8 @@ def export_for_git(
     path: str | Path = ".",
     *,
     prefix: str = "model",
-    formats: Iterable[str] = ("yml", "xml", "mat", "xlsx"),
+    formats: Iterable[str] = _ALL_FORMATS,
+    main_branch_flag: bool = False,
     sub_dirs: bool = True,
     varname: str | None = None,
     version: str | None = None,
@@ -153,30 +254,54 @@ def export_for_git(
 
     Parameters
     ----------
-    path
+    model : cobra.Model
+        Model to export. A sorted copy is written; the model passed in is not changed.
+    path : str or Path
         Directory to populate.
-    prefix
+    prefix : str
         Base filename for every format (default ``"model"``).
-    formats
+    formats : Iterable of str
         Which formats to write; any of ``"yml"``, ``"xml"``, ``"mat"``,
-        ``"xlsx"``, ``"txt"`` (default ``yml``/``xml``/``mat``/``xlsx``).
-    sub_dirs
-        If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
+        ``"xlsx"``, ``"txt"`` (default: all five, as RAVEN's ``exportForGit``).
+    main_branch_flag : bool
+        A ``bool``. If True, raise ``RuntimeError`` when raven_toolbox runs from a git
+        checkout that is not on ``main`` or ``master`` (default False), as RAVEN's
+        ``mainBranchFlag``. The check
+        passes when the package is not in a raven_toolbox checkout (for example a pip
+        installation) and when git is missing or refuses the checkout (``OSError`` or a
+        failing ``git`` call such as ``safe.directory``). GECKO is not checked.
+    sub_dirs : bool
+        A ``bool``. If True (default), write ``model/<fmt>/<prefix>.<fmt>`` (standard-GEM
         layout); otherwise all files go directly in ``path``.
-    varname
+    varname : str or None
         Variable name for the MATLAB (``.mat``) struct. ``None`` (default) lets
         cobra use its own default (the model id); set it when a repository pins a
-        specific name (e.g. Human-GEM's ``humanGEM``).
-    version, date
-        Stamped into the exported copy's metadata (see
+        specific name (for example Human-GEM's ``humanGEM``).
+    version : str or None
+        Version stamped into the exported copy's metadata (see
         :func:`raven_toolbox.io.set_model_metadata`); the model passed in is not changed.
-        Left out, the model's own version and date are written.
+        When not given, the model's own version is written.
+    date : str or datetime.date or None
+        Date stamped into the exported copy's metadata in the same way. When not given, the
+        model's own date is written.
 
     Returns
     -------
     pathlib.Path
         The root directory written to.
+
+    Raises
+    ------
+    TypeError
+        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool`` or ``numpy.bool_``.
     """
+    for name, flag in (("main_branch_flag", main_branch_flag), ("sub_dirs", sub_dirs)):
+        if not isinstance(flag, (bool, np.bool_)):
+            raise TypeError(
+                f"{name} must be a bool or numpy.bool_, got {type(flag).__module__}.{type(flag).__qualname__}"
+            )
+    if main_branch_flag:
+        _check_main_branch()
     formats = list(formats)
     unknown = set(formats) - set(_ALL_FORMATS)
     if unknown:
@@ -198,7 +323,7 @@ def export_for_git(
     if "yml" in formats:
         write_yaml_model(model, target("yml"))
     if "xml" in formats:
-        cobra.io.write_sbml_model(_for_sbml(model), str(target("xml")))
+        _write_sbml(model, target("xml"))
     if "mat" in formats:
         write_matlab_model(model, target("mat"), varname=varname)
     if "xlsx" in formats:
@@ -206,9 +331,6 @@ def export_for_git(
     if "txt" in formats:
         _write_txt(model, target("txt"))
 
-    with open(root / "dependencies.txt", "w", encoding="utf-8") as fh:
-        fh.write(f"python\t{platform.python_version()}\n")
-        fh.write(f"cobra\t{_version('cobra')}\n")
-        fh.write(f"raven_toolbox\t{_version('raven_toolbox')}\n")
+    _write_dependencies(root / "dependencies.txt", model)
 
     return root

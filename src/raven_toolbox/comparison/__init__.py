@@ -1,12 +1,12 @@
 """Model comparison utilities.
 
-Two flavours:
+Two functions:
 
-* :func:`compare_models` — N-model presence-matrix overview, including
-  identifier, EC-code, metabolite-name and equation overlap (RAVEN's
-  ``compareMultipleModels`` analogue). "How do these models relate?"
-* :func:`diff_models` — strict two-model semantic-equality diff for CI
-  gates. "Are these two models the same?"
+* :func:`compare_models`: presence-matrix overview of N models, including
+  identifier, EC-code, metabolite-name and equation overlap (the counterpart of
+  RAVEN's ``compareMultipleModels``). It shows how the models relate.
+* :func:`diff_models`: semantic-equality diff of two models for CI
+  gates. It shows whether the two models are the same.
 """
 from raven_toolbox.comparison.compare import ModelComparison, compare_models
 from raven_toolbox.comparison.diff import (
