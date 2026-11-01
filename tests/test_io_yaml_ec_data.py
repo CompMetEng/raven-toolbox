@@ -357,6 +357,25 @@ def test_legacy_reverse_direction_prot_flipped(tmp_path):
     assert r.objective_coefficient == -2.0
 
 
+def test_forward_prot_reaction_with_negative_lower_bound_not_flipped(tmp_path):
+    """The sign of the ``prot_pool`` coefficient decides, not the bounds."""
+    doc = _minimal_model_doc()
+    doc["metabolites"].append({"id": "prot_P1", "name": "prot", "compartment": "c"})
+    doc["metabolites"].append({"id": "prot_pool", "name": "pool", "compartment": "c"})
+    doc["reactions"].append(
+        {
+            "id": "usage_prot_P1",
+            "metabolites": {"prot_P1": 1, "prot_pool": -1},
+            "lower_bound": -1000.0,
+            "upper_bound": 1000.0,
+        }
+    )
+    model = read_yaml_model(_write_yaml(doc, tmp_path / "m.yml"))
+    r = model.reactions.get_by_id("usage_prot_P1")
+    assert (r.lower_bound, r.upper_bound) == (-1000.0, 1000.0)
+    assert {m.id: c for m, c in r.metabolites.items()}["prot_pool"] == -1.0
+
+
 def test_legacy_bare_sequence_root_merged(tmp_path):
     """Very old RAVEN files were written as a bare `-` sequence of
     single-key mappings; reader merges to one dict."""

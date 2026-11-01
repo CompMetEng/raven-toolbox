@@ -6,7 +6,7 @@ Milestones in the raven-toolbox port. For function-level status see
 
 ## Unreleased
 
-* `read_yaml_model` changes the sign of the objective coefficient of a `usage_prot_*` or `prot_pool_exchange` reaction that it turns forward because of a negative lower bound (was: the coefficient stayed, which reversed the objective of the model).
+* `read_yaml_model` turns a `usage_prot_*` reaction forward when its `prot_pool` coefficient is positive and `prot_pool_exchange` when it is negative, as GECKO's `upgradeEcModel` does, and changes the sign of the objective coefficient of a reaction it turns (was: a negative lower bound decided, and the coefficient stayed, which reversed the objective of the model).
 * `write_yaml_model` writes an ec reaction without enzymes with no `enzymes` entry (was: `enzymes: !!omap []`). `read_yaml_model` reads a missing `enzymes` entry, a content-less `enzymes: !!omap` and `enzymes: !!omap []` as an empty enzyme map, so files written by earlier versions of GECKO, RAVEN and raven-toolbox still load.
 * `init.fill_tasks` with `resolve_ties=True` on Gurobi restores `MIPGap` and `MIPGapAbs` of `reference_model` after each gap-fill (was: 0.0 and 0.4 stayed set).
 * `tasks.find_task_essential_reactions` writes its `cache_path` as JSON (was: pickle) and ignores, with a warning, an existing file that is not a JSON cache of the current version, such as a pickle. `checkpoint_every` below 1 raises `ValueError` (was: a write after every task).
