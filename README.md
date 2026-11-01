@@ -31,7 +31,7 @@ The in-memory model is a [`cobra.Model`](https://cobrapy.readthedocs.io). raven-
 
 ## Status
 
-raven-toolbox 3.x tracks the RAVEN 3 pre-releases and is a pre-release itself ([releases](https://github.com/CompMetEng/raven-toolbox/releases), [changelog](CHANGELOG.md)). On Human-GEM, the five cell-line models of Hart2015 extracted with ftINIT have a Jaccard index of 0.975 to 0.980 against MATLAB RAVEN ([Human-GEM validation](https://raven-docs.readthedocs.io/en/latest/parameter-tuning/studies/humangem-validation.html)).
+raven-toolbox 3.x tracks the RAVEN 3 pre-releases and is a pre-release itself ([releases](https://github.com/CompMetEng/raven-toolbox/releases), [changelog](CHANGELOG.md)). On Human-GEM, the five cell-line models of Hart2015 extracted with ftINIT have a Jaccard index against MATLAB RAVEN of 0.964 to 0.982 without tasks and 0.981 to 0.988 with tasks ([Human-GEM validation](https://raven-docs.readthedocs.io/en/latest/parameter-tuning/studies/humangem-validation.html)).
 
 Three functions of RAVEN are not implemented:
 
