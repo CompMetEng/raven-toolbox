@@ -4,7 +4,58 @@ Milestones in the raven-toolbox port. For function-level status see
 [docs/raven_migration.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/migration.md); for open work see
 [docs/todo.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/todo.md).
 
-## Unreleased
+## 3.0.0b2 — 2026-11-01
+
+Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input,
+and a stricter match to RAVEN in homology and gap-filling.
+
+### Model I/O
+
+* `io.write_matlab_model` / `read_matlab_model` now write and read the RAVEN structure directly,
+  field for field as RAVEN's own exporter does, instead of cobra's COBRA Toolbox layout. A
+  COBRA Toolbox `.mat` is still read, through cobra's reader.
+* SBML export keeps `subSystems`, `rxnNotes`, `rxnReferences` and `rxnConfidenceScores` under the
+  names RAVEN's `importModel` parses. It no longer writes the Python repr of `metaData` as a
+  note: only string-valued notes are written, and the model version and date are their own notes.
+* `read_yaml_model` reads the SBO term as a string and whole-number charges as ints, so charges
+  survive an SBML write.
+* The Excel export no longer lists InChI twice in the MIRIAM column.
+* New: `get_model_metadata` / `set_model_metadata`. `export_for_git` writes version and date.
+
+### Homology and curation
+
+* New: `reconstruction.homology.hits_from_supporth` and `run_supporth` read SuppOrth consensus
+  orthologs as homology input.
+* `get_model_from_homology` now matches RAVEN's `getModelFromHomology`: it keeps every hit tied
+  for the best bitscore at strictness 3, applies `max_evalue` exclusively, and filters
+  `only_genes_in_models` on the template gene. Hit values are parsed with round-trip float
+  precision, so a hit at the cutoff is no longer let through.
+* `get_model_from_homology` also keeps gene-free reactions and template notes, drops duplicate
+  genes, and raises on gene ids that cobra would split.
+* `curation.batch_curate` stores notes, references, confidence score and InChI under the keys
+  the YAML layer uses.
+
+### Gap-filling and analysis
+
+* Renamed `gapfilling.fill_gaps_kumar_milp` to `fill_gaps_milp` (module `gapfilling.kumar_milp`
+  to `gapfilling.milp`, `KumarGapFillResult` to `MILPGapFillResult`), matching RAVEN's
+  `gapFillMILP`. It adds template reactions only; `reversed_reactions` and `weights` are removed.
+* `fill_gaps_milp` runs with integrality tolerance 1e-9 and returns `exit_status="not_restored"`
+  when the selection does not restore growth. An infeasible MILP on Gurobi no longer crashes.
+* `gap_report` raises a `ValueError` naming reactions with a forced flux when the model is
+  infeasible, instead of a bare cobra `Infeasible`.
+* `biomass.scale_biomass` gained `target_total` and raises before changing the model when the
+  balancing component cannot absorb the change.
+
+### Context-specific models
+
+* `omics.hpa` moved to `init.hpa`; the `omics` package is gone.
+* `init.ftinit` / `run_ftinit` gained `feas_tol`, `opt_tol`, `int_feas_tol` and `presolve`
+  (defaults unchanged).
+* `init.ftinit` skips the tie-break when the primary solve stops at the time limit, and warns
+  when it solves with GLPK. `merge_linear` and `merge_compartments` keep the source model's solver.
+
+### Alignment with MATLAB RAVEN
 
 * `read_yaml_model` turns a `usage_prot_*` reaction forward when its `prot_pool` coefficient is positive and `prot_pool_exchange` when it is negative, as GECKO's `upgradeEcModel` does, and changes the sign of the objective coefficient of a reaction it turns (was: a negative lower bound decided, and the coefficient stayed, which reversed the objective of the model).
 * `write_yaml_model` writes an ec reaction without enzymes with no `enzymes` entry (was: `enzymes: !!omap []`). `read_yaml_model` reads a missing `enzymes` entry, a content-less `enzymes: !!omap` and `enzymes: !!omap []` as an empty enzyme map, so files written by earlier versions of GECKO, RAVEN and raven-toolbox still load.
@@ -124,6 +175,30 @@ Milestones in the raven-toolbox port. For function-level status see
   as no step reads its fluxes, and reports the fluxes of the id-rank phase. The reaction set
   does not change.
 * Docstrings are rewritten in impersonal, present-tense wording with British spelling; the code is unchanged. Statements that differed from the code are corrected, for example `find_good_reactions`, `sum_biomass`, `diff_models`, `compare_models`, `set_gene_rule`, `constrain_reversible_reactions`, `ftinit` (essential forcing, `mip_gap`, determinism figures), `fast_lp` metabolite matching and `batch_curate` index matching.
+
+### Further changes
+
+* `curation.batch_curate` and `batch_curate_from_tsv` follow `curateModelFromTables`: reaction tables are grouped by `rxnIdx` and name, the header spellings of RAVEN are accepted, a new reaction without bounds is unbounded, new ids use the width of the largest existing id, an empty MIRIAM cell removes the namespace, and an empty charge or score is 0 for a new entity. The new argument `overwrite_with_empty` (default `True`) lets an empty cell of an existing entity clear the value. All tables are validated before the model changes: cells are trimmed as MATLAB `strtrim`, numbers follow the plain decimal rule of RAVEN, a charge must be a finite whole number, `rev` must be 0, 1, `true` or `false`, `rxnIdx` must be a whole number of at least 1, a malformed gene rule, a repeated `rxnIdx` and a gene listed twice raise, and repeated coefficients are summed.
+* `manipulation.merge_models` keeps all metabolites, genes and compartments of every model, concatenates the objectives, keeps the compartment name of the first model and appends new items in order (was: only items used by reactions, the objective dropped, the last name won). `add_transport_reactions` sets the subsystem to "Transport between <from> and <to>" for a reversible reaction and "Transport from <from> to <to>" otherwise (was: empty).
+* `manipulation.simplify_model` and `remove_duplicate_reactions` follow `simplifyModel` and `contractModel`: the order of the modes, the lowest-index survivor, reserved reactions and orphan metabolites; duplicates are grouped by stoichiometry and reversibility, with bounds and objective merged, and `remove_duplicate_reactions` has no `reserved` option. `remove_zero_interval_reactions` and `remove_no_flux_reactions` no longer remove genes. `expand_model` keeps the first isozyme copy at the original position.
+* New: `utils.sort_model` (counterpart of `sortModel`) and `utils.next_ids`. `utils.generate_new_ids` takes the numeric maximum, as `generateNewIds`.
+* `biomass.set_gam` stores the exact GAM value, checks the NGAM reaction before it edits the biomass reaction, and refuses an NGAM value without an NGAM reaction. The rebalancing of the charge refuses unset charges.
+* `init.ftinit` takes `tissue`, `celltype`, `hpa` and `transcr` before `rxn_scores`, which is an optional keyword, and has the new arguments `remove_genes`, `use_scores_for_tasks`, `no_gene_score`, `isozyme_scoring`, `complex_scoring`, `multiple_cell_scoring`, `hpa_level_scores` and `data_precedence`. Scoring follows `scoreModel` (level `None` scores -8, tissue and cell type names are compared case-insensitively, an unknown level raises). A call that passes `rxn_scores` by position needs the keyword. The output is built from the reference model with the bounds and directions of the template and has no gene or metabolite without a reaction.
+* `init.remove_low_score_genes` returns the reactions cut to one of tied isozymes in the new list `tied_reactions`.
+* `init.prep_init_model` prunes unused genes as `prepINITModel` does, keeps the metabolites that tasks name, accepts repeated and empty task ids and removes a task that cannot be performed by its position. `rescale_for_init` leaves bounds alone, and `prep_init_model` resets them to ±1000. `get_init_steps` with the full series ignores no metabolites and carries the single MILP run of RAVEN. `comparison.compare_models` fills the task matrix by position.
+* `tasks.parse_task_list` leaves a bound unchanged when its CHANGED LB or UB cell is empty (was: -1000 and 1000), raises when the ID column is first, as RAVEN, and refuses a binary `.xls` file with an error that names `.xlsx`. `check_tasks` warns when a `name[comp]` matches several metabolites, and duplicate or conflicting task inputs and outputs raise `ValueError` (was: outputs overwrote input bounds).
+* `gapfilling.connect_blocked_reactions` has the argument `threshold` (default 1.0; was: `eps`) and the new `min_flux=0.1`, prices renamed template reactions by their template id, and restores the steady-state bounds after the net-production check. `fill_gaps_milp` follows the formulation of `gapFillMILP`. `get_model_from_homology` follows the complex policy `flag` or `drop`, the preferred order and the order of the templates.
+* `analysis.reporter_metabolites` raises `ValueError` for p-values outside [0, 1] (was: they were dropped), centres the z-scores on the first one before taking moments, and returns only `all` with `std_z` 0 for a single gene or zero fold changes. `utils.is_dnf` raises `ValueError` for a malformed rule (was: it returned `True`).
+* `io.write_yaml_model` quotes the YAML 1.1 booleans (`y`, `n`, `yes`, `no`, `on`, `off` in any case), writes a single ec code or SMILES annotation as a list, omits empty reaction names, and warns about metabolites with an empty or duplicate name. Equations are written as `num2str` does and without the coefficient 1 (`ATP[c] => ADP[c]`), and `defaultLB` and `defaultUB` are written separately.
+* `io.export_for_git` writes the formats `yml`, `xml`, `mat`, `xlsx` and `txt` by default, the txt table headed `Rxn id` without padding, the gene name as `fbc:label` in SBML, and a `dependencies.txt` with the versions of python, cobra, libSBML, ruamel.yaml, scipy, openpyxl, raven_toolbox, and the model version and date. `main_branch_flag` raises when a raven_toolbox checkout is on a branch other than `main` or `master`, and the flags must be `bool`.
+* The package supports Python 3.14 and 3.15, and the CI tests both.
+
+### Packaging and docs
+
+* Assets are downloaded from `CompMetEng/toolbox-assets`; `publish_to_raven_data.py` is now
+  `publish_to_toolbox_assets.py`.
+* Docstrings corrected for `reporter_metabolites`, `random_sampling`, `remove_no_flux_reactions`,
+  `check_tasks`, `connect_blocked_reactions` and `find_leak_metabolite`.
 
 ## 3.0.0b1 — 2026-09-07
 
