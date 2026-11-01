@@ -22,19 +22,19 @@ FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "parity"
 def raven_root() -> Path:
     """A MATLAB RAVEN checkout, from ``$RAVEN_ROOT``.
 
-    RAVEN is GPL and this package is MIT, so its files are read in place and
+    RAVEN is a separate repository, so its files are read in place and
     never vendored here.
     """
     root = os.environ.get("RAVEN_ROOT")
     if not root:
         pytest.skip(
             "RAVEN_ROOT is not set. Clone RAVEN and point at it to run the "
-            "cross-language checks: git clone --depth 1 -b develop3 "
-            "https://github.com/SysBioChalmers/RAVEN && RAVEN_ROOT=$PWD/RAVEN "
+            "cross-language checks: git clone --depth 1 -b develop "
+            "https://github.com/CompMetEng/RAVEN && RAVEN_ROOT=$PWD/RAVEN "
             "pytest -m parity"
         )
     path = Path(root)
-    if not (path / "io").is_dir():
+    if not (path / "src" / "io").is_dir():
         pytest.skip(f"RAVEN_ROOT={path} does not look like a RAVEN checkout")
     return path
 
@@ -46,8 +46,8 @@ def raven_models(raven_root: Path) -> dict[str, Path]:
     These were written by MATLAB RAVEN's own ``writeYAMLmodel``, which makes
     them reference data for the Python reader without needing MATLAB.
     """
-    tutorial = raven_root / "tutorial"
-    found = {p.name: p for p in sorted(tutorial.glob("*.yml"))}
+    tutorial = raven_root / "tutorials" / "data"
+    found = {p.name: p for p in sorted(tutorial.rglob("*.yml"))}
     if not found:
         pytest.skip(f"no YAML models under {tutorial}")
     return found

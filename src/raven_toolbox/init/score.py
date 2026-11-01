@@ -1,15 +1,15 @@
 """Score reactions from gene scores via the GPR.
 
-Maps per-gene scores (e.g. expression-derived: present → positive, absent → negative)
-to per-reaction scores by walking each reaction's GPR: genes joined by **OR**
-(isozymes) are combined with ``isozyme_scoring`` (default ``max``); genes joined by
-**AND** (complexes) with ``complex_scoring`` (default ``min``). Genes missing from
-``gene_scores`` are *omitted*; a reaction with no genes — or whose genes are all
-missing — gets ``no_gene_score`` (default −2). These reaction scores feed
+Maps per-gene scores (for example expression-derived: present gives a positive score, absent
+a negative one) to per-reaction scores by walking each reaction's GPR. Genes joined by OR
+(isozymes) are combined with ``isozyme_scoring`` (default ``max``); genes joined by AND
+(complexes) with ``complex_scoring`` (default ``min``). Genes missing from ``gene_scores``, or
+scored NaN, are omitted; a reaction with no genes or whose genes are all missing or NaN gets
+``no_gene_score`` (default -2). These reaction scores are the input of
 :func:`raven_toolbox.init.ftinit`.
 
-Upstream — the omics-data → gene-score step (thresholding, expression levels) — lives
-in :mod:`raven_toolbox.omics`; this function takes gene scores as given.
+The step from omics data to gene scores (thresholding, expression levels) is in
+:mod:`raven_toolbox.init.hpa`; :func:`score_reactions_from_genes` takes gene scores as given.
 """
 from __future__ import annotations
 
@@ -30,19 +30,41 @@ def gene_scores_from_expression(
     max_score: float = 10.0,
     min_score: float = -5.0,
 ) -> dict[str, float]:
-    """Gene scores from RNA-seq/array expression, RAVEN's ``5·ln(level/reference)``.
+    """Gene scores from RNA-seq or array expression, RAVEN's ``5·ln(level/reference)``.
 
-    This is tINIT's usual entry point (RNA-seq is the common case; single-cell and
-    HPA are alternative upstream sources). ``reference`` is either a per-gene
-    reference level (e.g. the cross-sample mean) or a single threshold for all genes:
-    a gene expressed above its reference scores positive, below it negative. The
-    score is clamped to ``[min_score, max_score]``; non-positive level/reference (and
-    missing reference) → ``min_score`` (RAVEN maps these NaNs to -5).
+    ``reference`` is either a per-gene reference level (for example the cross-sample mean) or a
+    single threshold for all genes: a gene expressed above its reference scores positive, below
+    it negative. The score is ``factor * ln(level/reference)``, clamped to
+    ``[min_score, max_score]``. A zero level against a positive reference scores ``min_score``;
+    a positive level against a zero reference scores ``max_score``; zero against zero, a
+    negative level or reference, and a missing reference score ``min_score``. A gene whose
+    level is missing (``None`` or NaN) gets no entry, so :func:`score_reactions_from_genes`
+    leaves it out of the rule.
+
+    Parameters
+    ----------
+    expression : Mapping[str, float]
+        Expression level of each gene, keyed by gene id.
+    reference : Mapping[str, float] or float
+        Per-gene reference level, or one threshold for all genes. A gene missing from a
+        mapping has a missing reference.
+    factor : float
+        Keyword-only; default 5.0. Multiplies ``ln(level/reference)``.
+    max_score : float
+        Keyword-only; default 10.0. Upper limit of the score.
+    min_score : float
+        Keyword-only; default -5.0. Lower limit of the score.
     """
     scores: dict[str, float] = {}
     for gene, level in expression.items():
+        if level is None or math.isnan(level):
+            continue
         ref = reference if isinstance(reference, (int, float)) else reference.get(gene)
-        if not level or not ref or level <= 0 or ref <= 0:
+        if ref is None or math.isnan(ref) or level < 0 or ref < 0 or (level == 0 and ref == 0):
+            scores[gene] = min_score
+        elif ref == 0:
+            scores[gene] = max_score
+        elif level == 0:
             scores[gene] = min_score
         else:
             scores[gene] = max(min(factor * math.log(level / ref), max_score), min_score)
@@ -51,7 +73,8 @@ def gene_scores_from_expression(
 
 def _score_node(node, gene_scores: Mapping[str, float], iso, cplx) -> float | None:
     if isinstance(node, ast.Name):
-        return gene_scores.get(node.id)  # None if the gene has no score
+        score = gene_scores.get(node.id)
+        return None if score is None or math.isnan(score) else score  # None if the gene has no score
     if isinstance(node, ast.BoolOp):
         agg = iso if isinstance(node.op, ast.Or) else cplx
         vals = [s for v in node.values if (s := _score_node(v, gene_scores, iso, cplx)) is not None]
@@ -69,10 +92,25 @@ def score_reactions_from_genes(
 ) -> dict[str, float]:
     """Score each reaction from per-gene scores via its GPR (``{reaction_id: score}``).
 
-    Isozymes (GPR **OR**) are combined with ``isozyme_scoring`` (default ``max``);
-    complex subunits (**AND**) with ``complex_scoring`` (default ``min``). A reaction
-    with no genes, or whose genes are all missing from ``gene_scores``, gets
-    ``no_gene_score`` (default -2).
+    Isozymes (GPR OR) are combined with ``isozyme_scoring`` (default ``max``);
+    complex subunits (AND) with ``complex_scoring`` (default ``min``). A reaction
+    with no genes, or whose genes are all missing from ``gene_scores`` or scored NaN,
+    gets ``no_gene_score`` (default -2).
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are scored.
+    gene_scores : Mapping[str, float]
+        Score of each gene, keyed by gene id.
+    isozyme_scoring : str
+        Keyword-only; default ``"max"``. Combination of genes joined by OR. One of ``"min"``,
+        ``"max"``, ``"median"`` and ``"average"``; any other value raises :class:`ValueError`.
+    complex_scoring : str
+        Keyword-only; default ``"min"``. Combination of genes joined by AND. Accepts the same
+        values as ``isozyme_scoring``.
+    no_gene_score : float
+        Keyword-only; default -2.0. Score of a reaction with no genes or no scored genes.
     """
     iso, cplx = resolve_aggregators(isozyme_scoring, complex_scoring)
 

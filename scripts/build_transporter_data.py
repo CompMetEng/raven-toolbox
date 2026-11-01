@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the transporter reference databases for evidence-aware transport scoring.
 
-Produces four raven-data artefacts (host them under a ``transporters-<date>`` release, then run
-``make_registry_snippet.py`` + ``publish_to_raven_data.py`` per
-https://github.com/SysBioChalmers/raven-gecko-parity/blob/main/docs/artefact_hosting.md):
+Produces four toolbox-assets artefacts (host them under a ``transporters-<date>`` release, then run
+``make_registry_snippet.py`` + ``publish_to_toolbox_assets.py`` per
+https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/publishing_artefacts.md):
 
 * ``transporter_pfam.hmm`` — the HMMER database of the transporter Pfam families in
   :data:`raven_toolbox.localization.transporter_tables.PFAM_TRANSPORTERS`, fetched one HMM at a time

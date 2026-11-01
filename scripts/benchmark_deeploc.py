@@ -243,9 +243,9 @@ def main() -> None:
         ctruth, crxn_genes = build_truth(cmodel)
         collapse_desc = ", ".join(f"{mem}->{lum}" for mem, lum in membrane_to_lumen.items())
         out += [f"## 3. Collapsed membranes ({collapse_desc})",
-                "", "Collapsing also turns lumen/membrane-spanning reactions (previously "
-                "multi-compartment, so excluded) into single-compartment ones, so the truth set "
-                "grows.", ""]
+                "", "Collapsing also turns lumen/membrane-spanning reactions (multi-compartment, "
+                "so excluded, on the uncollapsed model) into single-compartment ones, so the "
+                "truth set grows.", ""]
         out += fmt_acc("Per-compartment accuracy on the organelle-collapsed model",
                        organelle_accuracy(ctruth, crxn_genes, dl), cfg["comp_order"])
 

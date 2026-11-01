@@ -1,14 +1,14 @@
 """Analyses not in cobrapy's core.
 
-* :func:`reporter_metabolites` — Reporter Metabolites (around-metabolite gene-score test).
-* :func:`fseof` — Flux Scanning based on Enforced Objective Flux.
-* :func:`random_sampling` — flux sampling: ACHR/CHRR MCMC (default ACHR) or the
+* :func:`reporter_metabolites`: Reporter Metabolites (around-metabolite gene-score test).
+* :func:`fseof`: Flux Scanning based on Enforced Objective Flux.
+* :func:`random_sampling`: flux sampling with ACHR or CHRR MCMC (default ACHR) or the
   random-objective vertex method, selected via ``method=``.
-* :func:`walk_fluxes` / :class:`FluxWalker` — interactive flux-network navigation.
-* :func:`get_min_nr_fluxes` — minimum-cardinality flux distribution (big-M MILP).
-* :func:`compare_fluxes` — reactions whose flux changed between two conditions.
-* :func:`trace_flux_path` — highest-flux-fraction path between two reactions.
-* :func:`get_flux_z` / :func:`analyze_sampling` — flux-vs-expression change significance
+* :func:`walk_fluxes` and :class:`FluxWalker`: interactive flux-network navigation.
+* :func:`get_min_nr_fluxes`: minimum-cardinality flux distribution (big-M MILP).
+* :func:`compare_fluxes`: reactions whose flux changed between two conditions.
+* :func:`trace_flux_path`: highest-flux-fraction path between two reactions.
+* :func:`get_flux_z` and :func:`analyze_sampling`: significance of flux and expression changes
   between two sampled conditions.
 """
 from raven_toolbox.analysis.compare_fluxes import CompareFluxesResult, compare_fluxes

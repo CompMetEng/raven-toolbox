@@ -2,7 +2,7 @@
 
 Port of RAVEN's ``downloadGenomeData`` (fetch a GFF3 + protein FASTA pair
 from NCBI Datasets) and ``getGeneData`` (parse the GFF3 into a gene-mapping
-table suitable for :func:`raven_toolbox.curation.rename_model_genes`).
+table for :func:`raven_toolbox.curation.rename_model_genes`).
 """
 from __future__ import annotations
 
@@ -33,14 +33,14 @@ def download_genome_data(
 ) -> tuple[Path, Path]:
     """Download the GFF3 annotation and protein FASTA for an NCBI genome assembly.
 
-    Retrieves both files in one archive via the NCBI Datasets v2 API. Files
-    already present in ``output_dir`` are not re-fetched; delete them
-    manually to force a refresh.
+    Retrieves both files in one archive via the NCBI Datasets v2 API. When both files
+    are already present in ``output_dir``, nothing is fetched; deleting them forces a
+    new download.
 
     Parameters
     ----------
     accession:
-        NCBI genome assembly accession, e.g. ``"GCF_000002595.2"``. Both
+        NCBI genome assembly accession, for example ``"GCF_000002595.2"``. Both
         RefSeq (``GCF_``) and GenBank (``GCA_``) prefixes are accepted
         (case-insensitively).
     output_dir:
@@ -56,9 +56,10 @@ def download_genome_data(
     Raises
     ------
     ValueError
-        If ``accession`` doesn't start with ``GCF_``/``GCA_``.
+        If ``accession`` does not start with ``GCF_`` or ``GCA_``.
     RuntimeError
-        If the download, extraction, or the archive's contents are invalid.
+        If the download or the extraction fails, or the archive lacks the GFF3 or the
+        protein FASTA file.
     """
     if not accession.upper().startswith(("GCF_", "GCA_")):
         raise ValueError(
@@ -169,21 +170,26 @@ def _parse_cds_attrs(attrs: str) -> tuple[str, str]:
 
 
 def parse_gff_gene_table(gff_path: str | Path) -> pd.DataFrame:
-    """Parse a GFF3 file into a gene/protein mapping table.
+    """Parse a GFF3 file into a gene-protein mapping table.
 
-    Extracts gene + CDS pairs. The protein accession is taken from each
+    Extracts gene and CDS pairs. The protein accession is taken from each
     CDS's ``protein_id`` (or, failing that, a ``Dbxref=GenBank:...`` entry),
     and the owning gene is resolved through the ``Parent`` chain
     (CDS -> mRNA -> gene for eukaryotes, CDS -> gene for prokaryotes), so
     the ``GenBank_protein`` column matches a protein FASTA's headers.
+
+    Parameters
+    ----------
+    gff_path : str or Path
+        Path of an uncompressed GFF3 file, read as UTF-8. Comment lines (starting with ``#``)
+        and lines with fewer than 9 tab-separated fields are skipped.
 
     Returns
     -------
     pandas.DataFrame
         Columns ``locus_tag``, ``old_locus_tag``, ``GeneID``, ``gene_name``,
         ``GenBank_protein``, ``UniProt``. Deduplicated (a CDS repeats once
-        per exon) on every column except ``UniProt``, matching
-        ``getGeneData.m``'s own dedup key exactly.
+        per exon) on every column except ``UniProt``, the same key as ``getGeneData.m``.
     """
     gene_map: dict[str, dict[str, str]] = {}
     mrna_to_gene: dict[str, str] = {}
@@ -236,13 +242,13 @@ def get_gene_data(
     Parameters
     ----------
     accession_or_path:
-        An NCBI assembly accession (downloaded automatically via
+        An NCBI assembly accession (downloaded with
         :func:`download_genome_data` if not already present in
         ``download_dir``), or a path to a local GFF3 file.
     output_file:
         If given, also save the table as a tab-delimited file.
     download_dir:
-        Directory to download to, if ``accession_or_path`` is an accession.
+        Directory to download to when ``accession_or_path`` is an accession.
 
     Returns
     -------

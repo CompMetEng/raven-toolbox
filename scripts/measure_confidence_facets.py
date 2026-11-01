@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the confidence-facet tables in ``docs/studies/confidence_tracking.md``.
+"""Regenerate the confidence-facet tables in ``raven-gecko-parity/docs/localization/confidence_tracking.md``.
 
 Runs the shipped ``equation`` and ``gene_association`` scorers over a model and prints:
 

@@ -31,7 +31,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install --upgrade pip
+      - run: python -m pip install --upgrade pip
       - run: pip install build
       - run: python -m build
 
@@ -115,7 +115,7 @@ jobs:
     # Trusted Publishing: PyPI verifies this workflow's OIDC identity, so no
     # long-lived token is stored in the repo. Requires a one-time publisher on
     # PyPI for raven-toolbox with:
-    #   owner: SysBioChalmers   repo: raven-toolbox
+    #   owner: CompMetEng       repo: raven-toolbox
     #   workflow: release.yml   environment: pypi
     environment: pypi
     permissions:

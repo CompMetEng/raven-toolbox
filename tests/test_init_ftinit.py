@@ -74,6 +74,37 @@ def test_essential_force_clamps_to_capacity():
     assert res2.fluxes["LOW"] >= 0.04 - 1e-9
 
 
+def test_solver_tolerances_reach_gurobi_and_default_to_raven(monkeypatch):
+    """feas_tol/opt_tol/int_feas_tol/presolve are applied to the solver; defaults are RAVEN's."""
+    import importlib
+
+    try:  # optlang ships the module even without gurobipy, so import for real
+        gi = importlib.import_module("optlang.gurobi_interface")
+    except ImportError:
+        pytest.skip("gurobi is not installed; the Params under test are Gurobi-specific")
+
+    seen: list[tuple] = []
+    orig = gi.Model.optimize
+
+    def spy(self, *args, **kwargs):
+        p = self.problem.Params
+        seen.append((p.FeasibilityTol, p.OptimalityTol, p.IntFeasTol, p.Presolve))
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(gi.Model, "optimize", spy)
+
+    model = make_test_model()
+    model.solver = "gurobi"
+    scores = _scores(model)
+
+    run_ftinit(model, scores)
+    assert seen[-1] == (1e-9, 1e-9, 1e-9, 2)
+
+    res = run_ftinit(model, scores, feas_tol=1e-6, opt_tol=1e-7, int_feas_tol=1e-5, presolve=1)
+    assert seen[-1] == (1e-6, 1e-7, 1e-5, 1)
+    assert res.objective == pytest.approx(8.0, abs=1e-6)  # relaxed tolerances, same optimum
+
+
 def test_essential_reaction_forced_on():
     """An essential reaction is kept and carries flux even when its score is negative."""
     model = make_test_model()
@@ -164,12 +195,157 @@ def test_resolve_ties_breaks_degenerate_tie_by_id():
     assert res.objective == pytest.approx(-1.0, abs=1e-6)
 
 
+def test_resolve_ties_skipped_after_time_limited_primary(monkeypatch):
+    """No tie-break when the primary solve stops at the time limit: the phase-1 set is kept."""
+    import importlib
+
+    import optlang.interface
+
+    ftinit_module = importlib.import_module("raven_toolbox.init.ftinit")
+
+    calls = []
+    monkeypatch.setattr(ftinit_module, "_resolve_ties", lambda *a, **k: calls.append(a) or True)
+    monkeypatch.setattr(optlang.interface.Model, "status", property(lambda self: "time_limit"))
+    m = _degenerate_model()
+    res = run_ftinit(m, {"R1": -1.0, "R2": -1.0}, essential_rxns=["E"], resolve_ties=True)
+    assert calls == []
+    assert res.status == "time_limit"
+
+
 def test_resolve_ties_safe_on_unique_optimum():
     """On a non-degenerate model resolve_ties returns the same optimum (no regression)."""
     model = make_test_model()
     res = run_ftinit(model, _scores(model), resolve_ties=True)
     assert set(res.kept_reactions) == _LOOP
     assert res.objective == pytest.approx(8.0, abs=1e-6)
+
+
+def _direction_model():
+    """A positive reversible R3 (m <=> q) that can be on in either direction.
+
+    Run forward it needs m from a via the free R1; run backward it imports q and feeds the
+    essential E. Both directions reach the same score, so the flux of R3 (and the direction
+    the next ftINIT step would force it in) is a tie that only the flux distribution
+    resolves. The free loop L1/L2 can carry any flux. R2 is a negative-score dead end.
+    """
+    m = cobra.Model("direction")
+    a, mm, p, q, n, z = (cobra.Metabolite(x, name=x, compartment="s")
+                         for x in ("a", "m", "p", "q", "n", "z"))
+    rxns = {
+        "R1": ({a: -1, mm: 1}, 0), "R2": ({a: -1, z: 1}, 0), "R3": ({mm: -1, q: 1}, -1000),
+        "E": ({mm: -1, p: 1}, 0), "L1": ({mm: -1, n: 1}, 0), "L2": ({n: -1, mm: 1}, 0),
+        "EX_a": ({a: -1}, -1000), "EX_p": ({p: -1}, -1000), "EX_q": ({q: -1}, -1000),
+    }
+    for rid, (mets, lb) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        m.add_reactions([r])
+        r.add_metabolites(mets)
+    return m
+
+
+def test_resolve_ties_takes_fluxes_from_a_minimal_flux_solution():
+    """resolve_ties reports the least-total-flux distribution for the tie-broken on set.
+
+    The backward R3 route (import q, feed E) carries 0.4 in total, the forward one (a via
+    R1 into both R3 and E) 0.8, and the free loop L1/L2 carries nothing.
+    """
+    res = run_ftinit(_direction_model(), {"R2": -1.0, "R3": 1.0}, essential_rxns=["E"],
+                     resolve_ties=True)
+    assert "R3" in res.on_reactions and "R2" not in res.kept_reactions
+    expected = {"R1": 0.0, "R2": 0.0, "R3": -0.1, "E": 0.1, "L1": 0.0, "L2": 0.0,
+                "EX_a": 0.0, "EX_p": 0.1, "EX_q": -0.1}
+    for rid, v in expected.items():
+        assert res.fluxes[rid] == pytest.approx(v, abs=1e-6), rid
+    assert res.objective == pytest.approx(1.0, abs=1e-6)
+
+
+def _two_route_model():
+    """The essential E consumes y, which the reversible R1 (y <=> x) or R2 (y <=> z) can
+    supply when run backward from the imports IN_x or IN_z.
+
+    Both routes carry the same total flux, so the least total flux leaves open which of R1
+    and R2 runs backward. N is a negative-score dead end.
+    """
+    m = cobra.Model("two_route")
+    x, y, z, p, d = (cobra.Metabolite(k, name=k, compartment="s") for k in "xyzpd")
+    rxns = {
+        "IN_x": ({x: 1}, 0), "IN_z": ({z: 1}, 0), "R1": ({y: -1, x: 1}, -1000),
+        "R2": ({y: -1, z: 1}, -1000), "E": ({y: -1, p: 1}, 0), "OUT_p": ({p: -1}, 0),
+        "N": ({x: -1, d: 1}, 0),
+    }
+    for rid, (mets, lb) in rxns.items():
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=1000)
+        m.add_reactions([r])
+        r.add_metabolites(mets)
+    return m
+
+
+def test_resolve_ties_lower_ranked_reaction_keeps_its_forward_direction():
+    """Between equal-total-flux directions, resolve_ties runs the higher-ranked one backward.
+
+    Ranked by id, R1 comes before R2, so R2 carries the backward flux; with ``rank_keys``
+    ranking R1 last, R1 does.
+    """
+    def solve(rank_keys=None):
+        res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
+                         resolve_ties=True, rank_keys=rank_keys)
+        return res.fluxes["R1"], res.fluxes["R2"]
+
+    assert solve() == pytest.approx((0.0, -0.1), abs=1e-6)
+    assert solve({"R1": "R9"}) == pytest.approx((-0.1, 0.0), abs=1e-6)
+
+
+def test_resolve_ties_without_pin_fluxes_skips_the_flux_phases(monkeypatch):
+    """With _pin_fluxes=False, phases 2c and 2d do not run and R1 is still the kept one."""
+    import importlib
+
+    ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
+    calls = []
+    monkeypatch.setattr(ftinit_mod, "_min_abs_flux", lambda *a, **k: calls.append(a))
+    res = run_ftinit(_degenerate_model(), {"R1": -1.0, "R2": -1.0}, essential_rxns=["E"],
+                     resolve_ties=True, _pin_fluxes=False)
+    assert calls == []
+    assert "R1" in res.kept_reactions and "R2" not in res.kept_reactions
+    run_ftinit(_degenerate_model(), {"R1": -1.0, "R2": -1.0}, essential_rxns=["E"],
+               resolve_ties=True)
+    assert len(calls) == 1
+
+
+def _no_solution_in(monkeypatch, constraint_prefix):
+    """Make ``_has_solution`` report no solution while ``opt`` holds a constraint whose name
+    starts with ``constraint_prefix``, so the phase that adds it finds nothing."""
+    import importlib
+
+    ftinit_mod = importlib.import_module("raven_toolbox.init.ftinit")
+    real = ftinit_mod._has_solution
+
+    def has_solution(opt):
+        if any(c.name.startswith(constraint_prefix) for c in opt.constraints):
+            return False
+        return real(opt)
+
+    monkeypatch.setattr(ftinit_mod, "_has_solution", has_solution)
+
+
+def test_resolve_ties_warns_when_the_minimal_flux_phase_finds_nothing(monkeypatch):
+    """When phase 2c finds no solution, a phase2c-minflux warning is raised and the
+    tie-broken on set is kept."""
+    _no_solution_in(monkeypatch, "_absp_")
+    with pytest.warns(UserWarning, match="phase2c-minflux"):
+        res = run_ftinit(_direction_model(), {"R2": -1.0, "R3": 1.0}, essential_rxns=["E"],
+                         resolve_ties=True)
+    assert "R3" in res.on_reactions and "R2" not in res.kept_reactions
+    assert abs(res.fluxes["E"]) >= 0.1 - 1e-6
+
+
+def test_resolve_ties_warns_when_the_direction_phase_finds_nothing(monkeypatch):
+    """When phase 2d finds no solution, a phase2d-direction warning is raised and the
+    fluxes stay a least-total-flux solution of phase 2c."""
+    _no_solution_in(monkeypatch, "_minflux_cap")
+    with pytest.warns(UserWarning, match="phase2d-direction"):
+        res = run_ftinit(_two_route_model(), {"N": -1.0}, essential_rxns=["E"],
+                         resolve_ties=True)
+    assert abs(res.fluxes["R1"]) + abs(res.fluxes["R2"]) == pytest.approx(0.1, abs=1e-6)
 
 
 # --------------------------------------------------------------------------- #
@@ -226,7 +402,7 @@ def test_time_limit_fallback_warns(monkeypatch):
 
     monkeypatch.setattr(ftinit_mod, "_solve_step", timed_out)
     with pytest.warns(UserWarning, match="unproven MIP gap"):
-        ftinit_mod.ftinit(prep, scores, fill_gaps=False)
+        ftinit_mod.ftinit(prep, rxn_scores=scores, fill_gaps=False)
 
 
 def test_unproven_tie_break_warns():
@@ -266,7 +442,7 @@ def test_unproven_tie_break_warns():
     try:
         with pytest.warns(UserWarning, match="tie resolution did not converge"):
             ok = ftinit_mod._resolve_ties(stub, interface, interface.Variable("objx"),
-                                          {"R1": (ind, -1.0)}, -1.0, 1.0)
+                                          {"R1": (ind, -1.0)}, -1.0, 1.0, str)
     finally:
         ftinit_mod._has_solution = monkey
     assert ok  # the incumbent is still adopted, just no longer silently
@@ -276,8 +452,7 @@ def test_unproven_tie_break_warns():
 # metabolomics (production-bonus for detected metabolites).
 #
 # Fixtures and expected outcomes are the same ones hand-verified end-to-end against
-# RAVEN's own ftINITInternalAlg (develop3 branch, the corrected one -- see the
-# reference_reactions postmortem for why not `main`) via a standalone MATLAB probe
+# RAVEN 3's own ftINITInternalAlg via a standalone MATLAB probe
 # before porting: same toy topology, same objective values, same flux directions.
 # --------------------------------------------------------------------------- #
 def _irrev_producer_model():
@@ -381,3 +556,89 @@ def test_metabolomics_two_metabolites_mixed_categories_no_crash():
                      metabolomics={"x": {"R1"}, "y": {"R2"}}, prod_weight=5.0)
     assert {"R1", "R2"} <= set(res.kept_reactions)
     assert res.objective == pytest.approx(5.0, abs=1e-6)  # 2·bonus(5) - cost(2) - cost(3)
+
+
+def test_glpk_backend_warns_and_does_not_resolve():
+    """A GLPK MILP warns that it is not solving on Gurobi, and optlang's
+    "auto" presolve is pinned so a non-optimal status is not solved a second time."""
+    model = make_test_model()
+    model.solver = "glpk"
+    solves = []
+    original = model.problem.Model._optimize
+
+    def hits_time_limit(self):  # a solve that stops at time_limit with an incumbent
+        solves.append(1)
+        original(self)
+        return "time_limit"
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(model.problem.Model, "_optimize", hits_time_limit)
+        with pytest.warns(UserWarning, match="with GLPK"):
+            run_ftinit(model, _scores(model))
+    assert len(solves) == 1
+
+
+@pytest.mark.parametrize(("lb", "ub", "cap", "expected"), [
+    (0.0, 500.0, 1000.0, 500.0),             # forward irreversible: its ub
+    (0.0, float("inf"), 1000.0, 1000.0),     # infinite ub counts as the cap
+    (0.0, 0.05, 1000.0, 0.1),                # never below force_on
+    (-50.0, 20.0, 1000.0, 50.0),             # reversible: larger of the two capacities
+    (-2000.0, 300.0, 1000.0, 1000.0),        # each capacity capped
+    (-float("inf"), 5.0, 1000.0, 1000.0),
+    (-70.0, 0.0, 1000.0, 70.0),              # reverse-only: its reverse capacity
+    (-50.0, 20.0, 35.0, 35.0),               # a lower cap binds
+    (float("nan"), 20.0, 1000.0, 1000.0),    # a NaN bound counts as the cap
+])
+def test_reaction_big_m_follows_raven(lb, ub, cap, expected):
+    from raven_toolbox.init.ftinit import _reaction_big_m
+
+    assert _reaction_big_m(lb, ub, cap, 0.1) == pytest.approx(expected)
+
+
+def _big_m_model():
+    m = cobra.Model("bigm")
+    a, b = (cobra.Metabolite(n, name=n, compartment="s") for n in ("a", "b"))
+    m.add_metabolites([a, b])
+    rxns = []
+    for rid, lb, ub, st in [("EX_a", -1000, 1000, {a: 1}), ("EX_b", -1000, 1000, {b: -1}),
+                            ("PR", -50, 20, {a: -1, b: 1}), ("NI", 0, float("inf"), {a: -1, b: 1}),
+                            ("NIs", 0, 0.05, {a: -1, b: 1}), ("NR", -30, 40, {a: -1, b: 1}),
+                            ("NRo", -70, 0, {a: -1, b: 1})]:
+        r = cobra.Reaction(rid, lower_bound=lb, upper_bound=ub)
+        r.add_metabolites(st)
+        rxns.append(r)
+    m.add_reactions(rxns)
+    return m
+
+
+@pytest.mark.parametrize(("cap", "metabolomics", "expected"), [
+    (None, None, {("dirp_PR", "b_PR"): -50.0, ("dirn_PR", "b_PR"): 50.0,
+                  ("off_NI", "x_NI"): -1000.0, ("off_NIs", "x_NIs"): -0.1,
+                  ("off_NR", "x_NR"): -40.0, ("off_NRo", "x_NRo"): -70.0}),
+    (35.0, None, {("dirp_PR", "b_PR"): -35.0, ("dirn_PR", "b_PR"): 35.0,
+                  ("off_NI", "x_NI"): -35.0, ("off_NIs", "x_NIs"): -0.1,
+                  ("off_NR", "x_NR"): -35.0, ("off_NRo", "x_NRo"): -35.0}),
+    # a metabolite producer gets an indicator and a direction binary with its own big-M
+    (None, {"b": {"NR"}}, {("dirp_NR", "b_NR"): -40.0, ("dirn_NR", "b_NR"): 40.0}),
+])
+def test_each_scored_reaction_class_uses_its_own_big_m(monkeypatch, cap, metabolomics, expected):
+    """Direction and off constraints use RAVEN's per-reaction big-M, capped by big_m."""
+    model = _big_m_model()
+    seen = {}
+    cls = model.problem.Model
+    orig = cls.optimize
+
+    def spy(self, *args, **kwargs):
+        if not seen and "dirp_PR" in self.constraints:  # the ftINIT MILP, not another solve
+            for (cname, vname) in expected:
+                c, v = self.constraints[cname], self.variables[vname]
+                seen[(cname, vname)] = c.get_linear_coefficients([v])[v]
+                if cname.startswith("dirn"):
+                    assert c.ub == pytest.approx(expected[(cname, vname)])
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(cls, "optimize", spy)
+    kw = {} if cap is None else {"big_m": cap}
+    run_ftinit(model, {"PR": 1.0, "NI": -1.0, "NIs": -1.0, "NR": -1.0, "NRo": -1.0},
+               metabolomics=metabolomics, **kw)
+    assert seen == pytest.approx(expected)

@@ -1,17 +1,17 @@
 """Strict two-model semantic-equality diff.
 
 Complements :func:`raven_toolbox.comparison.compare.compare_models`, which
-takes ≥2 models and produces a presence-matrix overview. Where
-``compare_models`` answers *"how do these models relate?"*,
-:func:`diff_models` answers *"are these two models the same?"* — used as a
-CI gate to verify that two toolchains (e.g. MATLAB RAVEN vs raven_toolbox,
-or pre/post refactor of one toolchain) produce equivalent models.
+takes at least 2 models and produces a presence-matrix overview.
+``compare_models`` shows how models relate; :func:`diff_models` shows whether two
+models are the same. It is a CI gate to verify that two toolchains (for
+example MATLAB RAVEN and raven_toolbox) or two versions of one toolchain produce
+equivalent models.
 
-Diff scope: reaction / metabolite / gene id sets, stoichiometry (within
-tolerance), bounds, objective coefficients, GPR rules, metabolite
-formula/charge/compartment, and a configurable set of annotation keys.
-Formatting differences (key ordering, whitespace, float repr, and GPR
-operand order — ``a and b`` == ``b and a``) are explicitly **not** failures.
+Diff scope: reaction, metabolite and gene id sets, stoichiometry (within
+tolerance), bounds, objective coefficients, GPR rules, metabolite formula, charge
+and compartment, and a configurable set of annotation keys. Differences in key
+ordering, whitespace, float representation and GPR operand order (``a and b`` equals
+``b and a``) are not reported.
 """
 from __future__ import annotations
 
@@ -70,18 +70,44 @@ def diff_models(
 ) -> DiffReport:
     """Compare two cobra models for semantic equality.
 
-    Checks:
+    Returns a :class:`DiffReport` that lists every difference found in the following
+    properties:
 
     * reaction, metabolite and gene id sets (exact)
     * stoichiometry per shared reaction (within ``stoichiometry_tol``)
-    * lower/upper bounds and objective coefficients (exact)
-    * GPR rules (whitespace- and case-insensitive string comparison)
-    * metabolite formula, charge, compartment (exact)
-    * a default set of annotation keys (see ``DEFAULT_ANNOTATION_KEYS``)
-      plus any ``extra_annotations``, minus any ``ignore_annotations``
+    * lower and upper bounds and objective coefficients (exact)
+    * GPR rules (compared as logic: the rules are expanded to disjunctive normal form,
+      and gene and clause order is ignored)
+    * metabolite formula, charge, compartment (exact; an empty formula equals a missing
+      one and a missing charge equals 0)
+    * the annotation keys in ``DEFAULT_ANNOTATION_KEYS`` plus those in
+      ``extra_annotations``, minus those in ``ignore_annotations``
 
-    ``max_per_category`` caps the per-category diff list so a wholesale
-    mismatch produces a digestible report rather than 10,000 lines.
+    The GPR comparison lowercases gene ids, so rules that differ only in the case of a
+    gene id are equal. RAVEN's ``diffModels`` compares gene ids case-sensitively.
+
+    Parameters
+    ----------
+    a : cobra.Model
+        First model, labelled ``A`` in the difference messages.
+    b : cobra.Model
+        Second model, labelled ``B`` in the difference messages.
+    stoichiometry_tol : float
+        Largest absolute difference between two stoichiometric coefficients that counts as
+        equal. Default 1e-9. Reactions whose metabolite sets differ are reported regardless.
+    ignore_annotations : Iterable[str]
+        Annotation keys removed from the compared set. Default: no key removed.
+    extra_annotations : Iterable[str]
+        Annotation keys compared in addition to ``DEFAULT_ANNOTATION_KEYS``. Default: no
+        additional key. For every compared key, default or extra, values are compared as
+        sorted tuples of strings when they are lists or tuples, otherwise as strings.
+    max_per_category : int
+        Maximum number of differences reported per category. The categories are
+        stoichiometry, bounds, objective, GPR and annotation for reactions, and formula,
+        charge, compartment and annotation for metabolites; the annotation category counts the
+        differences of all compared annotation keys together. The first difference beyond the
+        cap adds one entry that reports the truncation. Default 50. The lists of ids that
+        are present in only one model are not capped by this value; each shows 10 ids.
     """
     diffs: list[str] = []
     keys = (set(DEFAULT_ANNOTATION_KEYS) | set(extra_annotations)) - set(ignore_annotations)
@@ -222,15 +248,14 @@ def _diff_annotations(
 def _canonical_gpr(reaction: cobra.Reaction) -> str:
     """Canonical, order-insensitive form of a reaction's GPR, for logic-level comparison.
 
-    DNF-expand the parsed GPR, then sort the genes within each isozyme clause and sort the clauses, so
-    operand order never registers as a difference: ``a and b`` == ``b and a`` and ``a or b`` ==
-    ``b or a``. Mirrors MATLAB RAVEN's ``diffModels``, which compares grRules as logic rather than
-    text. Gene ids are lowercased and duplicate genes/clauses collapse, so formatting differences
-    between equivalent rules don't register either.
+    Expands the parsed GPR to disjunctive normal form, then sorts the genes within each
+    isozyme clause and sorts the clauses, so ``a and b`` equals ``b and a`` and ``a or b``
+    equals ``b or a``. Follows ``diffModels`` except that gene ids are lowercased and duplicate
+    clauses collapse.
 
-    Falls back to a whitespace-normalised, lowercased string comparison for a rule cobra could not parse
-    (``gpr.body`` is ``None`` while the rule string is non-empty), so a malformed rule is still compared
-    rather than silently equated to the empty rule.
+    A rule that cobra could not parse (``gpr.body`` is ``None`` while the rule string is
+    non-empty) is compared as a whitespace-normalised, lowercased string, so a malformed
+    rule differs from the empty rule.
     """
     gpr = reaction.gpr
     if gpr is not None and gpr.body is not None:

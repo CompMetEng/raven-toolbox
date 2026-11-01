@@ -1,18 +1,20 @@
-"""Build a draft model from template models + homology hits.
+"""Build a draft model from template models and homology hits.
 
-Key behaviour:
+Behaviour:
 
-* ``strictness`` controls the hit-filtering policy (bidirectional matching,
-  best-hits-only, or both);
-* GPR rewriting works on cobra's AST, not regex;
-* explicit ``complex_policy`` decides what happens to AND-subunits that lack an
-  ortholog (drop, keep, drop-the-reaction);
-* best-hit selection is bitscore-based;
-* the ortholog map is a DataFrame; provenance is structured.
+* ``strictness`` selects the hit-filtering policy (bidirectional matching,
+  best hits only, or both);
+* GPR rewriting operates on the abstract syntax tree of cobra's GPR;
+* ``complex_policy`` selects what happens to AND-linked subunits that lack an
+  ortholog (``"flag"``, ``"keep"`` or ``"drop"``);
+* best-hit selection uses the bitscore;
+* the ortholog map is returned as a dict in ``HomologyResult.gene_map``, and the
+  ``notes`` of each transferred reaction contain ``homology_source``.
 """
 from __future__ import annotations
 
 import ast
+import re
 import warnings
 from dataclasses import dataclass, field
 
@@ -21,6 +23,10 @@ import pandas as pd
 
 from raven_toolbox.manipulation.merge import merge_models
 from raven_toolbox.reconstruction.homology.hits import validate_hits
+from raven_toolbox.utils.gpr import set_gene_rule
+
+# cobra's GPR parser splits a gene id at whitespace, parentheses, "|" and "&".
+_GPR_SPLIT = re.compile(r"[\s()|&]")
 
 
 @dataclass
@@ -34,10 +40,10 @@ class HomologyResult:
     gene_map
         ``{model_id: {template_gene: [new_gene, ...]}}`` ortholog mapping used.
     candidates
-        Reactions that just missed the identity threshold, with the best hit
-        supporting each, sorted strongest first. ``None`` unless
-        ``review_identity`` was given. These are *not* in ``model``: they are the
-        near misses, for a curator to accept or reject deliberately.
+        Reactions that transfer at the identity threshold ``review_identity`` but
+        not at ``min_identity``, with the best hit supporting each, sorted by
+        identity, strongest first. ``None`` unless ``review_identity`` was given.
+        These reactions are not in ``model``.
     """
 
     model: cobra.Model
@@ -53,63 +59,119 @@ class _Unmapped:
     def __init__(self, gene: str):
         self.gene = gene
 
+    def __eq__(self, other):
+        return isinstance(other, _Unmapped) and other.gene == self.gene
 
-def _rewrite_node(node, ortho: dict, policy: str, model_id: str):
+    def __hash__(self):
+        return hash(("_Unmapped", self.gene))
+
+
+def _rewrite_node(node, ortho: dict):
     """Rewrite a GPR AST node, substituting template genes by their orthologs.
 
-    Returns a GPR sub-expression string, ``None`` (nothing survives), or an
-    ``_Unmapped`` for a bare unmapped leaf (the parent decides what to do).
+    Returns a gene id, an ``_Unmapped`` for a template gene without an ortholog, or
+    ``(operator, [children])`` for a group. Groups are flattened and free of duplicates,
+    so several template genes that map to the same ortholog do not repeat it. An isozyme
+    group is represented by its mapped members: unmapped members are left out when at least one
+    member is mapped, and when none is mapped the last of them stands for the whole group, so a
+    complex keeps one unmapped subunit where all of its isozymes lack an ortholog.
     """
     if isinstance(node, ast.Name):
         new_genes = ortho.get(node.id)
         if new_genes:
-            return new_genes[0] if len(new_genes) == 1 else "(" + " or ".join(new_genes) + ")"
+            return _group("or", list(new_genes))
         return _Unmapped(node.id)
 
-    if isinstance(node, ast.BoolOp):
-        children = [_rewrite_node(c, ortho, policy, model_id) for c in node.values]
-        if isinstance(node.op, ast.Or):
-            # An isozyme branch with no ortholog is simply absent.
-            parts = [c for c in children if isinstance(c, str)]
-            if not parts:
-                return None
-            return parts[0] if len(parts) == 1 else "(" + " or ".join(parts) + ")"
-        # And: apply the complex policy to unmapped subunits.
-        parts = []
-        for child in children:
-            if isinstance(child, str):
-                parts.append(child)
-            elif isinstance(child, _Unmapped):
-                if policy == "flag":
-                    parts.append(f"OLD_{model_id}_{child.gene}")
-                elif policy == "drop":
-                    return None  # incomplete complex -> reaction unsupported
-                # policy == "keep": drop the unmapped subunit
-            else:  # None (a dead sub-branch)
-                if policy == "drop":
-                    return None
-        if not parts:
-            return None
-        return parts[0] if len(parts) == 1 else "(" + " and ".join(parts) + ")"
-
-    return None
+    children = [_rewrite_node(c, ortho) for c in node.values]
+    if isinstance(node.op, ast.Or):
+        mapped = [c for c in children if not isinstance(c, _Unmapped)]
+        if mapped:
+            return _group("or", mapped)
+        return children[-1]
+    return _group("and", children)
 
 
-def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str):
-    """Return the rewritten GPR string, or None if the reaction is unsupported."""
+def _contains_unmapped(expr) -> bool:
+    if isinstance(expr, _Unmapped):
+        return True
+    return isinstance(expr, tuple) and any(_contains_unmapped(c) for c in expr[1])
+
+
+def _apply_policy(expr, policy: str, model_id: str):
+    """Resolve the unmapped leaves of a rewritten tree under ``complex_policy``.
+
+    ``flag`` turns each into an ``OLD_<model>_<gene>`` placeholder gene, ``keep`` removes
+    them (a group left empty disappears with them) and ``drop`` removes the whole reaction
+    as soon as one is left. Returns ``None`` when nothing remains.
+    """
+    if policy == "drop":
+        return None if _contains_unmapped(expr) else expr
+    if isinstance(expr, _Unmapped):
+        return f"OLD_{model_id}_{expr.gene}" if policy == "flag" else None
+    if isinstance(expr, str):
+        return expr
+    op, children = expr
+    return _group(op, [c for c in (_apply_policy(c, policy, model_id) for c in children) if c is not None])
+
+
+def _prune_genes(node, removed: set):
+    """Remove template genes from a GPR AST, as RAVEN's removeGenes does.
+
+    Returns the pruned tree, or ``None`` when the rule cannot be satisfied without them
+    (a removed gene in an AND, or every branch of an OR removed).
+    """
+    if isinstance(node, ast.Name):
+        return None if node.id in removed else node
+    kids = [_prune_genes(c, removed) for c in node.values]
+    if isinstance(node.op, ast.And):
+        return None if any(k is None for k in kids) else node
+    kept = [k for k in kids if k is not None]
+    return ast.BoolOp(op=ast.Or(), values=kept) if kept else None
+
+
+def _group(op: str, children: list):
+    """Flatten same-operator groups, drop duplicates, and unwrap a single child."""
+    flat: list = []
+    for child in children:
+        for part in (child[1] if isinstance(child, tuple) and child[0] == op else [child]):
+            if part not in flat:
+                flat.append(part)
+    if not flat:
+        return None
+    return flat[0] if len(flat) == 1 else (op, flat)
+
+
+def _render(expr, parent: str | None = None) -> str:
+    """GPR string for a rewritten tree; nested groups of the other operator get parentheses."""
+    if isinstance(expr, str):
+        return expr
+    op, children = expr
+    text = f" {op} ".join(_render(c, op) for c in children)
+    return f"({text})" if parent is not None and parent != op else text
+
+
+def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str, removed: frozenset = frozenset()):
+    """Return the rewritten GPR string, or None if the reaction is unsupported.
+
+    ``removed`` holds template genes taken out of the template before the rewrite (genes a
+    preferred model already covers); a reaction that cannot work without them is unsupported.
+    """
     if not rxn.gene_reaction_rule:
         return None
     # A reaction is only transferred if at least one of its genes has an ortholog.
-    if not any(g.id in ortho for g in rxn.genes):
+    if not any(g.id in ortho or g.id in removed for g in rxn.genes):
         return None
-    result = _rewrite_node(rxn.gpr.body, ortho, policy, model_id)
-    if isinstance(result, str):
-        return result
-    return None
+    body = rxn.gpr.body
+    if removed:
+        body = _prune_genes(body, set(removed))
+        if body is None:
+            return None
+    result = _apply_policy(_rewrite_node(body, ortho), policy, model_id)
+    return None if result is None else _render(result)
 
 
 def _strictness_to_flags(strictness: int) -> tuple[bool, bool]:
-    """Map strictness 1/2/3 onto (bidirectional, best_hits_only)."""
+    """Map strictness 1, 2 or 3 onto (bidirectional, best_hits_only)."""
     if strictness == 1:
         return True, False
     if strictness == 2:
@@ -125,14 +187,15 @@ def _ortholog_map(
 ):
     """Build {model_id: {template_gene: [new_gene, ...]}} from the hits table."""
     h = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]
 
     if best_hits_only:
-        h = h.sort_values("bitscore", ascending=False)
-        h = h.groupby(["from_id", "to_id", "from_gene"], sort=False).head(1)
+        # Every hit tied for the best bitscore is kept, as in RAVEN.
+        best = h.groupby(["from_id", "to_id", "from_gene"])["bitscore"].transform("max")
+        h = h[h.bitscore == best]
 
     # Directional views, normalised to (model_id, new_gene, template_gene).
     fwd = (
@@ -176,20 +239,26 @@ def _ortholog_map(
     return ortho
 
 
-def _apply_preferred_order(ortho: dict, order: list[str]) -> dict:
-    """Each new gene's reactions come from the first model (in order) that maps it."""
-    winner: dict = {}  # new_gene -> winning model_id
-    for model_id in order:
-        for new_genes in ortho.get(model_id, {}).values():
-            for ng in new_genes:
-                winner.setdefault(ng, model_id)
+def _apply_preferred_order(ortho: dict, order: list[str]) -> tuple[dict, dict]:
+    """Give each new gene to the first model (in order) that maps it, as RAVEN does.
+
+    A template gene of a later model that maps to any new gene an earlier model already
+    maps is removed from that model altogether, together with its other mappings. The
+    new genes of every model count as taken, including those of its removed genes.
+    Returns the pruned mapping and ``{model_id: {removed template genes}}``.
+    """
+    taken: set = set()
     pruned: dict = {mid: {} for mid in ortho}
-    for model_id, per_model in ortho.items():
+    removed: dict = {mid: set() for mid in ortho}
+    for position, model_id in enumerate(order):
+        per_model = ortho.get(model_id, {})
         for template_gene, new_genes in per_model.items():
-            kept = [ng for ng in new_genes if winner.get(ng) == model_id]
-            if kept:
-                pruned[model_id][template_gene] = kept
-    return pruned
+            if position > 0 and taken.intersection(new_genes):
+                removed[model_id].add(template_gene)
+            else:
+                pruned[model_id][template_gene] = new_genes
+        taken.update(ng for new_genes in per_model.values() for ng in new_genes)
+    return pruned, removed
 
 
 def get_model_from_homology(
@@ -206,55 +275,113 @@ def get_model_from_homology(
     min_align_len: int = 100,
     min_identity: float = 40,
     review_identity: float | None = None,
+    keep_gene_free: bool = False,
+    preserve_notes: bool = False,
 ) -> HomologyResult:
     """Build a draft model for ``model_for`` by transferring reactions from templates.
 
-    Other parameters that materially change the result:
+    A hit passes when its e-value is below ``max_evalue`` and its alignment length and
+    identity are at least ``min_align_len`` and ``min_identity``, as in RAVEN.
 
-    * ``strictness`` (default 1) picks the hit-filtering policy:
-
-      - 1: bidirectional — a template gene and a new-organism gene must each
-        be the other's best match, rather than trusting a hit in just one
-        direction.
-      - 2: one-directional — trust a hit found in a single direction, picked
-        by ``map_direction``.
-      - 3: bidirectional and best-hits-only — before matching, each gene is
-        first trimmed to its single best hit (by bitscore) in each
-        direction, then the bidirectional rule is applied.
-
-    * ``map_direction`` picks which one-directional search to trust when
-      ``strictness`` is 2: ``"new_to_old"`` (default, hits found
-      searching from ``model_for``) or ``"old_to_new"``.
-    * ``complex_policy`` decides what happens to an AND-linked subunit with no
-      ortholog: ``"flag"`` (default) keeps the reaction with a placeholder
-      gene for later curator review, ``"keep"`` drops just that subunit,
-      ``"drop"`` drops the whole reaction.
-    * ``only_genes_in_models`` restricts the hits table to genes that actually
-      appear in the given ``models`` before mapping orthologs.
-    * ``preferred_order`` breaks ties when more than one template maps the
-      same new-organism gene: the earlier template in the list wins that gene
-      (default: the order of ``models``).
-
-    Defaults for the three filters come from a `calibration against KEGG orthology
-    <https://github.com/edkerk/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
+    Defaults for the three filters come from a `calibration against KEGG annotations and OMA assignments
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/homology-cutoff-calibration.md>`_
     on raven-docs, scored with precision weighted above recall (a wrongly transferred
-    reaction is harder to undo than a missing one):
+    reaction is harder to undo than a missing one).
 
-    * ``min_identity`` 40 is the binding filter and the measured optimum.
-    * ``min_align_len`` 100 replaces RAVEN's 200, which discarded real orthologs
-      for no gain in precision. Anything at or below 150 measured the same; 200
-      cost 1-2 points on every organism tested.
-    * ``max_evalue`` makes no difference anywhere between 1e-4 and 1e-50 -- the
-      other two filters have already excluded whatever it would exclude -- so
-      1e-30 is kept for continuity with RAVEN rather than for any measured effect.
+    Parameters
+    ----------
+    models : cobra.Model or Sequence[cobra.Model]
+        Template models. Each template is identified by its ``model.id``, which must match
+        the ``from_id`` or ``to_id`` values in ``hits``. A single model is accepted as a list
+        of one. Templates are merged in the order they are given, whatever the preferred order
+        is.
+    hits : pandas.DataFrame
+        Bidirectional hits table with the columns in ``HIT_COLUMNS``; a missing column raises
+        :class:`ValueError`. Organism ids in ``hits`` are case-sensitive. An id that matches
+        ``model_for`` or a template id only when case is ignored raises :class:`ValueError`;
+        hits involving other organisms are ignored. RAVEN raises an error for hits from an
+        organism that no template has as ``model.id``, and matches the template ids
+        case-insensitively.
+    model_for : str
+        Id of the organism the draft model is built for, as it appears in ``hits``.
+    preferred_order : Sequence[str] or None
+        Breaks ties when more than one template maps the same new-organism gene: the gene is
+        mapped to the earlier template in the list, and a gene of a later template that maps
+        to any gene an earlier template already maps is removed from that template
+        altogether, with its other mappings. A reaction of the later template that cannot work
+        without the removed gene is not transferred. Templates are merged in the order they
+        were given in ``models``, whatever the preferred order is, and a template that
+        ``preferred_order`` leaves out contributes nothing. The tie-break applies only when
+        more than one model is given. Default ``None``, which uses the order of ``models``.
+        RAVEN's ``preferredOrder`` decides which template receives a gene in the same way and
+        merges the models in the order of ``models``.
+    strictness : int
+        Hit-filtering policy. Default 1. Any other value than 1, 2 or 3 raises
+        :class:`ValueError`.
 
-    ``review_identity`` (e.g. 25) collects what those thresholds turn away. Any
-    reaction that *would* have transferred at the looser identity is reported in
-    ``HomologyResult.candidates`` with its strongest supporting hit, and is not
-    added to the model. The two error types are not symmetric -- a missing
-    reaction can be gap-filled, a wrong one is hard to find and harder to remove
-    -- so the filters stay strict, but the evidence for the near misses is handed
-    to the curator instead of being discarded silently.
+        - 1: bidirectional. A template gene and a new-organism gene must have
+          an accepted hit in both directions.
+        - 2: one-directional. A hit found in a single direction is accepted; the
+          direction is selected by ``map_direction``.
+        - 3: bidirectional and best hits only. Before matching, each gene keeps
+          only its best hits (by bitscore) in each direction, all of them when
+          several tie, then the bidirectional rule is applied.
+    map_direction : str
+        Direction of the one-directional search when ``strictness`` is 2: ``"new_to_old"``
+        (hits found searching from ``model_for``) or ``"old_to_new"``. Default
+        ``"new_to_old"``. Any other value raises :class:`ValueError`; the value has no effect
+        with other strictness values.
+    complex_policy : str
+        What happens to an AND-linked subunit with no ortholog. Default ``"flag"``.
+        ``"flag"`` keeps the reaction with a placeholder gene (``OLD_<model>_<gene>``) for
+        later curator review, ``"keep"`` removes that subunit, ``"drop"`` drops the whole
+        reaction. An isozyme group counts as a subunit without an ortholog only when none of
+        its members has one, and then one placeholder stands for it. ``"drop"`` removes the
+        reaction whenever a placeholder would remain, also when another isozyme branch is
+        complete. Any other value raises :class:`ValueError`.
+    only_genes_in_models : bool
+        Restricts the hits table to hits whose template gene appears in the given ``models``
+        before mapping orthologs, so a gene the templates lack cannot be a best hit. It raises
+        :class:`ValueError` when no hit of a search direction between ``model_for`` and a
+        template passes the cutoffs and this filter. As in RAVEN, it changes the mapping only
+        with ``strictness`` 3: with 1 and 2 a template gene that no template contains is
+        dropped in any case, and only the :class:`ValueError` differs. Default ``False``.
+    max_evalue : float
+        A hit passes only when its e-value is below this value. Default 1e-30, the RAVEN
+        value. It makes no difference between 1e-4 and 1e-50, because the other two filters
+        exclude every hit that it would exclude.
+    min_align_len : int
+        A hit passes only when its alignment length is at least this value. Default 100, as
+        RAVEN's ``minLen``.
+    min_identity : float
+        A hit passes only when its identity is at least this value. Default 40. It is the
+        filter that limits the result.
+    review_identity : float or None
+        Lower identity threshold (for example 25) that collects the reactions the thresholds
+        reject. Any reaction that transfers at this lower identity but not at
+        ``min_identity`` is reported in ``HomologyResult.candidates`` with its strongest
+        supporting hit and is not added to the model. A missing reaction can be gap-filled,
+        whereas a wrongly transferred reaction is hard to find and remove, so the filters
+        stay strict. It must be below ``min_identity``, otherwise :class:`ValueError` is
+        raised. Hits with ``hits.attrs["source"] == "SuppOrth"`` have a placeholder identity
+        of 100, so a warning is issued and no reaction is a candidate. Default ``None``, which
+        collects no candidates.
+    keep_gene_free : bool
+        Also transfers the template reactions that have no GPR (spontaneous, transport,
+        exchange, artificial). By default they are dropped, as in RAVEN, because no gene
+        supports them in the new organism. True transfers them, which suits a curated
+        reference template whose gene-free reactions belong in every derived model. Default
+        ``False``.
+    preserve_notes : bool
+        Keeps each transferred reaction's own ``notes`` (references, confidence score, free
+        text) and only adds ``homology_source``. By default they are replaced by a note that
+        the reaction was included by this function. Default ``False``.
+
+    Returns
+    -------
+    HomologyResult
+        The draft model, the template-to-new gene map and, when ``review_identity`` is given,
+        the candidate reactions.
     """
     if isinstance(models, cobra.Model):
         models = [models]
@@ -269,9 +396,30 @@ def get_model_from_homology(
         )
     bidirectional, best_hits_only = _strictness_to_flags(strictness)
     validate_hits(hits)
+    if review_identity is not None and hits.attrs.get("source") == "SuppOrth":
+        warnings.warn(
+            "review_identity has no effect on SuppOrth hits: their identity is a placeholder "
+            "of 100, so no reaction is a candidate. Filter on SuppOrth's own identity with "
+            "hits_from_supporth(min_identity=...) instead.",
+            stacklevel=2,
+        )
 
     model_by_id = {m.id: m for m in models}
     model_ids = list(model_by_id)
+    # An organism id that differs from model_for or a template id only in case
+    # would silently be read as another organism. RAVEN compares template ids with strcmpi and
+    # raises only for ids that match no template; here a case-only difference raises.
+    known = {model_for, *model_ids}
+    known_lower = {k.lower() for k in known}
+    miscased = sorted(
+        i for i in set(hits.from_id) | set(hits.to_id)
+        if i not in known and str(i).lower() in known_lower
+    )
+    if miscased:
+        raise ValueError(
+            f"hits contain organism ids that match model_for ({model_for!r}) or a template "
+            f"model id ({model_ids}) only when case is ignored: {miscased}. Ids are case-sensitive."
+        )
     model_genes = {mid: {g.id for g in m.genes} for mid, m in model_by_id.items()}
     all_model_genes = set().union(*model_genes.values()) if model_genes else set()
 
@@ -286,7 +434,27 @@ def get_model_from_homology(
             )
 
     if only_genes_in_models:
-        hits = hits[hits.from_gene.isin(all_model_genes) | hits.to_gene.isin(all_model_genes)]
+        # The template-side gene of each hit, as in RAVEN.
+        template_gene = hits.to_gene.where(hits.from_id == model_for, hits.from_gene)
+        kept = template_gene.isin(all_model_genes)
+        # As in RAVEN, a search direction with no hit left after the cutoffs and
+        # this filter is an error rather than an empty mapping.
+        passes = (
+            kept
+            & (hits.evalue < max_evalue)
+            & (hits.align_len >= min_align_len)
+            & (hits.identity >= min_identity)
+        )
+        directions = hits[["from_id", "to_id"]].drop_duplicates().itertuples(index=False)
+        for from_id, to_id in directions:
+            if model_for not in (from_id, to_id) or not {from_id, to_id} & set(model_ids):
+                continue
+            if not passes[(hits.from_id == from_id) & (hits.to_id == to_id)].any():
+                raise ValueError(
+                    f"No genes in matching from {from_id} to {to_id} are present in the "
+                    "corresponding model"
+                )
+        hits = hits[kept]
 
     ortho = _ortholog_map(
         hits, model_for, model_ids, bidirectional=bidirectional, best_hits_only=best_hits_only,
@@ -294,12 +462,23 @@ def get_model_from_homology(
         model_genes=model_genes, max_evalue=max_evalue, min_align_len=min_align_len,
         min_identity=min_identity,
     )
+    mapped = {ng for per in ortho.values() for ngs in per.values() for ng in ngs}
+    unusable = sorted(g for g in mapped if _GPR_SPLIT.search(str(g)))
+    if unusable:
+        raise ValueError(
+            f"{len(unusable)} gene ids of {model_for!r} cannot be written into a GPR, because "
+            f"cobra splits them at whitespace, parentheses, '|' or '&': {unusable[:3]}. Map "
+            "them to gene ids first, for example with protein_to_gene in hits_from_supporth, "
+            "or use the accession alone for UniProt headers such as 'sp|P33284|HXK_KLULA'."
+        )
 
     order = [str(x) for x in preferred_order] if preferred_order else model_ids
+    removed: dict = {}
     if preferred_order and len(models) > 1:
-        ortho = _apply_preferred_order(ortho, order)
+        ortho, removed = _apply_preferred_order(ortho, order)
 
-    draft = _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy)
+    draft = _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
+                      keep_gene_free, preserve_notes, removed)
 
     candidates = None
     if review_identity is not None:
@@ -312,10 +491,12 @@ def get_model_from_homology(
             model_genes=model_genes, max_evalue=max_evalue,
             min_align_len=min_align_len, min_identity=review_identity,
         )
+        loose_removed: dict = {}
         if preferred_order and len(models) > 1:
-            loose_ortho = _apply_preferred_order(loose_ortho, order)
+            loose_ortho, loose_removed = _apply_preferred_order(loose_ortho, order)
         loose = _transfer(
-            model_by_id, order, loose_ortho, model_for, model_ids, complex_policy
+            model_by_id, order, loose_ortho, model_for, model_ids, complex_policy,
+            keep_gene_free, preserve_notes, loose_removed,
         )
         extra = {r.id for r in loose.reactions} - {r.id for r in draft.reactions}
         candidates = _candidate_evidence(
@@ -327,34 +508,49 @@ def get_model_from_homology(
     return HomologyResult(model=draft, gene_map=ortho, candidates=candidates)
 
 
-def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy) -> cobra.Model:
-    """Assemble the draft: per-template reactions whose GPRs survive rewriting."""
+def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
+              keep_gene_free=False, preserve_notes=False, removed=None) -> cobra.Model:
+    """Assemble the draft from the reactions of each template whose GPRs survive rewriting.
+
+    The templates are merged in the order of ``model_ids`` (the order they were given),
+    whatever the preferred order is; reaction ids shared between templates are resolved
+    by that merge. Templates left out of ``order`` contribute nothing.
+    """
+    removed = removed or {}
     transferred = []
-    for mid in order:
+    for mid in model_ids:
         model = model_by_id.get(mid)
-        if model is None:
+        if model is None or mid not in order:
             continue
         per_model = ortho.get(mid, {})
         m = model.copy()
         keep: dict[str, str] = {}
         for rxn in m.reactions:
-            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid)
+            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid, frozenset(removed.get(mid, ())))
+            if new_gpr is None and keep_gene_free and not rxn.gene_reaction_rule:
+                new_gpr = ""
             if new_gpr is not None:
                 keep[rxn.id] = new_gpr
         m.remove_reactions([r for r in m.reactions if r.id not in keep], remove_orphans=True)
         for rid, gpr in keep.items():
             r = m.reactions.get_by_id(rid)
-            r.gene_reaction_rule = gpr
-            r.notes = {"note": "Included by get_model_from_homology", "confidence_score": 2,
-                       "homology_source": mid}
+            set_gene_rule(r, gpr)
+            if preserve_notes:
+                r.notes = {**r.notes, "homology_source": mid}
+            else:
+                r.notes = {"note": "Included by get_model_from_homology", "confidence_score": 2,
+                           "homology_source": mid}
         if m.reactions:
             transferred.append(m)
 
     draft = merge_models(transferred, match_by="name") if transferred else cobra.Model()
     draft.id = model_for
     draft.name = "Generated by get_model_from_homology using " + ", ".join(model_ids)
+    # The draft is a new model: the template's version, date and description are not its own.
+    if draft.notes:
+        draft.notes = {k: v for k, v in draft.notes.items() if k not in ("metaData", "version")}
 
-    # Drop OLD_ placeholder genes left orphaned (none survive in OR branches by construction).
+    # Drop genes left without a reaction.
     for g in [g for g in draft.genes if not g.reactions]:
         draft.genes.remove(g)
     return draft
@@ -364,18 +560,16 @@ def _candidate_evidence(
     reaction_ids, model_by_id, order, ortho, hits, *,
     max_evalue, min_align_len, min_identity,
 ) -> pd.DataFrame:
-    """One row per candidate reaction, carrying the hit that held it back.
+    """One row per candidate reaction, with the hit that limits its identity.
 
-    The reported identity is the *limiting* one. A bidirectional match has to
-    clear the threshold in both directions, so a pair whose forward hit is 44 %
-    and reverse hit 30 % is rejected on the 30 -- and reporting the 44 would
-    leave a curator wondering why a comfortable match was turned away.
+    The reported identity is the lower of the two directions. A bidirectional match has
+    to reach the threshold in both directions, so a pair with a forward hit of 44 % and a
+    reverse hit of 30 % is rejected on the 30 %, and the 30 % is reported.
 
-    Sorted strongest first, so the most defensible candidates are read first: the
-    point is a list somebody will actually skim, not an exhaustive dump.
+    Rows are sorted by identity, highest first.
     """
     usable = hits[
-        (hits.evalue <= max_evalue)
+        (hits.evalue < max_evalue)
         & (hits.align_len >= min_align_len)
         & (hits.identity >= min_identity)
     ]

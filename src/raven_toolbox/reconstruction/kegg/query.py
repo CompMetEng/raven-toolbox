@@ -1,25 +1,22 @@
-"""De-novo KEGG draft from a proteome FASTA via HMM search (step 3b.5).
+"""De-novo KEGG draft from a proteome FASTA via HMM search.
 
-Ports the FASTA/HMM branch of RAVEN ``getKEGGModelForOrganism``: search a query
-proteome against the KO profile-HMM library (3b.3), assign genes to KOs using the
+Ports the FASTA and HMM branch of RAVEN ``getKEGGModelForOrganism``: search a query
+proteome against the KO profile-HMM library (:mod:`.hmm`), assign genes to KOs using the
 score cut-off and the two score-ratio filters, then build the draft model with the
 shared assembler. For organisms not in KEGG.
 
-Improvement over RAVEN: one ``hmmsearch`` of the whole concatenated KO library (K7)
-replaces RAVEN's per-KO ``hmmsearch`` loop — the same fast search direction, but one
-invocation instead of thousands, and no ``hmmpress``/``hmmscan`` needed.
-Phylogenetic-distance subsampling is **not** used — our prebuilt per-domain
-libraries (``kegg<version>_prokaryotes`` / ``kegg<version>_eukaryotes``) already fix
-the sequence set, so picking the right domain library (not per-organism distance
-weighting) is the relevant choice.
+Unlike RAVEN, one ``hmmsearch`` of the whole concatenated KO library replaces RAVEN's
+per-KO ``hmmsearch`` loop. The search direction is the same, and neither ``hmmpress``
+nor ``hmmscan`` is needed. Phylogenetic-distance subsampling is not used: the prebuilt
+per-domain libraries (``kegg<version>_prokaryotes`` and ``kegg<version>_eukaryotes``)
+fix the sequence set, and the choice is the domain library.
 
-The scoring/assignment logic (:func:`assign_kos`, :func:`parse_hmmsearch_tblout`) is
-pure and unit-tested; running the search needs HMMER (``hmmsearch``).
+The scoring and assignment functions (:func:`assign_kos`, :func:`parse_hmmsearch_tblout`)
+are pure functions; running the search needs HMMER (``hmmsearch``).
 """
 from __future__ import annotations
 
 import math
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,6 +26,7 @@ import pandas as pd
 
 from raven_toolbox.binaries import resolve_binary
 from raven_toolbox.io.yaml import read_yaml_model
+from raven_toolbox.reconstruction.homology.blast import _available_cpus
 from raven_toolbox.reconstruction.kegg.assemble import assemble_model_from_ko_genes
 from raven_toolbox.reconstruction.kegg.parse import _resolve_artefact, read_kegg_table
 
@@ -50,17 +48,33 @@ def run_hmmsearch(
     fasta: str | Path,
     library: str | Path,
     *,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     hmmsearch: str | Path | None = None,
 ) -> str:
     """Search the profile ``library`` against proteome ``fasta``; return tblout text.
 
     One ``hmmsearch`` of the whole concatenated multi-profile ``library`` (query)
-    against ``fasta`` (target) — the fast search direction, parallelised with
-    ``--cpu``, and no ``hmmpress`` needed. ``-Z`` is fixed to the profile count so the
-    per-hit E-values match the convention :func:`assign_kos` is calibrated against
-    (identical to a ``hmmscan`` against the same library).
+    against ``fasta`` (target), which is the fast search direction. It runs with
+    ``--cpu`` and needs no ``hmmpress``. ``-Z`` is set to the profile count (when it
+    is positive) so that the per-hit E-values match the convention that :func:`assign_kos`
+    expects (identical to a ``hmmscan`` against the same library). A
+    ``RuntimeError`` is raised if ``hmmsearch`` exits with a non-zero status.
+
+    Parameters
+    ----------
+    fasta : str or Path
+        Proteome FASTA file of the query organism (the search target).
+    library : str or Path
+        Concatenated multi-profile HMMER file of the KO library (the search query). It
+        does not need ``hmmpress``.
+    threads : int or None
+        Number of ``hmmsearch`` worker threads (``--cpu``). When None (default), every CPU
+        the process may use, as in RAVEN's ``getKEGGModelForOrganism``.
+    hmmsearch : str or Path or None
+        Path of the ``hmmsearch`` executable. When None (default), it is resolved by
+        :func:`raven_toolbox.binaries.resolve_binary`.
     """
+    threads = _available_cpus() if threads is None else threads
     exe = resolve_binary("hmmsearch", binary=hmmsearch)
     nprofiles = _count_profiles(library)
     z_opt = ["-Z", str(nprofiles)] if nprofiles > 0 else []
@@ -76,8 +90,14 @@ def run_hmmsearch(
 def parse_hmmsearch_tblout(text: str) -> pd.DataFrame:
     """Parse ``hmmsearch --tblout`` text into a ``[ko, gene, evalue]`` table.
 
-    With the profile library as the *query*, column 1 (target name) is the proteome
+    With the profile library as the query, column 1 (target name) is the proteome
     gene, column 3 (query name) is the KO, and column 5 is the full-sequence E-value.
+    Comment lines (``#``), empty lines and lines with fewer than 5 fields are skipped.
+
+    Parameters
+    ----------
+    text : str
+        Content of the ``--tblout`` file of ``hmmsearch``.
     """
     rows = []
     for line in text.splitlines():
@@ -99,35 +119,44 @@ def assign_kos(
 ) -> dict[str, list[str]]:
     """Assign genes to KOs from HMM hits, applying the cut-off and ratio filters.
 
-    Ports RAVEN's three steps on the KO×gene E-value matrix:
+    Ports RAVEN's three steps on the KO by gene E-value matrix. An E-value of 0 is
+    replaced by 1e-250. The steps are:
 
     1. keep hits with ``evalue <= cutoff``;
-    2. **min_score_ratio_ko** — within a KO, drop genes whose
-       ``log(evalue)/log(best_evalue_in_KO) < min_score_ratio_ko`` (prune weak
+    2. ``min_score_ratio_ko``: within a KO, drop genes whose
+       ``log(evalue)/log(best_evalue_in_KO) < min_score_ratio_ko`` (removes weak
        members of a KO);
-    3. **min_score_ratio_g** — within a gene, drop KOs whose
-       ``log(evalue)/log(best_evalue_for_gene) < min_score_ratio_g`` (stop a gene
-       that clearly belongs to one KO leaking into weaker ones).
+    3. ``min_score_ratio_g``: within a gene, drop KOs whose
+       ``log(evalue)/log(best_evalue_for_gene) < min_score_ratio_g`` (removes the weaker
+       KOs of a gene that has a better KO).
 
-    Smaller E-value = better; since all kept values are ``< 1`` their logs are
-    negative, so the best (smallest) hit gives ratio 1 and weaker hits give a
-    smaller positive ratio.
+    A smaller E-value is a better hit. All kept E-values are below 1, so their logs are
+    negative, the best (smallest) hit has ratio 1, and weaker hits have a smaller
+    positive ratio.
 
-    Default calibration, cross-validated against the true
-    KEGG gene→KO annotation of four organisms spanning the prok/euk libraries and
-    the well-/lesser-studied axis (*S. cerevisiae*, *Cyanidioschyzon merolae*,
-    *E. coli*, *Mycoplasma genitalium*): real annotations score
-    overwhelmingly (median E ≈ 1e-100…1e-155) while spurious hits pile up at
-    ≈1e-8, so the two are separated by ~20 orders of magnitude. RAVEN's
-    ``1e-50`` sits inside the *true* tail and silently drops real but divergent
-    hits — costing 16% gene→KO recall on the divergent minimal genome
-    (*M. genitalium*) for no noise-rejection benefit (noise is far weaker). The
-    default is therefore loosened to **1e-30** (recovers that tail; still ~22
-    orders above the noise floor), with the precision work moved to
-    **min_score_ratio_g = 0.9** — the *effective* precision lever (it resolves
-    multi-KO genes). ``min_score_ratio_ko`` proved empirically inert across all
-    four organisms (identical output at 0.0/0.3/0.5) and is kept only for RAVEN
-    parity.
+    The default cut-off is 1e-30, weaker than RAVEN's ``1e-50``, so that real but divergent
+    hits are kept; the ratio filters then remove weak members. ``min_score_ratio_g`` (default
+    0.9, RAVEN uses 0.8) sets the precision, because it resolves genes with several KOs.
+    ``min_score_ratio_ko`` (default 0.3) is kept as in RAVEN.
+    The `KEGG HMM cut-off calibration study
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/kegg-hmm-cutoff-calibration.md>`_
+    on raven-docs compares these settings with the KEGG gene and KO annotation of four organisms.
+
+    Parameters
+    ----------
+    hits : pandas.DataFrame
+        Hit table with the columns ``ko``, ``gene`` and ``evalue``, as returned by
+        :func:`parse_hmmsearch_tblout`. For repeated ``(ko, gene)`` pairs the smallest
+        E-value is used.
+    cutoff : float
+        Largest E-value that is kept. Defaults to 1e-30. It must be below 1; a value of 1
+        or more raises a ``ValueError``.
+    min_score_ratio_ko : float
+        Smallest ratio ``log(evalue)/log(best_evalue_in_KO)`` that a gene must reach to
+        stay in a KO. Defaults to 0.3. A value of 0 keeps all genes of a KO.
+    min_score_ratio_g : float
+        Smallest ratio ``log(evalue)/log(best_evalue_for_gene)`` that a KO must reach to
+        stay assigned to a gene. Defaults to 0.9.
     """
     # The ratio filters compare log(evalue)/log(best_evalue); when best == 1.0
     # the denominator is 0 → ZeroDivisionError. The default cutoff (1e-30) keeps
@@ -190,14 +219,58 @@ def get_kegg_model_from_sequences(
     keep_undefined_stoich: bool = True,
     keep_incomplete: bool = True,
     keep_general: bool = False,
-    threads: int = max(1, (os.cpu_count() or 2) - 1),
+    threads: int | None = None,
     hmmsearch: str | Path | None = None,
 ) -> cobra.Model:
     """Reconstruct a draft model for a proteome by HMM-searching the KO library.
 
-    Searches the ``library`` against ``fasta`` (3b.3), assigns KOs
-    (:func:`assign_kos`), and assembles the model against ``reference_model`` /
-    ``ko_reaction``. Genes are the query proteome's identifiers.
+    Searches the ``library`` against ``fasta``, assigns KOs
+    (:func:`assign_kos`), and assembles the model against ``reference_model`` and
+    ``ko_reaction``. Genes are the identifiers of the query proteome. ``model_id``
+    defaults to the stem of the ``fasta`` file name.
+
+    Parameters
+    ----------
+    fasta : str or Path
+        Proteome FASTA file of the query organism.
+    reference_model : cobra.Model
+        Gene-free KEGG reference model (from :func:`build_reference_model`).
+    ko_reaction : pandas.DataFrame
+        Table with the columns ``ko`` and ``reaction`` that maps KOs to reactions.
+    library : str or Path
+        Concatenated KO profile-HMM library, searched by :func:`run_hmmsearch`.
+    rxn_flags : pandas.DataFrame or None
+        Per-reaction quality-flag table with a ``reaction`` column and any of the boolean
+        columns ``spontaneous``, ``undefined_stoich``, ``incomplete`` and ``general``.
+        When None (default), no reaction is flagged.
+    model_id : str or None
+        Id of the model. When None (default), the stem of the ``fasta`` file name.
+    cutoff : float
+        Largest E-value that is kept, passed to :func:`assign_kos`. Defaults to 1e-30.
+    min_score_ratio_ko : float
+        Minimum score ratio of a gene within a KO, passed to :func:`assign_kos`. Defaults
+        to 0.3.
+    min_score_ratio_g : float
+        Minimum score ratio of a KO within a gene, passed to :func:`assign_kos`. Defaults
+        to 0.9.
+    keep_spontaneous : bool
+        If True (default), reactions flagged ``spontaneous`` in ``rxn_flags`` are kept
+        without genes.
+    keep_undefined_stoich : bool
+        If True (default), reactions flagged ``undefined_stoich`` in ``rxn_flags`` are
+        kept. If False, they are dropped even if they have genes.
+    keep_incomplete : bool
+        If True (default), reactions flagged ``incomplete`` in ``rxn_flags`` are kept. If
+        False, they are dropped even if they have genes.
+    keep_general : bool
+        If True, reactions flagged ``general`` in ``rxn_flags`` are kept. If False
+        (default), they are dropped even if they have genes.
+    threads : int or None
+        Number of ``hmmsearch`` threads, passed to :func:`run_hmmsearch`. When None
+        (default), every CPU the process may use.
+    hmmsearch : str or Path or None
+        Path of the ``hmmsearch`` executable, passed to :func:`run_hmmsearch`. When None
+        (default), it is resolved by :func:`raven_toolbox.binaries.resolve_binary`.
     """
     if model_id is None:
         # RAVEN always sets model.id (to organismID); default it here so the
@@ -236,11 +309,35 @@ def get_kegg_model_from_sequences_with_artefacts(
     version: str | None = None,
     **kwargs,
 ) -> cobra.Model:
-    """Load reference model + tables from ``artefact_dir`` and run the HMM query.
+    """Load the reference model and tables from ``artefact_dir`` and run the HMM query.
 
-    If ``artefact_dir`` / ``library`` are ``None`` they are fetched/cached via
-    :func:`raven_toolbox.data.ensure_kegg_data` / :func:`raven_toolbox.data.ensure_kegg_hmm_library`
-    (``domain`` selects the prok/euk library; ``version`` the release).
+    If ``artefact_dir`` or ``library`` is ``None``, it is fetched and cached via
+    :func:`raven_toolbox.data.ensure_kegg_data` or
+    :func:`raven_toolbox.data.ensure_kegg_hmm_library`. ``domain`` selects the
+    prokaryote or eukaryote library and ``version`` the release.
+
+    Parameters
+    ----------
+    fasta : str or Path
+        Proteome FASTA file of the query organism.
+    artefact_dir : str or Path or None
+        Directory with the artefact files ``reference_model.yml.gz``, ``ko_reaction.tsv.gz``
+        and ``rxn_flags.tsv.gz``, each with or without a ``<version>_`` prefix. When None
+        (default), the published artefacts are fetched and cached.
+    library : str or Path or None
+        Concatenated KO profile-HMM library. When None (default), the library of
+        ``domain`` is fetched and cached.
+    domain : str
+        Library to fetch when ``library`` is None, ``"prokaryotes"`` (default) or
+        ``"eukaryotes"``. Unused when ``library`` is given.
+    version : str or None
+        KEGG release to fetch. Used only for the files that are fetched. When None
+        (default), the default release of the data registry is used.
+    **kwargs : dict
+        Keyword arguments forwarded to :func:`get_kegg_model_from_sequences`: ``model_id``,
+        ``cutoff``, ``min_score_ratio_ko``, ``min_score_ratio_g``, ``keep_spontaneous``,
+        ``keep_undefined_stoich``, ``keep_incomplete``, ``keep_general``, ``threads`` and
+        ``hmmsearch``. The argument ``rxn_flags`` is set by this function.
     """
     if artefact_dir is None or library is None:
         from raven_toolbox.data import ensure_kegg_data, ensure_kegg_hmm_library

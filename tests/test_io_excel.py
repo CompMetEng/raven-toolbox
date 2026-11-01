@@ -23,7 +23,8 @@ def model():
             cobra.Metabolite("adp_c", name="ADP", compartment="c"),
         ]
     )
-    m.metabolites.atp_c.annotation = {"kegg.compound": ["C00002"], "smiles": ["C1=NC"]}
+    m.metabolites.atp_c.annotation = {"kegg.compound": ["C00002"], "smiles": ["C1=NC"],
+                                      "inchi": ["InChI=1S/X"]}
     m.metabolites.atp_c.notes = {"inchis": "InChI=1S/X"}
     add_reactions_from_equations(
         m,
@@ -81,7 +82,7 @@ def test_mets_sheet(model, tmp_path):
     assert atp["InChI"] == "InChI=1S/X"
     assert atp["COMPOSITION"] == "C10H16N5O13P3"  # formula kept even when InChI present
     assert atp["CHARGE"] == -4
-    assert atp["MIRIAM"] == "kegg.compound/C00002"  # smiles excluded
+    assert atp["MIRIAM"] == "kegg.compound/C00002"  # smiles and inchi excluded
 
 
 def test_model_sheet(model, tmp_path):
@@ -192,3 +193,16 @@ def test_enzrxns_sheet(model, ec_data, tmp_path):
     assert by_id["R2"]["SOURCE"] is None      # empty -> blank
     assert by_id["R2"]["EC-NUMBER"] == "2.7.1.1;2.7.1.2"
     assert by_id["R2"]["ENZYMES"] == "P2:1"
+
+
+def test_inchi_column_falls_back_to_annotation(model, tmp_path):
+    """Without an ``inchis`` note, the InChI column takes ``annotation['inchi']``."""
+    model.metabolites.atp_c.notes = {}
+    out = tmp_path / "m.xlsx"
+    export_to_excel(model, out)
+    ws = _wb(out)["METS"]
+    header = [c.value for c in ws[1]]
+    atp = next({header[i]: c.value for i, c in enumerate(r)} for r in ws.iter_rows(min_row=2)
+               if r[header.index("REPLACEMENT ID")].value == "atp_c")
+    assert atp["InChI"] == "InChI=1S/X"
+    assert atp["MIRIAM"] == "kegg.compound/C00002"

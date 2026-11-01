@@ -90,10 +90,19 @@ def test_gpr_normalisation_matches_matlab(tiny, oracle):
         )
 
 
-def _clauses(rule: str) -> set[frozenset[str]]:
-    """A DNF rule as a set of AND-clauses, so ordering carries no weight."""
+def _clauses(rule: str | list) -> set[frozenset[str]]:
+    """A DNF rule as a set of AND-clauses, so ordering carries no weight.
+
+    RAVEN returns the rule as a list of clauses, each a list of genes (a lone clause or gene
+    collapses to a shorter list or a string in JSON); a string rule is parsed.
+    """
     if not rule:
         return set()
+    if isinstance(rule, list):
+        return {
+            frozenset([clause] if isinstance(clause, str) else clause)
+            for clause in rule
+        }
     stripped = rule.replace("(", " ").replace(")", " ")
     return {
         frozenset(part.strip() for part in clause.split(" and ") if part.strip())

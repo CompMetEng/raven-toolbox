@@ -34,8 +34,8 @@ Legacy quirks the reader also accepts (silent normalisation):
 * very old RAVEN files written as a bare ``-`` sequence of single-key mappings
   rather than one big mapping;
 * MATLAB GECKO ecModels whose ``usage_prot_*`` and ``prot_pool_exchange``
-  reactions use the older reverse-direction convention (negative lower bound,
-  swapped stoichiometry signs); these are flipped on load so consumers always
+  reactions use the older reverse-direction convention (swapped
+  stoichiometry signs, negative flux); these are flipped on load so consumers always
   see the forward convention.
 """
 from __future__ import annotations
@@ -44,13 +44,16 @@ import gzip
 import re
 import warnings
 from collections import OrderedDict
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
 import cobra
 from cobra.io.dict import model_from_dict, model_to_dict
-from cobra.io.yaml import yaml as _cobra_yaml  # ruamel round-trip YAML (handles !!omap)
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from raven_toolbox.io.ec_data import (
@@ -58,12 +61,13 @@ from raven_toolbox.io.ec_data import (
     ec_data_from_yaml_sections,
     ec_data_to_yaml_sections,
 )
+from raven_toolbox.utils.gpr import set_gene_rule
+from raven_toolbox.utils.solver import set_raven_tolerance
 
-# A dedicated instance for *writing* only (reading still goes through
-# _cobra_yaml, whose parsing is unaffected by any of this). Mutating
-# _cobra_yaml's own width would also change cobra.io.save_yaml_model for
-# the rest of the process, so this module gets its own ruamel round-trip
-# instance instead. `width` is set far past any real line length so
+# A dedicated instance for *writing* only (reading uses _read_yaml below).
+# Mutating cobra's own YAML instance would change its width for
+# cobra.io.save_yaml_model in the rest of the process, so this module gets its own
+# ruamel round-trip instance instead. `width` is set far past any real line length so
 # ruamel never folds a long scalar onto a continuation line, matching
 # writeYAMLmodel.m. `indent` is pinned explicitly (to the values ruamel
 # already used implicitly, verified byte-identical) rather than left for
@@ -81,6 +85,113 @@ from raven_toolbox.io.ec_data import (
 _write_yaml = YAML(typ="rt")
 _write_yaml.width = 1_000_000
 _write_yaml.indent(mapping=2, sequence=2, offset=0)
+
+
+class _OmapConstructor(RoundTripConstructor):
+    """Round-trip constructor that reads a content-less ``!!omap`` as an empty map.
+
+    Files written by earlier GECKO and RAVEN versions have an ec reaction without
+    enzymes as ``- enzymes: !!omap`` with nothing under the tag (current writers
+    omit the ``enzymes`` entry). YAML parses that as a null scalar carrying the omap
+    tag, which ruamel's own constructor rejects; RAVEN's ``readYAMLmodel.m`` reads
+    it as an empty enzyme list.
+    """
+
+    def construct_yaml_omap(self, node):
+        if isinstance(node, ScalarNode) and not node.value:
+            yield OrderedDict()
+            return
+        yield from super().construct_yaml_omap(node)
+
+
+_OmapConstructor.add_constructor("tag:yaml.org,2002:omap", _OmapConstructor.construct_yaml_omap)
+
+# A dedicated instance for *reading*, so the constructor above does not change
+# cobra.io.load_yaml_model for the rest of the process.
+_read_yaml = YAML(typ="rt")
+_read_yaml.Constructor = _OmapConstructor
+
+# A double-quoted scalar that holds a double quote no backslash escapes, such as
+# `""text""` (the shape older RAVEN and GECKO writers gave to a note that already
+# carried its own quotes) or `"a "b" c"`. It is not valid YAML. `readYAMLmodel.m` strips
+# the outer pair of quotes of the line and unescapes `\\` and `\"` in what is left, so the
+# values are `"text"` and `a "b" c`.
+_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)"(?P<body>.*)"\s*$"""
+)
+
+
+# A single-quoted scalar that holds an apostrophe no second apostrophe pairs with, such as
+# `'it's'`. It is not valid YAML. `readYAMLmodel.m` strips the outer pair of quotes of the line
+# and turns each `''` in what is left into `'`, so the value is `it's`.
+_SINGLE_QUOTED_VALUE = re.compile(
+    r"""^(?P<head>\s*-\s+|\s*(?:-\s+)?[^\s:\-][^:]*:\s+)'(?P<body>.*)'\s*$"""
+)
+
+
+def _has_lone_apostrophe(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``'`` that is not half of a ``''``."""
+    i = 0
+    while i < len(body):
+        if body[i] != "'":
+            i += 1
+        elif body[i : i + 2] == "''":
+            i += 2
+        else:
+            return True
+    return False
+
+
+def _has_unescaped_quote(body: str) -> bool:
+    """Whether ``body``, the text between the outer quotes, has a ``"`` that no backslash escapes."""
+    i = 0
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+        elif body[i] == '"':
+            return True
+        else:
+            i += 1
+    return False
+
+
+def _fix_doubled_quotes(text: str) -> str:
+    """Rewrite each quoted scalar with an unpaired interior quote as a valid single-quoted scalar.
+
+    A double-quoted scalar with an unescaped ``"`` takes the text between the outer quotes with
+    escaped backslashes and quotes unescaped as its value. A single-quoted scalar with an
+    apostrophe that no second apostrophe pairs with takes the text between the outer quotes
+    with each ``''`` read as ``'``. Both are the values ``readYAMLmodel.m`` reads; quoted
+    scalars without such a quote are left alone.
+    """
+
+    def fix(match: re.Match) -> str:
+        body = match["body"]
+        if not _has_unescaped_quote(body):
+            return match[0]
+        value = re.sub(r'\\(["\\])', r"\1", body)
+        return f"{match['head']}'{value.replace(chr(39), chr(39) * 2)}'"
+
+    def fix_single(match: re.Match) -> str:
+        body = match["body"]
+        if not _has_lone_apostrophe(body):
+            return match[0]
+        return f"{match['head']}'{body.replace(chr(39) * 2, chr(39)).replace(chr(39), chr(39) * 2)}'"
+
+    return "\n".join(
+        _SINGLE_QUOTED_VALUE.sub(fix_single, _QUOTED_VALUE.sub(fix, line)) for line in text.split("\n")
+    )
+
+
+def _load_yaml_text(text: str):
+    """Parse ``text`` strictly; when that fails, retry with unpaired quotes inside quoted scalars repaired."""
+    try:
+        return _read_yaml.load(text)
+    except YAMLError:
+        repaired = _fix_doubled_quotes(text)
+        if repaired == text:
+            raise
+        return _read_yaml.load(repaired)
 
 
 def _open_text(path: str | Path, mode: str):
@@ -141,6 +252,9 @@ def _capture_entry_fields(entries, fields):
 
     Returns a list of ``{notes_key: value}`` dicts aligned with ``entries`` (so
     cobra never sees these keys), to be attached to the built objects afterwards.
+    A ``notes`` mapping, which :func:`write_yaml_model` writes for notes that have no
+    RAVEN field, is spread back into the notes dict, with its ``note`` entry as the
+    free-text note.
     """
     captured = []
     for entry in entries:
@@ -148,8 +262,18 @@ def _capture_entry_fields(entries, fields):
         for yaml_key, notes_key in fields:
             if yaml_key in entry:
                 notes[notes_key] = entry.pop(yaml_key)
+        if isinstance(notes.get("note"), Mapping):
+            notes.update(notes.pop("note"))
         captured.append(notes)
     return captured
+
+
+def _pop_gene_rule(entry) -> str | None:
+    """Remove and return the gene rule of a reaction entry (``None`` when it has none)."""
+    if not isinstance(entry, dict):
+        return None
+    rule = entry.pop("gene_reaction_rule", None)
+    return None if rule is None or str(rule).strip() == "" else str(rule)
 
 
 def read_yaml_model(path: str | Path) -> cobra.Model:
@@ -164,9 +288,14 @@ def read_yaml_model(path: str | Path) -> cobra.Model:
     Accepts both the cobra `!!omap` shape and a very old RAVEN shape where
     the document root is a bare ``-`` sequence of single-key mappings; the
     latter is merged into one mapping before parsing.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path of the YAML file. A path ending in ``.gz`` is read as gzip-compressed text.
     """
     with _open_text(path, "r") as handle:
-        raw = _to_plain(_cobra_yaml.load(handle))
+        raw = _to_plain(_load_yaml_text(handle.read()))
 
     if isinstance(raw, list):
         # Very old RAVEN files: a sequence of one-key mappings instead of
@@ -239,7 +368,7 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     # single-item list here, before model_from_dict, so cobra/geckopy always
     # see annotation[key] as list[str] regardless of whether the source file
     # used a scalar or a list — cobra's own model_from_dict does not do this
-    # normalisation itself.
+    # normalisation itself. ``sbo`` stays a bare string.
     for section in ("metabolites", "reactions", "genes"):
         _normalize_annotation_values(raw.get(section))
 
@@ -247,6 +376,12 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     # matching readYAMLmodel.m's own convention — cobra's model_from_dict
     # would otherwise leave met.compartment as None.
     _default_missing_compartment(raw.get("metabolites"), raw.get("compartments"))
+
+    # writeYAMLmodel.m (RAVEN 3) and write_yaml_model write every number as a
+    # float, so a charge arrives as -1.0. cobra models charge as an int, and its
+    # SBML writer passes it unchanged to libsbml's setCharge, which does not keep
+    # a float: without this the charges are lost on the way to SBML.
+    _integer_charges(raw.get("metabolites"))
 
     # Normalise legacy reaction-side YAML keys (e.g. RAVEN MATLAB's
     # ``rxnNotes`` -> the canonical ``notes``) before any field capture so
@@ -265,8 +400,15 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     rxn_notes = _capture_entry_fields(raw.get("reactions", []), _RXN_FIELDS)
     gene_notes = _capture_entry_fields(raw.get("genes", []), _GENE_FIELDS)
 
+    # Gene rules are read with RAVEN's grammar (parse_gr_rule), in which G1&G2 is one gene id;
+    # cobra's model_from_dict would read it as G1 and G2.
+    rules = [_pop_gene_rule(entry) for entry in raw.get("reactions", []) or ()]
+
     model = model_from_dict(raw)
 
+    for rxn, rule in zip(model.reactions, rules, strict=False):
+        if rule is not None:
+            set_gene_rule(rxn, rule)
     for met, notes in zip(model.metabolites, met_notes, strict=False):
         met.notes = notes
     for rxn, notes in zip(model.reactions, rxn_notes, strict=False):
@@ -312,7 +454,7 @@ def model_from_yaml_data(raw: dict) -> cobra.Model:
     if foreign:
         model.notes["_yaml_sections"] = foreign
 
-    return model
+    return set_raven_tolerance(model)
 
 
 # --------------------------------------------------------------------------- #
@@ -328,8 +470,10 @@ def _normalize_annotation_values(entries) -> None:
     store whatever shape the source used — means ``annotation[key]`` is
     always ``list[str]`` however the file spelled it, matching what cobra
     and geckopy expect and keeping a scalar-collapsed value from coming
-    back as a bare string after a write/read round trip. Normalises in
-    place; a no-op when ``entries`` is falsy.
+    back as a bare string after a write/read round trip. The exception is
+    ``sbo``, which is single-valued: it is kept as a bare string, the type
+    cobra's SBML reader and :func:`~raven_toolbox.annotation.add_sbo_terms`
+    give it. Normalises in place; a no-op when ``entries`` is falsy.
     """
     if not entries:
         return
@@ -340,8 +484,25 @@ def _normalize_annotation_values(entries) -> None:
         if not isinstance(annotation, dict):
             continue
         for key, value in annotation.items():
-            if not isinstance(value, list):
+            if key == "sbo":
+                if isinstance(value, list) and len(value) == 1:
+                    annotation[key] = value[0]
+            elif not isinstance(value, list):
                 annotation[key] = [value]
+
+
+def _integer_charges(metabolites) -> None:
+    """Turn whole-number charges (``-1.0``) into ints, in place.
+
+    A charge that is not a whole number is left as it is, so no information is
+    lost; ``None`` (an unset charge) is left alone too.
+    """
+    for met in metabolites or ():
+        if not isinstance(met, dict):
+            continue
+        charge = met.get("charge")
+        if isinstance(charge, float) and charge.is_integer():
+            met["charge"] = int(charge)
 
 
 def _default_missing_compartment(metabolites, compartments) -> None:
@@ -436,19 +597,27 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
     The current convention (in both geckopy and recent MATLAB GECKO)
     treats them as ordinary forward reactions with positive flux. When a
     loaded model still uses the older convention we flip the affected
-    reactions in place so consumers never have to handle two shapes.
+    reactions in place so consumers never have to handle two shapes. The
+    objective coefficient of a flipped reaction changes sign with its flux.
 
-    The signature we look for is any ``usage_prot_*`` or
-    ``prot_pool_exchange`` reaction whose lower bound is negative.
+    The signature we look for is the sign of the ``prot_pool`` coefficient:
+    positive in a ``usage_prot_*`` reaction, negative in
+    ``prot_pool_exchange``. The bounds do not decide, so a reaction with
+    the current stoichiometry and a negative lower bound is left as it is.
     """
+    try:
+        pool = model.metabolites.get_by_id("prot_pool")
+    except KeyError:
+        return
     flipped: list[str] = []
     for rxn in model.reactions:
-        if not (
-            rxn.id.startswith("usage_prot_")
-            or rxn.id == "prot_pool_exchange"
-        ):
+        if rxn.id == "prot_pool_exchange":
+            legacy = rxn.metabolites.get(pool, 0.0) < 0
+        elif rxn.id.startswith("usage_prot_"):
+            legacy = rxn.metabolites.get(pool, 0.0) > 0
+        else:
             continue
-        if rxn.lower_bound >= -1e-9:
+        if not legacy:
             continue
         rxn.add_metabolites(
             {met: -2.0 * coef for met, coef in rxn.metabolites.items()},
@@ -457,6 +626,7 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
         lb, ub = rxn.lower_bound, rxn.upper_bound
         rxn.lower_bound = -ub
         rxn.upper_bound = -lb
+        rxn.objective_coefficient = -rxn.objective_coefficient
         flipped.append(rxn.id)
     if flipped:
         warnings.warn(
@@ -506,6 +676,7 @@ def _coerce_floats(obj):
 
 _QUOTE_RESOLVER_PATTERN = re.compile(
     r"^(true|True|TRUE|false|False|FALSE)$"
+    r"|^(?i:y|n|yes|no|on|off)$"
     r"|^[-+]?[0-9][0-9_]*\.[0-9_]*([eE][-+]?[0-9]+)?$"
     r"|^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$"
     r"|^[-+]?\.[0-9_]+([eE][-+][0-9]+)?$"
@@ -532,13 +703,15 @@ def _is_ws(ch: str) -> bool:
 def _needs_quote(s: str) -> bool:
     """Whether this scalar needs quoting when written as YAML.
 
-    Ports writeYAMLmodel.m's needsQuote so both writers quote exactly the
-    same set of values, for the same two reasons: a plain (bare) reading
-    would resolve to a non-string YAML type (bool/int/float/null/
-    timestamp — neither writer emits explicit type tags), or the text
+    Ports writeYAMLmodel.m's needsQuote, for the same two reasons: a plain
+    (bare) reading would resolve to a non-string YAML type (bool/int/float/
+    null/timestamp, as neither writer emits explicit type tags), or the text
     itself is not valid as a plain block scalar (leading indicator
     character, a mid-string ": "/" #", leading/trailing whitespace, or an
-    embedded line break).
+    embedded line break). Besides the YAML 1.2 booleans it quotes the YAML
+    1.1 ones (y, n, yes, no, on, off, in any case), which a YAML 1.1 loader
+    such as PyYAML would otherwise read as booleans: ``name: NO`` (nitric
+    oxide) is written ``name: "NO"``.
     """
     if not s:
         return True
@@ -593,8 +766,10 @@ def _collapse_singleton_annotations(entries) -> None:
     Matches writeYAMLmodel.m's MIRIAM handling: every annotation entry
     collapses to a scalar when it carries a single value, except
     ``ec-code``/``smiles`` — RAVEN's own writer marks exactly those two
-    ``forceList`` — which stay a list even for one value, since cobra and
-    geckopy read them as ``list[str]``. Normalises in place.
+    ``forceList``, which are always a list, even for one value, since cobra and
+    geckopy read them as ``list[str]``. cobra stores a single identifier as a
+    bare string, so a string under one of those keys is wrapped in a list.
+    Normalises in place.
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -603,11 +778,10 @@ def _collapse_singleton_annotations(entries) -> None:
         if not isinstance(annotation, dict):
             continue
         for key, value in annotation.items():
-            if (
-                key not in _LIST_ONLY_ANNOTATION_KEYS
-                and isinstance(value, list)
-                and len(value) == 1
-            ):
+            if key in _LIST_ONLY_ANNOTATION_KEYS:
+                if isinstance(value, str):
+                    annotation[key] = [value]
+            elif isinstance(value, list) and len(value) == 1:
                 annotation[key] = value[0]
 
 
@@ -655,9 +829,9 @@ def _build_metadata(model: cobra.Model, stored_meta: dict, version) -> OrderedDi
     ``id``/``name`` are always present (``"blankID"``/``"blankName"`` when
     unset, matching writeMetadata's own ``valueOrDefault``), as is
     ``date`` (today's date when the model carries none). ``defaultLB``/
-    ``defaultUB`` are recomputed from the model's current bounds (see
-    :func:`_default_bounds`) rather than merely echoed from a stored
-    value. The remaining fields follow in the same order
+    ``defaultUB`` are written only when the model's stored metaData has them,
+    as RAVEN's writer does, and are then recomputed from the model's current
+    bounds (see :func:`_default_bounds`) rather than echoed. The remaining fields follow in the same order
     writeYAMLmodel.m's ``annoFields`` emits them, each only when present
     and non-empty. Any other key left in ``stored_meta`` — a
     caller-specific provenance field with no RAVEN-defined slot, e.g.
@@ -673,9 +847,12 @@ def _build_metadata(model: cobra.Model, stored_meta: dict, version) -> OrderedDi
     if version is not None:
         metadata["version"] = version
     metadata["date"] = stored_meta.get("date") or date.today().isoformat()
-    bounds = _default_bounds(model)
+    bounds = _default_bounds(model) if "defaultLB" in stored_meta or "defaultUB" in stored_meta else None
     if bounds is not None:
-        metadata["defaultLB"], metadata["defaultUB"] = bounds
+        if "defaultLB" in stored_meta:
+            metadata["defaultLB"] = bounds[0]
+        if "defaultUB" in stored_meta:
+            metadata["defaultUB"] = bounds[1]
     for key in _META_ANNOTATION_FIELDS:
         value = stored_meta.get(key)
         if value:
@@ -743,11 +920,51 @@ def write_yaml_model(
     With ``sort_ids=True`` metabolites/reactions/genes/compartments are
     written in alphabetical order (diff-friendly), without modifying
     ``model``.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to write.
+    path : str or pathlib.Path
+        Output file path. A path ending in ``.gz`` is written as gzip-compressed text.
+    sort_ids : bool
+        Whether to write entries in alphabetical order of their ids. The default is ``False``.
     """
     model_notes = dict(model.notes or {})
     stored_meta = model_notes.pop("metaData", None) or {}
     version = model_notes.pop("version", None)
+    if version is None:  # a version kept only in metaData is still the model's version
+        version = stored_meta.get("version")
     foreign = model_notes.pop("_yaml_sections", None) or {}
+
+    unnamed = [met.id for met in model.metabolites if not met.name]
+    if unnamed:
+        # RAVEN's writeYAMLmodel stops on these (checkModelStruct: "metabolites have
+        # empty names"), so a file written here with `name: ""` may not load there.
+        shown = ", ".join(unnamed[:5]) + (", ..." if len(unnamed) > 5 else "")
+        warnings.warn(
+            f"{len(unnamed)} metabolite(s) have an empty name ({shown}); the YAML is written "
+            "anyway, but RAVEN's writeYAMLmodel refuses such a model.",
+            stacklevel=2,
+        )
+
+    seen: dict[tuple[str, str], str] = {}
+    duplicated: list[str] = []
+    for met in model.metabolites:
+        if not met.name:
+            continue
+        key = (met.name, met.compartment or "")
+        if key in seen:
+            duplicated.append(f"{met.id} and {seen[key]}")
+        else:
+            seen[key] = met.id
+    if duplicated:
+        shown = ", ".join(duplicated[:5]) + (", ..." if len(duplicated) > 5 else "")
+        warnings.warn(
+            f"{len(duplicated)} metabolite(s) share a name and compartment with another ({shown}); "
+            "the YAML is written anyway, but RAVEN's writeYAMLmodel refuses such a model.",
+            stacklevel=2,
+        )
 
     doc = OrderedDict(_to_plain(model_to_dict(model)))
 
@@ -757,8 +974,8 @@ def write_yaml_model(
     # genuine notes the caller stored on the model.
     doc_notes = doc.get("notes")
     if isinstance(doc_notes, dict):
-        for key in ("metaData", "version", "_yaml_sections"):
-            doc_notes.pop(key, None)
+        for note_key in ("metaData", "version", "_yaml_sections"):
+            doc_notes.pop(note_key, None)
         if not doc_notes:
             doc.pop("notes", None)
 
@@ -805,6 +1022,11 @@ def write_yaml_model(
         if isinstance(rxn, dict) and rxn.get("gene_reaction_rule") == "":
             rxn.pop("gene_reaction_rule", None)
 
+    # An unnamed reaction has no `name` key in RAVEN's writer either.
+    for rxn in doc.get("reactions", []) or ():
+        if isinstance(rxn, dict) and rxn.get("name") == "":
+            rxn.pop("name", None)
+
     # ec sections come from the typed model.ec (when present), not from the
     # opaque foreign-keys stash. Drop any stale ec-* entries in `foreign` so
     # they can't conflict with the EcData-derived ones.
@@ -833,9 +1055,9 @@ def write_yaml_model(
 
     ordered = OrderedDict()
     ordered["metaData"] = metadata
-    for key in ("metabolites", "reactions", "genes", "compartments", "notes"):
-        if key in doc:
-            ordered[key] = doc.pop(key)
+    for section in ("metabolites", "reactions", "genes", "compartments", "notes"):
+        if section in doc:
+            ordered[section] = doc.pop(section)
     if ec_sections is not None:
         ordered["gecko_light"] = ec_sections["gecko_light"]
         ordered["ec-rxns"] = ec_sections["ec-rxns"]

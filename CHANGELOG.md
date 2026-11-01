@@ -1,8 +1,199 @@
 # Changelog
 
-Milestones in the raven-toolbox port. For function-level status see
-[docs/raven_migration.md](https://github.com/SysBioChalmers/raven-toolbox/blob/develop/docs/reference/migration.md); for open work see
-[docs/todo.md](https://github.com/SysBioChalmers/raven-toolbox/blob/develop/docs/reference/todo.md).
+## 3.0.0b2 — 2026-11-01
+
+Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input, and a closer match to RAVEN in homology, gap-filling, curation tables and `ftinit`.
+
+Breaking changes: `fill_gaps_kumar_milp` is renamed `fill_gaps_milp`, `omics.hpa` moved to `init.hpa`, `connect_blocked_reactions` renames `eps` to `threshold`, `ftinit` takes `rxn_scores` as a keyword, `manipulation.remove_genes` defaults to `blocked_reactions="constrain"`, `manipulation.merge_compartments` defaults to `drop_single_metabolite_reactions=False`, `init.ftinit` defaults to `big_m=1000`, and `export_for_git` writes its `.mat` file in the RAVEN structure.
+
+### Model I/O
+
+* New: `io.write_matlab_model` and `read_matlab_model` write and read the RAVEN model structure, field for field as RAVEN's exporter does. `read_matlab_model` reads a COBRA Toolbox `.mat` through cobra's reader. `export_for_git` writes its `.mat` file with `write_matlab_model` (was: cobra's COBRA Toolbox layout).
+* The SBML file of `export_for_git` writes subsystems as SBML groups and `rxnNotes`, `rxnReferences` and `rxnConfidenceScores` under the labels that RAVEN's `importModel` parses. It does not write the Python repr of `metaData` as a note (was: it did); only string-valued notes are written, and the model version and date are their own notes.
+* `read_yaml_model` reads the SBO term as a string and whole-number charges as ints, so charges
+  survive an SBML write.
+* The Excel export no longer lists InChI twice in the MIRIAM column.
+* New: `get_model_metadata` and `set_model_metadata`. `export_for_git` takes `version` and `date` and stamps them on the exported copy.
+
+### Homology and curation
+
+* New: `reconstruction.homology.hits_from_supporth` and `run_supporth` read SuppOrth consensus
+  orthologs as homology input.
+* `get_model_from_homology` now matches RAVEN's `getModelFromHomology`: it keeps every hit tied
+  for the best bitscore at strictness 3, applies `max_evalue` exclusively, and filters
+  `only_genes_in_models` on the template gene. Hit values are parsed with round-trip float
+  precision, so a hit at the cutoff is no longer let through.
+* `get_model_from_homology` gained `keep_gene_free` and `preserve_notes` (default `False`) to keep gene-free reactions and the notes of the template. It drops duplicate genes, raises on gene ids that cobra would split, on an emptied search direction and on organism ids that differ only in case, and warns for `review_identity` on SuppOrth hits. It follows the complex policy `flag` or `drop`, the preferred order and the order of the templates. The draft model does not carry the version and date of the template.
+* `curation.batch_curate` stores notes, references, confidence score and InChI under the keys
+  the YAML layer uses.
+
+### Gap-filling and analysis
+
+* Renamed `gapfilling.fill_gaps_kumar_milp` to `fill_gaps_milp` (module `gapfilling.kumar_milp`
+  to `gapfilling.milp`, `KumarGapFillResult` to `MILPGapFillResult`), matching RAVEN's
+  `gapFillMILP`. It adds template reactions only; `reversed_reactions` and `weights` are removed.
+* `fill_gaps_milp` runs with integrality tolerance 1e-9 and returns `exit_status="not_restored"`
+  when the selection does not restore growth. An infeasible MILP on Gurobi no longer crashes.
+* `gap_report` raises a `ValueError` naming reactions with a forced flux when the model is
+  infeasible (was: a bare cobra `Infeasible`).
+* `biomass.scale_biomass` gained `target_total` and raises before changing the model when the
+  balancing component cannot absorb the change.
+
+### Context-specific models
+
+* `omics.hpa` moved to `init.hpa`; the `omics` package is removed.
+* `init.ftinit` / `run_ftinit` gained `feas_tol`, `opt_tol`, `int_feas_tol` and `presolve`
+  (defaults unchanged).
+* `init.ftinit` skips the tie-break when the primary solve stops at the time limit. `init.run_ftinit`, and so `ftinit`, warns when it solves with GLPK. `init.merge_linear` and `manipulation.merge_compartments` keep the solver of the source model.
+* With `resolve_ties`, the tie-break phases of `init.ftinit` and `init.fill_tasks` use 0.5 of `time_limit`. `init.fill_tasks` gained `mutate_in_place`.
+
+### Alignment with MATLAB RAVEN
+
+* `read_yaml_model` turns a `usage_prot_*` reaction forward when its `prot_pool` coefficient is positive and `prot_pool_exchange` when it is negative, as GECKO's `upgradeEcModel` does, and changes the sign of the objective coefficient of a reaction it turns (was: a negative lower bound decided, and the coefficient stayed, which reversed the objective of the model).
+* `write_yaml_model` writes an ec reaction without enzymes with no `enzymes` entry (was: `enzymes: !!omap []`). `read_yaml_model` reads a missing `enzymes` entry, a content-less `enzymes: !!omap` and `enzymes: !!omap []` as an empty enzyme map, so files written by earlier versions of GECKO, RAVEN and raven-toolbox still load.
+* `init.fill_tasks` with `resolve_ties=True` on Gurobi restores `MIPGap` and `MIPGapAbs` of `reference_model` after each gap-fill (was: 0.0 and 0.4 stayed set).
+* `tasks.find_task_essential_reactions` writes its `cache_path` as JSON (was: pickle) and ignores, with a warning, an existing file that is not a JSON cache of the current version, such as a pickle. `checkpoint_every` below 1 raises `ValueError` (was: a write after every task).
+* `init.hpa_gene_scores` uses the default level scores also for an empty `level_scores` mapping, and `init.rna_gene_scores` compares `tissue` case-insensitively and takes the highest TPM over tissue names that differ in case, as RAVEN's `scoreModel` does.
+* `localization.predict_localization` with `apply=True` returns a copy of the model in `LocalizationResult.model` also when no gene of the reactions to place has a score (was: the input model itself).
+* `localization.assign_compartments` takes the default growth floor (`min_growth=None`) as 10 % of the maximum flux of `biomass_reaction` (was: of the optimum of the model's current objective).
+* `reconstruction.kegg.organisms_in_domain` raises `ValueError` for an empty `domain` (was: it matched every organism).
+* `conditions.load_condition` returns an empty dict for a YAML file without content (was: `None`; other empty values such as `[]` are returned as they are), which `apply_condition` applies as a condition without steps, as RAVEN's `parseYAML` and `applyCondition` do.
+* `analysis.reporter_metabolites` leaves a scored gene that has no entry in `gene_fold_changes` out of both the `"up"` and `"down"` subsets (was: it counted as fold change 0 and joined `"up"`), like a gene with a NaN fold change.
+* `manipulation.constrain_reversible_reactions` skips the Gurobi tolerance setting only when the solver has no `Params` attribute (was: any exception was ignored).
+* `gapfilling.connect_blocked_reactions` raises a `RuntimeError` that names the non-optimal MILP (the message said that the blocked reactions cannot carry flux with all templates). `comparison.compare_models` annotates `tasks` as also accepting `os.PathLike`.
+* `manipulation.set_exchange_bounds` is annotated as returning `list[str | Metabolite]`: the entries of `mets` that are not exchanged, as supplied (ids, names or `Metabolite` objects).
+* `scripts/analyze_init_params.py` runs the `mip_gap`, `force_on` and `prep_scale` sweeps with the `ftinit` default `big_m` (1000, was: 100) and takes `--big-m` to set it. The `big_m` sweep starts at 1000, which is its reference row. The cached sweep results are keyed on `big_m`, so a resumed pickle from a run with another `big_m` is not reused.
+* Models read with `io.read_yaml_model` and `io.read_matlab_model` have `model.tolerance` set to 1e-9, the
+  feasibility and optimality tolerance RAVEN's `solveLP` gives the solver (cobrapy's default is 1e-6 for
+  Gurobi and 1e-7 for GLPK). `utils.solver.set_raven_tolerance` applies it to any other model.
+* `manipulation.remove_genes` defaults to `blocked_reactions="constrain"` (was: `"remove"`), as
+  RAVEN's `removeGenes` does: a reaction whose rule loses its last enzyme stays, with the rule
+  dropped and bounds `(0, 0)`. Pass `blocked_reactions="remove"` to delete such reactions.
+* `manipulation.remove_genes` also removes every gene that no remaining reaction named in its
+  rule before the removal, also when not requested (was: only the requested genes), as RAVEN's
+  `removeGenes` does, when at least one of the requested genes is in the model; when none is,
+  the model is not changed. A gene kept only by a constrained reaction stays.
+* `init.merge_linear` numbers the merged groups 1, 2, ... in the order of the first reaction
+  of each group in the original model, as RAVEN's `mergeLinear` does, so `group_ids` no
+  longer depends on the merge order.
+* `manipulation.merge_compartments` gives a merged metabolite the id of the copy already in
+  the merged compartment, if any, otherwise the id that sorts first (`ACCOA_c` for `ACCOA_c`
+  and `ACCOA_m`), as RAVEN's `mergeCompartments` does. It rewrote the first member's
+  compartment suffix to the merged compartment (`ACCOA_s`). The merged metabolite also keeps
+  the annotation of that copy (was: dropped), and `drop_single_metabolite_reactions` defaults to
+  `False`, as RAVEN's `deleteRxnsWithOneMet` (was: `True`).
+* `manipulation.merge_compartments` stores the base id of each merged metabolite in
+  `notes["merged_base_id"]` (`ACCOA` for the kept `ACCOA_c`; the own id when two merged
+  metabolites would get the same base id). The default metabolite key of
+  `localization.assign_compartments`, `apply_assignment`, `relocate_reactions` and
+  `curation_priority` is that stored base id, otherwise the id without the suffix of the
+  metabolite's own compartment, so the merged `ACCOA_c` in `s` and a universal `ACCOA_m` share
+  the key `ACCOA`. The four functions raise `ValueError` when two metabolites in one
+  compartment have the same key (was: one of them stood for both).
+* `manipulation.merge_compartments` documents where `notes["merged_base_id"]` survives: YAML
+  written and read by raven-toolbox, `copy()`, cobra JSON and SBML. RAVEN's `readYAMLmodel`
+  shows it in `metNotes` (`merged_base_id: ACCOA note: free text note`) and no RAVEN function
+  uses it. A round trip through RAVEN YAML or a .mat file loses it, and the localization
+  functions then key a merged `ACCOA_c` in `s` as `ACCOA_c`, without an error.
+* `io.read_yaml_model` puts the notes that `write_yaml_model` writes as a `notes` mapping (notes
+  without a RAVEN field) back into `notes` (was: nested under `notes["note"]`).
+* `reconstruction.homology.run_blast`, `run_diamond` and `run_supporth`, and
+  `reconstruction.kegg.run_hmmsearch`, `get_kegg_model_from_sequences`, `build_ko_hmm` and
+  `build_hmm_library`, use every CPU the process may run on when `threads` is not given, as
+  RAVEN's `getBlast`, `getDiamond`, `runSuppOrth` and `getKEGGModelForOrganism` do (was: the
+  machine's CPU count minus one).
+* `gapfilling.analyse_topology` takes RAVEN's `gapFillTopological` defaults. Seeds: the
+  metabolites of every reaction with only substrates and `lower_bound < 0` or only products
+  and `upper_bound > 0`, whatever its number of metabolites (was: one-metabolite reactions with
+  `lower_bound < 0`); a `UserWarning` when there is none (was: a message only when `verbose`).
+  Targets: the metabolites of the first objective reaction, substrates and products (was: every
+  metabolite of the model); `ValueError` when the model has no objective.
+* New: `utils.parse_gr_rule` reads a grRule in the grammar of RAVEN's `parseGrRule`
+  (`and`/`or` in any case, `&`, `&&`, `|`, `||`, operators as whole words). `manipulation.gpr_to_dnf`
+  now also takes a rule string and reads it with this parser, as RAVEN's `grRuleToDNF` does;
+  `utils.is_dnf` reads a string with it too, and both raise `ValueError` with the message of
+  RAVEN's `RAVEN:badGrRule` for a malformed rule. `G1 && G2`, `G1 || G2` and `G1 Or G2` are
+  read as rules, `G1&G2` is one gene id. Whitespace is what MATLAB's `isspace` counts, so a
+  no-break space (U+00A0), U+0085, U+2007 and U+202F are part of a word.
+* `curation.batch_curate` (and `batch_curate_from_tsv`) stores a gene rule as `parse_gr_rule`
+  reads it, so the reaction gets the genes that were checked: `G1&G2 or G3` has the genes
+  `G1&G2` and `G3`, as in RAVEN's `curateModelFromTables` (was: `G1`, `G2` and `G3`).
+* `io.read_yaml_model` reads gene rules with `parse_gr_rule`, so `G1&G2` written by
+  `write_yaml_model` is read back as one gene (was: `G1` and `G2`, cobra's reading). A rule that
+  `parse_gr_rule` refuses is read by cobra as before.
+* Functions that copy or build a gene rule keep RAVEN's reading of it, so `G1&G2` stays one
+  gene (was: the rule was copied as a string and cobra split `G1&G2` into `G1` and `G2`):
+  `manipulation.merge_compartments`, `copy_to_compartment`, `convert_to_irreversible`,
+  `merge_models`, `add_reactions_from_model`, `expand_model`, `change_gene_reaction_rules`,
+  `add_reactions_from_equations`, `localization.apply_assignment`, `init.fill_tasks`,
+  `init.remove_low_score_genes`, `reconstruction.homology.get_model_from_homology`,
+  `reconstruction.kegg.assemble_model_from_ko_genes` and `io.read_matlab_model`. A rule string
+  is read with `parse_gr_rule`; one that `parse_gr_rule` refuses is read by cobra. cobra's JSON
+  reader (`cobra.io.load_json_model`) still splits `G1&G2`; cobra's SBML reader keeps it.
+* `analysis.fseof` (and so `geckopy.ec_fseof`) solves each level with pFBA that holds the objective at 0.999999 of its optimum at that level, as RAVEN's `solveLP` does, where it held the full value. On the scipy solver (HiGHS) the optimum is only accurate to the solver's feasibility tolerance, so the second step was infeasible at the top level of ecYeastGEM and the scan returned 9 of 10 levels; it now returns all 10, as on Gurobi and GLPK. A level at which the biomass maximisation is infeasible still ends the scan.
+* `analysis.fseof` classifies a reaction as a target when its absolute flux exceeds 1e-10 at some level and its standard deviation is above 0, and takes slope and correlation on the absolute flux (was: the signed flux). A knock-out target has a last absolute flux of at most 1e-8. `flux_eps` gates the check against the theoretical maximum.
+* `analysis.fseof` takes the top of the scan as `max_fraction` of the target flux in the pFBA solution that maximises the target, as RAVEN's `FSEOF` and GECKO's `ecFSEOF` do, where it took the plain maximum (about 1e-6 relative difference).
+* `analysis.fseof` lists targets of equal score in model order (a stable sort), as MATLAB's `sort` does, where their order was arbitrary.
+* `analysis.fseof` gained `equality`: `True` fixes the target flux at each level as GECKO's `ecFSEOF` does, `False` (the default) keeps the lower bound of RAVEN's `FSEOF`.
+* `io.read_yaml_model` reads an ec reaction written as `- enzymes: !!omap` with nothing under the tag, the form GECKO and RAVEN write for a reaction without enzymes, as a reaction with no enzymes, as `readYAMLmodel` does. It raised `AttributeError: 'ScalarNode' object has no attribute 'flow_style'`.
+* `io.read_yaml_model` reads a scalar written as `""text""` (invalid YAML, written by older RAVEN and GECKO for a note that carried its own quotes) as `"text"`, as `readYAMLmodel` does. Files that parse as YAML are read unchanged.
+* `io.read_yaml_model` reads a double-quoted scalar with an unescaped quote inside, such as `- notes: "a "b" c"`, as `a "b" c`: it drops the outer pair of quotes and unescapes `\\` and `\"`, as `readYAMLmodel` does. This repair runs only when the strict parse fails.
+* `io.read_yaml_model` reads a single-quoted scalar with an apostrophe inside, such as `- name: 'it's'`, as `it's`: it drops the outer pair of quotes and reads each `''` as `'`, as `readYAMLmodel` does. This repair runs only when the strict parse fails; a comment after the closing quote is not handled.
+* `init.ftinit` and `init.run_ftinit` give each scored reaction its own big-M, its flux
+  capacity `max(min(ub, big_m), min(-lb, big_m), force_on)` with an infinite bound counted as
+  `big_m`, as RAVEN's `ftINITInternalAlg` does. `big_m` is the cap on that capacity; its
+  default is 1000 (was 100).
+* `tasks.find_task_essential_reactions` (and so `init.prep_init_model`) re-solves a knock-out
+  from a cold start when the warm-started solve does not report a feasible status, and
+  counts the reaction as essential only if that solve is not feasible either, as RAVEN's
+  `solveLP` does. Gurobi could report a feasible knock-out as infeasible when started from
+  the previous knock-out's basis, which added reactions to the essential set.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` take each step's fluxes from the
+  least-total-flux solution for the tie-broken on set, so the direction and magnitude at
+  which the next step forces a reaction no longer depend on the solver's vertex.
+  That phase stops at a relative or absolute gap of 1e-6 and has the full `time_limit`, as
+  in RAVEN.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties`: among the least-total-flux
+  solutions, each step takes its fluxes from the one with the least id-rank-weighted backward
+  flux, so the direction of a flux that carries the same total either way no longer depends
+  on the solver. The id-rank phases rank a merged reaction by the smallest original reaction
+  id in its group (new `run_ftinit` argument `rank_keys`), so they no longer depend on which
+  member names it.
+* `init.ftinit` and `init.run_ftinit` with `resolve_ties` raise a `UserWarning` naming the
+  phase (`phase2c-minflux`, `phase2d-direction`) when the minimal-flux or the direction phase
+  finds no solution, as RAVEN does, and keep the fluxes of the phase before it. A phase that
+  stops at the time limit is adopted with a `UserWarning` that its fluxes are an unproven
+  incumbent.
+* `init.ftinit` with `resolve_ties`: the last step skips the minimal-flux and direction phases,
+  as no step reads its fluxes, and reports the fluxes of the id-rank phase. The reaction set
+  does not change.
+* Docstrings are rewritten in impersonal, present-tense wording with British spelling; the code is unchanged. Statements that differed from the code are corrected, for example `find_good_reactions`, `sum_biomass`, `diff_models`, `compare_models`, `set_gene_rule`, `constrain_reversible_reactions`, `ftinit` (essential forcing, `mip_gap`, determinism figures), `fast_lp` metabolite matching and `batch_curate` index matching.
+
+### Further changes
+
+* `curation.batch_curate` and `batch_curate_from_tsv` follow `curateModelFromTables`: reaction tables are grouped by `rxnIdx` and name, the header spellings of RAVEN are accepted, a new reaction without bounds gets lower bound -inf and the stored `defaultUB` of the model (+inf when none is stored), new ids use the width of the largest existing id, an empty MIRIAM cell removes the namespace, and an empty charge or score is 0 for a new entity. The new argument `overwrite_with_empty` (default `True`) lets an empty cell of an existing entity clear the value. All tables are validated before the model changes: cells are trimmed as MATLAB `strtrim`, numbers follow the plain decimal rule of RAVEN, a charge must be a finite whole number, `rev` must be 0, 1, `true` or `false`, `rxnIdx` must be a whole number of at least 1, a malformed gene rule, a repeated `rxnIdx` and a gene listed twice raise, and repeated coefficients are summed.
+* `manipulation.merge_models` keeps all metabolites, genes and compartments of every model, concatenates the objectives, keeps the compartment name of the first model and appends new items in order (was: only items used by reactions, the objective dropped, the last name won). `add_transport_reactions` sets the subsystem to "Transport between <from> and <to>" for a reversible reaction and "Transport from <from> to <to>" otherwise (was: empty).
+* `manipulation.simplify_model` and `remove_duplicate_reactions` follow `simplifyModel` and `contractModel`: the order of the modes, the lowest-index survivor, reserved reactions and orphan metabolites; duplicates are grouped by stoichiometry and reversibility, with bounds and objective merged, and `remove_duplicate_reactions` has no `reserved` option. `remove_zero_interval_reactions` and `remove_no_flux_reactions` no longer remove genes. `expand_model` keeps the first isozyme copy at the original position.
+* New: `utils.sort_model` (counterpart of `sortModel`) and `utils.ids.next_ids`. `utils.generate_new_ids` takes the numeric maximum, as `generateNewIds` does.
+* `biomass.set_gam` stores the exact GAM value, checks the NGAM reaction before it edits the biomass reaction, and refuses an NGAM value without an NGAM reaction. The rebalancing of the charge refuses unset charges.
+* `init.ftinit` takes `tissue`, `celltype` and `hpa` by position, and `transcr` and `rxn_scores` as keywords, and has the new arguments `remove_genes`, `use_scores_for_tasks`, `no_gene_score`, `isozyme_scoring`, `complex_scoring`, `multiple_cell_scoring`, `hpa_level_scores` and `data_precedence`. Scoring follows `scoreModel` (level `None` scores -8, tissue and cell type names are compared case-insensitively, an unknown level raises). A call that passes `rxn_scores` by position needs the keyword. The output is built from the reference model with the bounds and directions of the template and has no gene or metabolite without a reaction.
+* `init.remove_low_score_genes` takes the new argument `tied_reactions`, a list that receives the ids of the reactions cut to one of tied isozymes.
+* `init.prep_init_model` prunes unused genes as `prepINITModel` does, keeps the metabolites that tasks name, accepts repeated and empty task ids and removes a task that cannot be performed by its position. `rescale_for_init` leaves bounds alone, and `prep_init_model` resets them to ±1000. `get_init_steps` with the full series ignores no metabolites and carries the single MILP run of RAVEN. `comparison.compare_models` fills the task matrix by position.
+* `tasks.parse_task_list` leaves a bound unchanged when its CHANGED LB or UB cell is empty (was: -1000 and 1000), raises when the ID column is first, as RAVEN does, and refuses a binary `.xls` file with an error that names `.xlsx`. `check_tasks` warns when a `name[comp]` matches several metabolites, and duplicate or conflicting task inputs and outputs raise `ValueError` (was: outputs overwrote input bounds).
+* `gapfilling.connect_blocked_reactions` renames `eps` to `threshold` (default 1.0), has the new argument `min_flux=0.1`, prices renamed template reactions by their template id, and restores the steady-state bounds after the net-production check. `connect_blocked_reactions` and `fill_gaps_fast_lp` rename a template reaction whose id is already a draft id to `<id>_<template id>`. FVA and blocked-reaction searches in gap-filling run in the calling process (was: a worker process, which hung on Python 3.14).
+* `analysis.reporter_metabolites` raises `ValueError` for p-values outside [0, 1] (was: they were dropped), centres the z-scores on the first one before taking moments, and returns only `all` with `std_z` 0 for a single gene or zero fold changes.
+* `io.write_yaml_model` quotes the YAML 1.1 booleans (`y`, `n`, `yes`, `no`, `on`, `off` in any case), writes a single ec code or SMILES annotation as a list, omits empty reaction names, and warns about metabolites with an empty or duplicate name. It writes `defaultLB` and `defaultUB` each when the stored metadata has it.
+* `io.export_for_git` writes the formats `yml`, `xml`, `mat`, `xlsx` and `txt` by default, the txt table headed `Rxn id` without padding, the gene name as `fbc:label` in SBML, and a `dependencies.txt` with the versions of python, cobra, libSBML, ruamel.yaml, scipy, openpyxl, raven_toolbox, and the model version and date. `main_branch_flag` raises when a raven_toolbox checkout is on a branch other than `main` or `master`, and the flags must be `bool`.
+* `write_fasta` writes only the header line for an empty sequence. `manipulation.add_reactions_from_equations` adds new genes in sorted order. The essential set of `tasks.find_task_essential_reactions` follows the reaction order of the model and does not depend on the hash seed.
+* `localization` parses UniProt locations by whole words, with isoform blocks, all columns and duplicate genes. `init.parse_hpa_rna` reads the `Sample` and `Value` columns, raises when the tissue or value column is missing, and keeps the last of repeated rows.
+* The package supports Python 3.14 and 3.15, and the CI tests both.
+
+### Packaging and docs
+
+* Assets are downloaded from `CompMetEng/toolbox-assets`; `publish_to_raven_data.py` is renamed `publish_to_toolbox_assets.py`.
+* The package metadata and the README name the GPL-3.0 licence of the `LICENSE` file (was: MIT).
+* The `docs/` tree and its Read the Docs build are removed; the documentation is on [raven-docs](https://github.com/CompMetEng/raven-docs). The project URLs point to `CompMetEng`, and `data/deeploc` is not part of the source distribution.
+* Docstrings are corrected for `reporter_metabolites`, `random_sampling`, `remove_no_flux_reactions`, `check_tasks`, `connect_blocked_reactions` and `find_leak_metabolite`.
 
 ## 3.0.0b1 — 2026-09-07
 

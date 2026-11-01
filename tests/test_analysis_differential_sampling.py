@@ -28,8 +28,7 @@ def test_zero_variance_increase_is_positive():
 
 
 def test_zero_variance_decrease_is_negative():
-    # The case RAVEN#742 fixes: a flux *decrease* with no variance in either
-    # condition must score -100, not +100.
+    # A flux *decrease* with no variance in either condition scores -100.
     a = _const({"R1": 9.0})
     b = _const({"R1": 5.0})
     assert get_flux_z(a, b)["R1"] == -100.0

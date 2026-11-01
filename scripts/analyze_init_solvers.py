@@ -101,7 +101,7 @@ def main() -> None:
             local_prep.min_model.solver = solver
             g = gene_scores_from_expression(expr, 1.0)
             r = score_reactions_from_genes(ref, g)
-            model = ftinit(local_prep, r, gene_scores=g, series="1+1",
+            model = ftinit(local_prep, rxn_scores=r, gene_scores=g, series="1+1",
                            mip_gap=args.mip_gap, time_limit=args.time_limit)
             rset = sorted(x.id for x in model.reactions)
             res = Result(solver, time.time() - t, "ok", len(rset), rset)

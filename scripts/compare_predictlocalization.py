@@ -22,7 +22,7 @@ Usage:
     python scripts/compare_predictlocalization.py --prep   --model <yeast-GEM.xml> --out .research_tmp/pl
     # ... run scripts/run_predictlocalization.m in MATLAB (writes geneloc_run_*.csv to that dir) ...
     python scripts/compare_predictlocalization.py --score  --model <yeast-GEM.xml> --out .research_tmp/pl \
-        --doc docs/studies/predictlocalization_comparison.md
+        --doc ../raven-gecko-parity/docs/localization/predictlocalization_comparison.md
 """
 from __future__ import annotations
 

@@ -11,8 +11,7 @@ def _met(mid, name, formula=None, compartment="c"):
 
 def test_accounts_for_own_stoichiometric_coefficient():
     """A -> 2 B: B's own coefficient is 2, so its atom counts are half of
-    A's, not identical to A's (the bug this port fixes relative to RAVEN's
-    original guessComposition, see SysBioChalmers/RAVEN#743)."""
+    A's, not identical to A's, as in RAVEN's guessComposition."""
     m = cobra.Model("t")
     a = _met("a_c", "A", formula="CH4")
     b = _met("b_c", "B")

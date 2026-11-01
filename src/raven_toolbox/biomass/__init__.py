@@ -1,11 +1,7 @@
-"""Biomass equation manipulation — growth-associated maintenance, amino-
-acid ratios, component scaling, and biomass-fraction reporting.
+"""Biomass equation manipulation, component scaling and biomass-fraction reporting.
 
-The API is parameterised by a :class:`BiomassConfig` so other GEMs
-can describe their own component layout.
-
-A typical caller assembles ``BiomassConfig`` once (often from a
-project-level YAML) and passes it to every operation:
+The functions take a :class:`BiomassConfig` that describes the component layout of
+the model. The example builds one ``BiomassConfig`` and passes it to each operation:
 
 .. code-block:: python
 

@@ -1,14 +1,14 @@
-"""ftINIT preprocessing — once-per-template work shared by every sample on a model.
+"""ftINIT preprocessing: the once-per-template work shared by every sample on a model.
 
-ftINIT does all omics-independent work once: classify reactions into the categories
-the staged MILP may *ignore* (leave in, never remove), discover task-essential
-reactions, linearly merge, and scale. The result (:class:`PrepData`) is reused across
-every sample.
+ftINIT does all omics-independent work once: it classifies reactions into the categories
+the staged MILP may ignore (leave in, never remove), discovers task-essential
+reactions, merges linear chains and scales the stoichiometry. The result
+(:class:`PrepData`) is reused across every sample.
 
-:func:`classify_reactions` is the reaction taxonomy: exchange, GPR-less
-import / simple / advanced transport, spontaneous, GPR-less extracellular, custom, and
-"any without a GPR". The staged schedule (:func:`raven_toolbox.init.get_init_steps`) selects
-which categories to keep out of each MILP step via an 8-bit pattern.
+:func:`classify_reactions` is the reaction taxonomy: exchange, GPR-less import, simple
+transport and advanced transport, spontaneous, GPR-less extracellular, custom, and any
+reaction without a GPR. The staged schedule (:func:`raven_toolbox.init.get_init_steps`) uses
+an 8-bit pattern to select which categories each MILP step holds out.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from raven_toolbox.tasks import Task, find_task_essential_reactions
 class ReactionMasks:
     """Reaction-category id sets (RAVEN's ``toIgnore*``), in 8-bit-pattern order.
 
-    ``ignored(pattern)`` returns the union of the categories whose bit is set — the
-    reactions held out of (left untouched by) that MILP step.
+    ``ignored(pattern)`` returns the union of the categories whose bit is set, the
+    reactions held out of that MILP step (they get score 0 and stay in the model).
     """
 
     exchange: set[str] = field(default_factory=set)            # b1
@@ -53,12 +53,12 @@ class ReactionMasks:
 
 
 def _is_exchange_reaction(rxn: cobra.Reaction) -> bool:
-    """One-sided reaction: all metabolites are on the same side (RAVEN ``getExchangeRxns``).
+    """Whether all metabolites of ``rxn`` are on one side (RAVEN ``getExchangeRxns``).
 
     RAVEN's ``getExchangeRxns`` (default ``'all'``) flags every reaction with no products
-    *or* no substrates — i.e. whose non-zero stoichiometry is all one sign. That is broader
-    than cobra's ``Reaction.boundary`` (single metabolite only): it also catches
-    multi-metabolite sink / pool reactions, which ftINIT force-keeps.
+    or no substrates, that is, whose non-zero stoichiometry has one sign. cobra's
+    ``Reaction.boundary`` covers a single metabolite only; this test also covers
+    multi-metabolite sink and pool reactions, which ftINIT keeps.
     """
     coeffs = list(rxn.metabolites.values())
     if not coeffs:
@@ -67,7 +67,10 @@ def _is_exchange_reaction(rxn: cobra.Reaction) -> bool:
 
 
 def _is_advanced_transport(rxn: cobra.Reaction) -> bool:
-    """Even number (>2) of mets pairing up by name across compartments with canceling stoich."""
+    """Whether ``rxn`` has an even number (more than 2) of metabolites that pair up by name.
+
+    The pairs lie in different compartments and have cancelling stoichiometry.
+    """
     mets = list(rxn.metabolites.items())
     if len(mets) <= 2 or len(mets) % 2 != 0:
         return False
@@ -93,8 +96,20 @@ def classify_reactions(
 ) -> ReactionMasks:
     """Classify reactions into the ftINIT ``toIgnore`` categories (``prepINITModel``).
 
-    ``ext_comp`` is the extracellular compartment. ``spontaneous``/``custom`` are
-    reaction-id lists. A reaction is "GPR-less" when its gene rule is empty.
+    A reaction is "GPR-less" when its gene rule is empty.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose reactions are classified.
+    ext_comp : str
+        Keyword-only; default ``"e"``. Id of the extracellular compartment.
+    spontaneous : Iterable[str]
+        Keyword-only; default empty. Ids of the spontaneous reactions. Ids that are not
+        reactions of ``model`` are ignored.
+    custom : Iterable[str]
+        Keyword-only; default empty. Ids of the reactions in the custom category. Ids that
+        are not reactions of ``model`` are ignored.
     """
     spont, cust = set(spontaneous), set(custom)
     masks = ReactionMasks(
@@ -127,8 +142,10 @@ class PrepData:
 
     Built once per template, reused across samples. ``min_model`` is the merged model
     the MILP runs on; ``orig_rxn_ids``/``group_ids`` map its reactions back to the
-    ``ref_model`` (the simplified, pre-merge reference). ``essential_rxns`` are in
-    **merged** ids and pre-oriented irreversibly (so the MILP forces flux *forward*).
+    ``ref_model`` (the reference after the first simplification; the orientation of the
+    essential reactions and the tightening of reversibility are undone on it after the merge,
+    so its bounds and stoichiometry are the template's). ``essential_rxns`` are in
+    merged ids and pre-oriented irreversibly (so the MILP forces flux forward).
     ``masks`` is on ``ref_model`` (= original) ids.
     """
 
@@ -150,13 +167,13 @@ class PrepData:
 def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
     """Compress each reaction's stoichiometric dynamic range.
 
-    Large spreads in stoichiometric coefficients (e.g. a biomass/pool reaction with
-    coefficients from 1e-3 to 1e2) force correspondingly extreme flux magnitudes, so no
-    single MILP big-M fits all reactions. RAVEN, per reaction: caps every ``|coeff|`` at
-    ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole reaction so its
-    mean ``|coeff|`` is 1. Bounds are reset to ``±1000`` afterwards. Modifies ``model`` in
-    place; only the merged MILP model is scaled (the final output maps back to the
-    unscaled ``ref_model`` by reaction id, so reaction *selection* is unaffected).
+    A large spread of stoichiometric coefficients (for example a biomass or pool reaction with
+    coefficients from 1e-3 to 1e2) forces correspondingly extreme flux magnitudes, so no
+    single MILP big-M fits all reactions. As RAVEN, for each reaction the function caps every
+    ``|coeff|`` at ``max_stoich_diff × min|coeff|`` (keeping signs), then scales the whole
+    reaction so that its mean ``|coeff|`` is 1. Bounds are not changed. The function modifies
+    ``model`` in place; only the merged MILP model is scaled, and the final output maps back
+    to the unscaled ``ref_model`` by reaction id.
     """
     for rxn in model.reactions:
         items = list(rxn.metabolites.items())
@@ -167,20 +184,65 @@ def rescale_for_init(model: cobra.Model, max_stoich_diff: float = 25.0) -> None:
         total = sum(abs(c) for c in capped.values())
         scale = (len(capped) / total) if total else 1.0
         rxn.add_metabolites({m: c * scale for m, c in capped.items()}, combine=False)
-    for rxn in model.reactions:  # RAVEN resets bounds to the standard ±1000 after scaling
-        if rxn.upper_bound > 0:
-            rxn.upper_bound = 1000.0
-        if rxn.lower_bound < 0:
-            rxn.lower_bound = -1000.0
+
+
+def _restore_reactions(model: cobra.Model, saved: dict) -> None:
+    """Put back the bounds, stoichiometry and objective coefficient saved per reaction id."""
+    for rid, (lb, ub, stoich, objective) in saved.items():
+        rxn = model.reactions.get_by_id(rid)
+        if dict(rxn.metabolites) != stoich:
+            rxn.add_metabolites(stoich, combine=False)
+        if (rxn.lower_bound, rxn.upper_bound) != (lb, ub):
+            rxn.bounds = (lb, ub)
+        if rxn.objective_coefficient != objective:
+            rxn.objective_coefficient = objective
+
+
+def _equation_metabolites(equation: str) -> list[str]:
+    """Metabolite names of a task equation, as RAVEN ``parseRxnEqu`` reads them.
+
+    The equation is split at `` <=> ``, `` => `` and `` + ``; empty pieces are dropped, and a
+    leading number followed by a space is taken as the coefficient and removed.
+    """
+    text = equation.replace(" <=> ", "\u20ac").replace(" => ", "\u20ac").replace(" + ", "\u20ac").strip()
+    names: list[str] = []
+    for candidate in text.split("\u20ac"):
+        if not candidate:
+            continue
+        space = candidate.find(" ")
+        name = candidate
+        if space >= 0 and _is_number(candidate[:space]):
+            name = candidate[space + 1:]
+        names.append(name.strip())
+    return names
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _task_metabolite_names(tasks: Iterable[Task]) -> set[str]:
+    """``name[compartment]`` strings named by the inputs, outputs and equations of ``tasks``."""
+    names: set[str] = set()
+    for task in tasks:
+        names.update(token for token, _, _ in task.inputs)
+        names.update(token for token, _, _ in task.outputs)
+        for equation, _, _ in task.equations:
+            names.update(_equation_metabolites(equation))
+    return names
 
 
 def _orient_forward(rxn: cobra.Reaction, direction: int) -> None:
     """Make ``rxn`` carry flux only in its forced direction (irreversible forward).
 
     Matches RAVEN ``prepINITModel``: reverse the reactions whose forced direction is
-    negative (``reverseRxns``), then set ``lb = 0`` for every essential — unconditionally,
-    even where ``lb`` was already positive (RAVEN ``minModel1.lb(selInd) = 0``). The MILP
-    re-forces essential flux later, so relaxing ``lb`` to 0 here is intended.
+    negative (``reverseRxns``), then set ``lb = 0`` for every essential reaction,
+    unconditionally, even where ``lb`` was already positive (RAVEN
+    ``minModel1.lb(selInd) = 0``). The MILP forces the essential flux again later.
     """
     if direction < 0:  # flip so the forced (reverse) direction becomes forward
         rxn.add_metabolites({m: -2 * c for m, c in rxn.metabolites.items()})
@@ -201,34 +263,82 @@ def prep_init_model(
     verbose: bool = False,
     processes: int = 1,
 ) -> PrepData:
-    """Build :class:`PrepData` from a template model — the once-per-template work shared
-    by every ftINIT sample on this model.
+    """Build :class:`PrepData` from a template model, the work done once per template.
+
+    The result is shared by every ftINIT sample on this model.
 
     With ``tasks``, discovers the task-essential reactions (kept regardless of score),
     orients them irreversibly in their required direction, and drops tasks that are
     infeasible. Then classifies reactions into the omics-independent categories, linearly
     merges, and (unless ``scale=False``) rescales the merged model's stoichiometry
-    (:func:`rescale_for_init`) so a single MILP big-M is valid across all reactions —
-    without this, genome-scale ftINIT is infeasible / intractable. ``simplify=False``
-    skips RAVEN's dead-end/FVA-blocked removal and reversibility-tightening passes,
-    leaving a larger merged model that may reach a different extraction optimum.
+    (:func:`rescale_for_init`) so that a single MILP big-M is valid across all reactions.
 
-    ``essential_cache_path`` makes the (slow, genome-scale) essential-reaction discovery
-    **resumable** across interruptions — see :func:`find_task_essential_reactions`.
+    Task-essential discovery runs with ``close_boundaries=True``, as RAVEN's
+    ``prepINITModel`` (which calls ``closeModel`` first), and the default of
+    :func:`find_task_essential_reactions` is additive. With ``close_boundaries=True`` the
+    task file defines the whole boundary of the model during the discovery.
 
-    Task-essential discovery runs with ``close_boundaries=True``, matching RAVEN's
-    ``prepINITModel`` (which calls ``closeModel`` first), rather than
-    :func:`find_task_essential_reactions`'s own additive default — see the comment at the
-    call site for why the two callers differ.
+    The two ``simplify_model`` passes are parallelised by cobra's own
+    ``cobra.Configuration().processes``.
 
-    ``verbose`` prints one line per phase (matching ``prepINITModel``'s numbered steps in
-    spirit) plus per-task progress during essential-reaction discovery; silent by default.
+    The first simplification removes reactions only; every metabolite stays in the reference model
+    while the tasks are checked, so a task can name any metabolite of the template, including
+    ones whose names differ only in letter case. Afterwards
+    the metabolites without a reaction are removed, except the ones that tasks name (inputs,
+    outputs and equations, matched by exact ``name[compartment]``, failed tasks included; when
+    several metabolites share a ``name[compartment]``, only the first in model order is kept).
+    RAVEN ``prepINITModel`` does the same.
 
-    ``processes`` (default 1) parallelises task-essential discovery across tasks — see
-    :func:`find_task_essential_reactions`. It does not affect the two ``simplify_model``
-    passes below; those parallelise via cobra's own ``cobra.Configuration().processes``
-    (set that separately if you want them faster too).
+    With the first simplification, every gene left without a reaction is removed from the
+    reference model afterwards (RAVEN ``prepINITModel`` removes unused genes there), including
+    genes that had no reaction in the template. Task ids may repeat (for example as category
+    codes) and may be empty; a task that cannot be performed is removed by its position, so a
+    task with the same id that can be performed stays. Raises :class:`ValueError` when a task
+    id is not text.
+
+    Parameters
+    ----------
+    template : cobra.Model
+        Template model. It is not modified; the preprocessing works on a copy.
+    tasks : Iterable[Task] or None
+        Metabolic tasks whose essential reactions are kept regardless of score. The default
+        ``None`` skips the task-essential discovery.
+    ext_comp : str
+        Keyword-only; default ``"e"``. Id of the extracellular compartment, passed to
+        :func:`classify_reactions`.
+    spontaneous : Iterable[str]
+        Keyword-only; default empty. Ids of the spontaneous reactions, passed to
+        :func:`classify_reactions`.
+    custom : Iterable[str]
+        Keyword-only; default empty. Ids of the reactions in the custom category, passed to
+        :func:`classify_reactions`.
+    essential_cache_path : str or Path or None
+        Keyword-only; default ``None``. Path of a file to which the accumulated results of
+        the essential-reaction discovery are written, which makes the discovery resumable
+        across interruptions; see :func:`find_task_essential_reactions`. The default
+        ``None`` writes no file.
+    simplify : bool
+        Keyword-only; default ``True``. When ``False``, the function skips RAVEN's dead-end
+        and FVA-blocked removal and its reversibility-tightening passes, which leaves a
+        larger merged model that may reach a different extraction optimum.
+    scale : bool
+        Keyword-only; default ``True``. When ``False``, the merged model's stoichiometry is
+        not rescaled. Without scaling, a small ``big_m`` can make the MILP infeasible. The
+        `INIT parameter calibration study
+        <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
+        on raven-docs compares the pipeline with and without scaling.
+    verbose : bool
+        Keyword-only; default ``False``. Prints one line per phase plus per-task progress
+        during essential-reaction discovery.
+    processes : int
+        Keyword-only; default 1. Number of processes for the task-essential discovery across
+        tasks; see :func:`find_task_essential_reactions`.
     """
+    if tasks is not None:
+        tasks = list(tasks)
+        bad = [t.id for t in tasks if not isinstance(t.id, str)]
+        if bad:
+            raise ValueError(f"Task ids must be text, got {bad[0]!r} of type {type(bad[0]).__name__}")
     ref_model = template.copy()
 
     if simplify:
@@ -241,8 +351,25 @@ def prep_init_model(
         # flux — zero-interval, topological dead-ends, then FVA-blocked (deleteMinMax).
         # Without the FVA-blocked and zero-interval passes the MILP runs on a ~10% larger
         # model and reaches a different (bypass-heavy) optimum.
+        # prepINITModel removes the reactions but keeps every metabolite through the task check;
+        # it removes the unused metabolites afterwards, except those that tasks name (below).
+        template_order = {m.id: i for i, m in enumerate(ref_model.metabolites)}
+        before = list(ref_model.metabolites)
         simplify_model(ref_model, delete_zero_interval=True, delete_dead_end=True,
                        delete_no_flux=True)
+        lost = [m for m in before if m.id not in ref_model.metabolites]
+        if lost and tasks is not None:
+            restored = [cobra.Metabolite(m.id, formula=m.formula, name=m.name, charge=m.charge,
+                                         compartment=m.compartment) for m in lost]
+            for new, old in zip(restored, lost, strict=True):
+                new.annotation = dict(old.annotation)
+                new.notes = dict(old.notes)
+            ref_model.add_metabolites(restored)
+            ref_model.metabolites.sort(key=lambda m: template_order[m.id])
+        # prepINITModel removes the reactions with removeReactions(model, rxns, false, true),
+        # whose last argument removes every gene that no reaction uses.
+        for gene in [g for g in ref_model.genes if not g.reactions]:
+            ref_model.genes.remove(gene)
 
     essential_pre: dict[str, int] = {}
     task_mets: set[str] = set()
@@ -270,7 +397,32 @@ def prep_init_model(
                                             processes=processes)
         essential_pre = ess.reactions
         task_mets = ess.task_metabolites
-        kept_tasks = [t for t in tasks if t.id not in ess.failed_tasks]
+        failed_positions = set(ess.failed_indices)
+        kept_tasks = [t for i, t in enumerate(tasks) if i not in failed_positions]
+
+        if simplify:
+            # prepINITModel: removeMets(cModel, setdiff(unusedMets, essentialMetsForTasks)), where
+            # essentialMetsForTasks holds, for each name[compartment] that a task names (failed
+            # tasks included), the first metabolite of the model with exactly that name.
+            task_met_names = _task_metabolite_names(tasks)
+            named_first: dict[str, cobra.Metabolite] = {}
+            for met in ref_model.metabolites:
+                key = f"{met.name}[{met.compartment}]"
+                if key in task_met_names:
+                    named_first.setdefault(key, met)
+            keep_ids = {met.id for met in named_first.values()}
+            ref_model.remove_metabolites(
+                [m for m in ref_model.metabolites if not m.reactions and m.id not in keep_ids]
+            )
+
+    # Orienting essentials and tightening reversibility change the bounds, the stoichiometry
+    # direction and the objective coefficient of these reactions only. They are restored on
+    # ref_model after the merge, so that the extracted model keeps the bounds of the template.
+    changeable = [r for r in ref_model.reactions if r.id in essential_pre or r.lower_bound < 0]
+    saved = {
+        r.id: (r.lower_bound, r.upper_bound, dict(r.metabolites), r.objective_coefficient)
+        for r in changeable
+    }
 
     # Orient essentials irreversibly (forced direction → forward) before merging, so
     # the merge keeps them forward and the MILP forces them with a simple lower bound.
@@ -293,10 +445,16 @@ def prep_init_model(
                                spontaneous=spontaneous, custom=custom)
 
     min_model, orig_ids, group_ids, reversed_rxns = merge_linear(ref_model)
+    _restore_reactions(ref_model, saved)
     if scale:  # compress stoichiometric dynamic range so the MILP big-M fits all reactions
         if verbose:
             print("[prep] rescaling merged model", flush=True)
         rescale_for_init(min_model)
+        for rxn in min_model.reactions:  # prepINITModel: bounds back to the standard ±1000
+            if rxn.upper_bound > 0:
+                rxn.upper_bound = 1000.0
+            if rxn.lower_bound < 0:
+                rxn.lower_bound = -1000.0
     if verbose:
         print(f"[prep] done: {len(min_model.reactions)} reactions in min_model, "
               f"{len(essential_pre)} essential (pre-merge)", flush=True)

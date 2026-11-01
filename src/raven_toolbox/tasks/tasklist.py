@@ -1,11 +1,14 @@
 """Parse a metabolic task list.
 
-A task list defines, per task, allowed inputs/outputs, optional extra reactions
-(equations), reaction-bound changes, and whether the task *should fail*. Tasks
+A task list defines, per task, allowed inputs and outputs, optional extra reactions
+(equations), reaction-bound changes, and whether the task should fail. Tasks
 are checked with :func:`raven_toolbox.tasks.check_tasks`.
 
-The file is tab-delimited (``.txt``/``.tsv``) or Excel (``.xlsx``, sheet ``TASKS``;
-needs the ``[excel]`` extra). Recognised columns (the only required one is ``ID``):
+The file is tab-delimited (for example ``.txt`` or ``.tsv``) or Excel (``.xlsx`` or
+``.xlsm``, sheet ``TASKS``; needs the ``[excel]`` extra). Recognised columns (the only
+required one is ``ID``, which must not be the first column; the first column is reserved
+for comment markers, and a row with text in the first column is skipped, as in RAVEN's
+``parseTaskList``):
 
     ID · DESCRIPTION · IN · IN LB · IN UB · OUT · OUT LB · OUT UB ·
     EQU · EQU LB · EQU UB · CHANGED RXN · CHANGED LB · CHANGED UB ·
@@ -13,10 +16,13 @@ needs the ``[excel]`` extra). Recognised columns (the only required one is ``ID`
 
 A task spans consecutive rows; only its first row carries an ID. Metabolites are
 written ``name[compartment]``; several in one cell are separated by ``;`` (sharing
-that row's bounds). ``IN``/``OUT`` default LB 0, UB 1000; ``EQU`` defaults LB
--1000 if reversible (``<=>``) else 0, UB 1000. The special tokens ``ALLMETS`` and
-``ALLMETSIN[comp]`` allow free uptake/excretion of all metabolites (only the upper
-bound is used).
+that row's bounds). ``IN`` and ``OUT`` default to LB 0 and UB 1000; ``EQU`` defaults to
+LB -1000 if reversible (``<=>``) else 0, and UB 1000. An empty ``CHANGED LB`` or
+``CHANGED UB`` leaves that bound of the reaction unchanged. ``SHOULD FAIL`` and
+``PRINT FLUX`` are false when empty or ``0``, ``false`` or ``no`` (any case), true
+otherwise. The special tokens ``ALLMETS`` and ``ALLMETSIN[comp]`` allow free uptake or
+excretion of all metabolites (only the upper bound is used). A row whose ID starts with
+``#`` is skipped.
 """
 from __future__ import annotations
 
@@ -34,7 +40,11 @@ _COLUMNS = (
 
 @dataclass
 class Task:
-    """One metabolic task. Bounds are ``(metabolite_or_reaction, lb, ub)`` triples."""
+    """One metabolic task. Bounds are ``(metabolite_or_reaction, lb, ub)`` triples.
+
+    In ``changed``, a bound is ``None`` when the cell was empty, meaning "leave that
+    bound of the reaction as it is" (RAVEN reads it as NaN).
+    """
 
     id: str
     description: str = ""
@@ -44,7 +54,7 @@ class Task:
     inputs: list[tuple[str, float, float]] = field(default_factory=list)
     outputs: list[tuple[str, float, float]] = field(default_factory=list)
     equations: list[tuple[str, float, float]] = field(default_factory=list)
-    changed: list[tuple[str, float, float]] = field(default_factory=list)
+    changed: list[tuple[str, float | None, float | None]] = field(default_factory=list)
 
 
 def _truthy(value: str) -> bool:
@@ -56,8 +66,18 @@ def _num(value: str, default: float) -> float:
     return float(value) if value else default
 
 
+def _opt_num(value: str) -> float | None:
+    value = value.strip()
+    return float(value) if value else None
+
+
 def _read_rows(path: str | Path) -> list[list[str]]:
     path = Path(path)
+    if path.suffix.lower() == ".xls":
+        raise ValueError(
+            f"{path}: the old binary .xls format is not supported. Save the task list as "
+            ".xlsx (sheet 'TASKS') or as a tab-delimited .txt file."
+        )
     if path.suffix.lower() in (".xlsx", ".xlsm"):
         try:
             from openpyxl import load_workbook
@@ -76,7 +96,17 @@ def _read_rows(path: str | Path) -> list[list[str]]:
 
 
 def parse_task_list(path: str | Path) -> list[Task]:
-    """Parse a task-list file into :class:`Task` objects."""
+    """Parse a task-list file into :class:`Task` objects.
+
+    Parameters
+    ----------
+    path : str or Path
+        Task-list file. A ``.xlsx`` or ``.xlsm`` file is read from its ``TASKS`` sheet and
+        needs the ``[excel]`` extra (openpyxl); a ``.xls`` file raises :class:`ValueError`.
+        Any other extension is read as tab-delimited UTF-8 text. The file needs a header row
+        with an ``ID`` column that is not the first column, otherwise :class:`ValueError` is
+        raised; rows whose first cell is not empty are skipped as comments.
+    """
     rows = _read_rows(path)
     header_idx = next(
         (i for i, r in enumerate(rows) if any(c.strip().upper() == "ID" for c in r)), None
@@ -85,6 +115,11 @@ def parse_task_list(path: str | Path) -> list[Task]:
         raise ValueError(f"{path}: no header row with an 'ID' column found.")
     header = [c.strip().upper() for c in rows[header_idx]]
     col = {name: header.index(name) for name in _COLUMNS if name in header}
+    if col["ID"] == 0:
+        raise ValueError(
+            f"{path}: the TASKS sheet must have a column named ID that is not the first "
+            "column; the first column is reserved for comment markers."
+        )
 
     def cell(row: list[str], name: str) -> str:
         i = col.get(name)
@@ -94,18 +129,16 @@ def parse_task_list(path: str | Path) -> list[Task]:
     # (vs. pure whitespace/comment), used by the orphan-row warning below.
     _DATA_COLS = ("IN", "OUT", "EQU", "CHANGED RXN")
 
-    id_col = col.get("ID", 0)
     tasks: list[Task] = []
     current: Task | None = None
     for row_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
         if not any(c.strip() for c in row):
             continue
         # RAVEN parseTaskList: "all rows starting with a non-empty [first] cell are
-        # removed" — comment / section-header rows carry a marker (e.g. "#") in a leading
-        # column before the ID, with the ID column holding descriptive text. Skip any row
-        # with a non-empty cell *before* the ID column, or it becomes a spurious empty task
-        # (69 vs RAVEN's 57 on metabolicTasks_Essential).
-        if any(j < len(row) and row[j].strip() for j in range(id_col)):
+        # removed". Comment / section-header rows carry a marker (e.g. "#") in the first
+        # column, with the ID column holding descriptive text; without this they become
+        # spurious empty tasks (69 vs RAVEN's 57 on metabolicTasks_Essential).
+        if row and row[0].strip():
             continue
         rid = cell(row, "ID")
         if rid.startswith("#"):
@@ -145,5 +178,5 @@ def _add_row(task: Task, row: list[str], cell) -> None:
         ub = _num(cell(row, "EQU UB"), 1000.0)
         task.equations.append((equ.strip(), lb, ub))
     if chg := cell(row, "CHANGED RXN"):
-        lb, ub = _num(cell(row, "CHANGED LB"), -1000.0), _num(cell(row, "CHANGED UB"), 1000.0)
-        task.changed += [(r.strip(), lb, ub) for r in chg.split(";") if r.strip()]
+        chg_lb, chg_ub = _opt_num(cell(row, "CHANGED LB")), _opt_num(cell(row, "CHANGED UB"))
+        task.changed += [(r.strip(), chg_lb, chg_ub) for r in chg.split(";") if r.strip()]

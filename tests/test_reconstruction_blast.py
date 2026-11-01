@@ -4,7 +4,12 @@ import shutil
 import pandas as pd
 import pytest
 
-from raven_toolbox.reconstruction.homology import HIT_COLUMNS, blast_from_table, run_blast
+from raven_toolbox.reconstruction.homology import (
+    HIT_COLUMNS,
+    blast_from_table,
+    run_blast,
+    run_diamond,
+)
 from raven_toolbox.reconstruction.homology.blast import _parse_tabular
 
 _SEQ = (
@@ -76,3 +81,20 @@ def test_run_blast_integration(tmp_path):
     # the reciprocal pair tgene<->ngene is found
     fwd = hits[(hits.from_gene == "tgene") & (hits.to_gene == "ngene")]
     assert not fwd.empty
+
+
+@pytest.mark.parametrize("runner", [run_blast, run_diamond])
+def test_threads_default_to_every_available_cpu(runner, monkeypatch):
+    """As RAVEN's getBlast/getDiamond, which pass feature('numcores')'s assigned count."""
+    import raven_toolbox.reconstruction.homology.blast as blast
+
+    calls = []
+    monkeypatch.setattr(blast, "_available_cpus", lambda: 7)
+    monkeypatch.setattr(blast, "resolve_binary", lambda name, binary=None: name)
+    monkeypatch.setattr(blast, "_run", lambda cmd: calls.append(cmd) or "")
+    runner("org", "org.faa", ["m"], ["m.faa"])
+    searches = [c for c in calls if c[0] in ("blastp", "diamond") and "makedb" not in c]
+    assert searches
+    for cmd in searches:
+        flag = "-num_threads" if cmd[0] == "blastp" else "--threads"
+        assert cmd[cmd.index(flag) + 1] == "7"

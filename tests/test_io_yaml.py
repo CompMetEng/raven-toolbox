@@ -81,6 +81,13 @@ def test_standard_content(yaml_file):
     assert r.gene_reaction_rule == "G1"
 
 
+def test_read_model_has_raven_solver_tolerance(yaml_file):
+    model = read_yaml_model(yaml_file)
+    assert model.tolerance == 1e-9
+    model.solver = "glpk"
+    assert model.tolerance == 1e-9
+
+
 def test_annotation_owned_by_cobra(yaml_file):
     # smiles / ec-code / miriam live in the annotation block (cobra reads them)
     model = read_yaml_model(yaml_file)
@@ -304,3 +311,270 @@ def test_code_built_model_round_trips(tmp_path):
     # The objective survives the round-trip (no other I/O test checks this).
     assert {x.id for x in back.reactions if x.objective_coefficient != 0} == {"BIOMASS"}
     assert back.reactions.get_by_id("BIOMASS").objective_coefficient == 1.0
+
+
+def test_read_yaml_model_gives_integer_charges(tmp_path):
+    """Charges written as floats (RAVEN 3 format) are read as ints and reach SBML."""
+    path = tmp_path / "float_charges.yml"
+    path.write_text(
+        "!!omap\n"
+        "- metabolites:\n"
+        "  - !!omap\n"
+        "    - id: a_c\n"
+        "    - name: A\n"
+        "    - compartment: c\n"
+        "    - charge: -1.0\n"
+        "    - formula: C2H3O2\n"
+        "  - !!omap\n"
+        "    - id: b_c\n"
+        "    - name: B\n"
+        "    - compartment: c\n"
+        "    - charge: 0.5\n"
+        "- reactions:\n"
+        "  - !!omap\n"
+        "    - id: r1\n"
+        "    - metabolites: !!omap\n"
+        "      - a_c: -1.0\n"
+        "      - b_c: 1.0\n"
+        "    - lower_bound: 0.0\n"
+        "    - upper_bound: 1000.0\n"
+        "- genes: []\n"
+        "- compartments: !!omap\n"
+        "  - c: cytosol\n",
+        encoding="utf-8",
+    )
+    model = read_yaml_model(path)
+    a = model.metabolites.get_by_id("a_c")
+    assert a.charge == -1 and isinstance(a.charge, int)
+    # a fractional charge is kept as it is
+    assert model.metabolites.get_by_id("b_c").charge == 0.5
+
+    sbml = tmp_path / "float_charges.xml"
+    cobra.io.write_sbml_model(model, str(sbml))
+    assert cobra.io.read_sbml_model(str(sbml)).metabolites.get_by_id("a_c").charge == -1
+
+
+def test_sbo_term_is_a_string_after_yaml_round_trip(tmp_path):
+    """``annotation['sbo']`` is a bare string after a YAML round trip, as after add_sbo_terms or SBML read."""
+    m = cobra.Model("sbo")
+    a = cobra.Metabolite("a_c", compartment="c")
+    a.annotation["sbo"] = "SBO:0000247"
+    a.annotation["kegg.compound"] = ["C00031"]
+    r = cobra.Reaction("r1", lower_bound=0, upper_bound=1000)
+    r.add_metabolites({a: -1})
+    r.annotation["sbo"] = "SBO:0000627"
+    m.add_reactions([r])
+    out = tmp_path / "sbo.yml"
+    write_yaml_model(m, out)
+    back = read_yaml_model(out)
+    assert back.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"
+    assert back.metabolites.get_by_id("a_c").annotation["sbo"] == "SBO:0000247"
+    assert back.metabolites.get_by_id("a_c").annotation["kegg.compound"] == ["C00031"]
+
+
+def test_sbo_term_written_as_a_list_is_read_as_a_string(tmp_path):
+    path = tmp_path / "sbo_list.yml"
+    path.write_text(
+        "!!omap\n"
+        "- metabolites:\n"
+        "  - !!omap\n"
+        "    - id: a_c\n"
+        "    - compartment: c\n"
+        "- reactions:\n"
+        "  - !!omap\n"
+        "    - id: r1\n"
+        "    - metabolites: !!omap\n"
+        "      - a_c: -1.0\n"
+        "    - lower_bound: 0.0\n"
+        "    - upper_bound: 1000.0\n"
+        "    - annotation: !!omap\n"
+        "      - sbo:\n"
+        "        - SBO:0000627\n"
+        "- genes: []\n"
+        "- compartments: !!omap\n"
+        "  - c: cytosol\n",
+        encoding="utf-8",
+    )
+    model = read_yaml_model(path)
+    assert model.reactions.get_by_id("r1").annotation["sbo"] == "SBO:0000627"
+
+
+def test_write_warns_on_empty_metabolite_names(tmp_path):
+    """RAVEN's writeYAMLmodel refuses empty metabolite names; Python writes but warns."""
+    m = cobra.Model("m")
+    m.add_metabolites(
+        [
+            cobra.Metabolite("a_c", name="A", compartment="c"),
+            cobra.Metabolite("b_c", name="", compartment="c"),
+        ]
+    )
+    with pytest.warns(UserWarning, match=r"1 metabolite\(s\) have an empty name \(b_c\)"):
+        write_yaml_model(m, tmp_path / "out.yml")
+    assert (tmp_path / "out.yml").exists()
+
+
+def test_write_is_silent_when_all_metabolites_are_named(tmp_path, recwarn):
+    m = cobra.Model("m")
+    m.add_metabolites([cobra.Metabolite("a_c", name="A", compartment="c")])
+    write_yaml_model(m, tmp_path / "out.yml")
+    assert not [w for w in recwarn if "empty name" in str(w.message)]
+
+
+def test_write_quotes_yaml_1_1_booleans(tmp_path):
+    """Nitric oxide (name and formula NO), formula Y and compartment n are
+    YAML 1.1 booleans, which PyYAML reads as True or False when unquoted."""
+    m = cobra.Model("t")
+    m.compartments = {"n": "nucleus"}
+    no = cobra.Metabolite("no_n", name="NO", formula="NO", compartment="n")
+    y = cobra.Metabolite("y_n", name="on", formula="Y", compartment="n")
+    m.add_metabolites([no, y])
+    r = cobra.Reaction("R1", name="yes")
+    r.add_metabolites({no: -1, y: 1})
+    m.add_reactions([r])
+
+    out = tmp_path / "m.yml"
+    write_yaml_model(m, out)
+    text = out.read_text()
+    for line in ('name: "NO"', 'formula: "NO"', 'formula: "Y"', 'compartment: "n"',
+                 'name: "on"', 'name: "yes"'):
+        assert line in text
+    assert "compartment: n\n" not in text
+
+    back = read_yaml_model(out)
+    assert back.metabolites.no_n.name == "NO"
+    assert back.metabolites.no_n.formula == "NO"
+    assert back.metabolites.y_n.formula == "Y"
+    assert back.metabolites.y_n.compartment == "n"
+    assert back.reactions.R1.name == "yes"
+
+
+@pytest.mark.parametrize("value", ["y", "N", "Yes", "nO", "ON", "Off"])
+def test_needs_quote_yaml_1_1_booleans_any_case(value):
+    from raven_toolbox.io.yaml import _needs_quote
+
+    assert _needs_quote(value)
+
+
+@pytest.mark.parametrize("value", ["NOS1", "Yn", "onion", "ny", "off-target"])
+def test_needs_quote_leaves_longer_words_plain(value):
+    from raven_toolbox.io.yaml import _needs_quote
+
+    assert not _needs_quote(value)
+
+
+def test_single_ec_code_and_smiles_are_written_as_lists(tmp_path):
+    # cobra stores a one-identifier annotation as a bare string; RAVEN's writer forces
+    # ec-code and smiles to a list even for one value, and other keys stay scalars.
+    m = cobra.Model("m")
+    a = cobra.Metabolite("a_c", compartment="c", name="a")
+    b = cobra.Metabolite("b_c", compartment="c", name="b")
+    a.annotation = {"smiles": "C1=NC2", "kegg.compound": "C00002"}
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1, b: 1})
+    r.annotation = {"ec-code": "1.1.1.1", "kegg.reaction": "R00001"}
+
+    out = tmp_path / "m.yml"
+    write_yaml_model(m, out)
+    lines = out.read_text().splitlines()
+
+    assert lines[lines.index("      - ec-code:") + 1] == "        - 1.1.1.1"
+    assert lines[lines.index("      - smiles:") + 1] == "        - C1=NC2"
+    assert "      - kegg.compound: C00002" in lines
+    assert "      - kegg.reaction: R00001" in lines
+
+    back = read_yaml_model(out)
+    assert back.reactions.R1.annotation["ec-code"] == ["1.1.1.1"]
+    assert back.metabolites.a_c.annotation["smiles"] == ["C1=NC2"]
+
+
+def _edge_model():
+    m = cobra.Model("edge")
+    a = cobra.Metabolite("A_c", name="A", compartment="c")
+    b = cobra.Metabolite("B_c", name="B", compartment="c")
+    r1 = cobra.Reaction("R1", name="named")
+    r2 = cobra.Reaction("R2", name="")
+    m.add_reactions([r1, r2])
+    r1.add_metabolites({a: -1, b: 1})
+    r2.add_metabolites({b: -1})
+    return m
+
+
+def test_unnamed_reaction_has_no_name_key(tmp_path):
+    out = tmp_path / "m.yml"
+    write_yaml_model(_edge_model(), out)
+    text = out.read_text()
+    assert 'name: ""' not in text and "name: ''" not in text
+    assert read_yaml_model(out).reactions.get_by_id("R2").name == ""
+
+
+def test_default_bounds_are_written_only_when_the_model_stores_them(tmp_path):
+    plain = tmp_path / "plain.yml"
+    write_yaml_model(_edge_model(), plain)
+    assert "defaultLB" not in plain.read_text()
+    m = _edge_model()
+    m.notes["metaData"] = {"defaultLB": -1000.0, "defaultUB": 1000.0}
+    stored = tmp_path / "stored.yml"
+    write_yaml_model(m, stored)
+    assert "defaultLB" in stored.read_text()
+
+
+def test_duplicate_metabolite_names_warn(tmp_path):
+    m = cobra.Model("dup")
+    x = cobra.Metabolite("X_c", name="dup", compartment="c")
+    y = cobra.Metabolite("Y_c", name="dup", compartment="c")
+    other = cobra.Metabolite("Z_m", name="dup", compartment="m")
+    r = cobra.Reaction("Q")
+    m.add_reactions([r])
+    r.add_metabolites({x: -1, y: 1, other: 1})
+    with pytest.warns(UserWarning, match=r"1 metabolite\(s\) share a name and compartment.*Y_c and X_c"):
+        write_yaml_model(m, tmp_path / "m.yml")
+
+
+def test_only_the_stored_default_bound_is_written(tmp_path):
+    m = _edge_model()
+    m.notes["metaData"] = {"defaultLB": -1000.0}
+    out = tmp_path / "lb_only.yml"
+    write_yaml_model(m, out)
+    text = out.read_text()
+    assert "defaultLB" in text
+    assert "defaultUB" not in text
+
+
+@pytest.mark.parametrize("rule, genes, text", [
+    ("G1&G2 or G3", ["G1&G2", "G3"], "G1&G2 or G3"),
+    ("(G1 and G2) or G3", ["G1", "G2", "G3"], "(G1 and G2) or G3"),
+    ("G1 && G2", ["G1", "G2"], "G1 and G2"),
+])
+def test_read_yaml_model_reads_gene_rules_as_parse_gr_rule(tmp_path, rule, genes, text):
+    """RAVEN's parseGrRule reads G1&G2 as one gene id and && as and."""
+    m = cobra.Model("t")
+    a = cobra.Metabolite("a_c", compartment="c")
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1})
+    write_yaml_model(m, tmp_path / "m.yml")
+    data = (tmp_path / "m.yml").read_text().replace(
+        "- id: R1\n", f"- id: R1\n    - gene_reaction_rule: {rule}\n")
+    (tmp_path / "m.yml").write_text(data)
+    back = read_yaml_model(tmp_path / "m.yml")
+    assert sorted(g.id for g in back.reactions.R1.genes) == genes
+    assert back.reactions.R1.gene_reaction_rule == text
+
+
+def test_read_yaml_model_hands_a_rule_parse_gr_rule_refuses_to_cobra(tmp_path):
+    """Two genes without an operator are a malformed rule for parse_gr_rule; the file is still
+    read, with cobra's reading of that rule."""
+    m = cobra.Model("t")
+    a = cobra.Metabolite("a_c", compartment="c")
+    r = cobra.Reaction("R1")
+    m.add_reactions([r])
+    r.add_metabolites({a: -1})
+    r.gene_reaction_rule = "G1 or G2"
+    write_yaml_model(m, tmp_path / "m.yml")
+    data = (tmp_path / "m.yml").read_text().replace("G1 or G2", "G1 G2 or G3")
+    (tmp_path / "m.yml").write_text(data)
+    expected = cobra.Reaction("x")
+    expected.gene_reaction_rule = "G1 G2 or G3"
+    back = read_yaml_model(tmp_path / "m.yml")
+    assert back.reactions.R1.gene_reaction_rule == expected.gene_reaction_rule

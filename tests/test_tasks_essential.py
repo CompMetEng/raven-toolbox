@@ -4,7 +4,13 @@ Oracle: RAVEN tinitTests T0002 — for testModel + the "make e[s] from a[s]" tas
 pre-merge essential reactions are R2 (the only a[s]<->a[c] link) and R7 (the only
 e[c]->e[s] producer); the alternative internal paths make nothing else essential.
 """
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import cobra
+import pytest
 from tinit_oracles import (
     TEST_MODEL_TASK_ESSENTIAL_PREMERGE,
     make_test_model,
@@ -51,21 +57,18 @@ def test_cache_path_checkpoints_and_resumes(tmp_path, recwarn):
     This path had no coverage at all, despite being what makes a genome-scale prep
     survive an interruption. Two things are pinned here:
 
-    * the checkpoint leaves no ``.part`` file behind and emits no ResourceWarning --
-      the write used to hand ``open()`` straight to ``pickle.dump`` and rename the file
-      on the next line, leaving the flush-before-rename to refcount timing (it emitted a
-      ResourceWarning per task, 57 per Human-GEM prep, and on Windows renaming a file
-      with a live handle raises PermissionError);
+    * the checkpoint leaves no ``.part`` file behind and emits no ResourceWarning (on
+      Windows renaming a file with a live handle raises PermissionError);
     * a second call reading that cache returns the same answer, which is the whole point
       of the feature.
     """
-    cache = tmp_path / "essential.pkl"
+    cache = tmp_path / "essential.json"
 
     first = find_task_essential_reactions(
         make_test_model(), [make_test_task()], cache_path=cache)
 
     assert cache.exists(), "the checkpoint was never written"
-    assert not (tmp_path / "essential.pkl.part").exists(), "a .part file was left behind"
+    assert not (tmp_path / "essential.json.part").exists(), "a .part file was left behind"
     assert not [w for w in recwarn if issubclass(w.category, ResourceWarning)], (
         "the checkpoint leaked an unclosed file handle"
     )
@@ -75,6 +78,44 @@ def test_cache_path_checkpoints_and_resumes(tmp_path, recwarn):
         make_test_model(), [make_test_task()], cache_path=cache)
     assert resumed.reactions == first.reactions
     assert sorted(resumed.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+
+
+def test_cache_is_json_and_is_read_without_warning(tmp_path, recwarn):
+    import json
+
+    cache = tmp_path / "essential.json"
+    first = find_task_essential_reactions(
+        make_test_model(), [make_test_task()], cache_path=cache)
+    data = json.loads(cache.read_text(encoding="utf-8"))
+    assert data["version"] == 1 and set(data) == {"version", "per_index", "mets", "failed"}
+    assert sorted(data["per_index"]["0"]) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+
+    # A cache with a result for task 0 is used: the result comes from the file, not a solve.
+    data["per_index"]["0"] = {"R2": 1}
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    resumed = find_task_essential_reactions(
+        make_test_model(), [make_test_task()], cache_path=cache)
+    assert resumed.reactions == {"R2": 1}
+    assert first.reactions != resumed.reactions
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+
+def test_pickle_cache_is_ignored_with_a_warning(tmp_path):
+    import pickle
+
+    cache = tmp_path / "essential.pkl"
+    cache.write_bytes(pickle.dumps({"per_index": {0: {"R2": 1}}, "mets": set(), "failed": []}))
+    with pytest.warns(UserWarning, match="ignored"):
+        res = find_task_essential_reactions(
+            make_test_model(), [make_test_task()], cache_path=cache)
+    assert sorted(res.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
+    assert cache.read_bytes()[:1] == b"{"  # overwritten by the JSON checkpoint
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_checkpoint_every_below_one_raises(bad):
+    with pytest.raises(ValueError, match="checkpoint_every"):
+        find_task_essential_reactions(make_test_model(), [make_test_task()], checkpoint_every=bad)
 
 
 def test_equation_metabolites_are_protected():
@@ -98,6 +139,18 @@ def test_infeasible_task_is_reported_failed():
     # z[s] doesn't exist -> unknown metabolite -> failed.
     res = find_task_essential_reactions(make_test_model(), [impossible])
     assert res.failed_tasks == ["bad"] and res.reactions == {}
+
+
+def test_failed_tasks_are_reported_by_id_and_by_position():
+    """Two tasks share an id; only the second cannot be performed.
+
+    ``failed_tasks`` lists the id, ``failed_indices`` the position, so a caller can drop the
+    failing task and keep the one with the same id.
+    """
+    good = Task(id="t", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("e[s]", 1.0, 1.0)])
+    bad = Task(id="t", outputs=[("z[s]", 1.0, 1.0)])
+    res = find_task_essential_reactions(make_test_model(), [good, bad])
+    assert res.failed_tasks == ["t"] and res.failed_indices == [1]
 
 
 def test_should_fail_task_defines_no_essentials():
@@ -195,6 +248,93 @@ def test_duplicate_name_comp_metabolites_both_constrained():
     m.objective = "R1"
     # Output b from input a -> 'a[s]' matches both a1 and a2; must not be reported missing.
     task = Task(id="t", inputs=[("a[s]", 0.0, 1000.0)], outputs=[("b[s]", 1.0, 1.0)])
-    res = find_task_essential_reactions(m, [task])
+    with pytest.warns(UserWarning, match="matches 2 model metabolites"):
+        res = find_task_essential_reactions(m, [task])
     assert res.failed_tasks == []  # 'a[s]' resolved (to both a1 and a2), task feasible
     assert "R1" in res.reactions
+
+
+_ORDER_SCRIPT = """
+from tinit_oracles import make_test_model, make_test_task
+from raven_toolbox.tasks import find_task_essential_reactions
+res = find_task_essential_reactions(make_test_model(), [make_test_task()])
+print(",".join(res.reactions))
+"""
+
+
+def test_essential_set_and_order_do_not_depend_on_hash_seed():
+    """Candidates are taken in model reaction order, whatever PYTHONHASHSEED is."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parent)] + [p for p in sys.path if p]
+    )
+    outputs = set()
+    for seed in ("0", "1", "2", "3", "4", "5"):
+        env["PYTHONHASHSEED"] = seed
+        run = subprocess.run([sys.executable, "-c", _ORDER_SCRIPT], env=env,
+                             capture_output=True, text=True, check=True)
+        outputs.add(run.stdout.strip().splitlines()[-1])
+    assert outputs == {"R2,R7"}
+
+
+class _FakeProblem:
+    """Solver stand-in whose stored basis makes a feasible knock-out look infeasible."""
+
+    def __init__(self, feasible: bool, warm_status: str):
+        self.feasible, self.warm_status, self.warm, self.resets = feasible, warm_status, True, 0
+
+    def reset(self):
+        self.warm, self.resets = False, self.resets + 1
+
+
+class _FakeModel:
+    def __init__(self, problem: _FakeProblem):
+        self.solver = type("Solver", (), {})()
+        self.solver.problem, self.solver.status = problem, None
+
+    def slim_optimize(self):
+        p = self.solver.problem
+        if p.warm:
+            self.solver.status = p.warm_status
+        else:
+            self.solver.status = "optimal" if p.feasible else "infeasible"
+
+
+def test_knockout_rechecked_cold_after_infeasible_warm_start():
+    """A warm-started 'infeasible' that a cold solve finds feasible is not essential."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    spurious = _FakeProblem(feasible=True, warm_status="infeasible")
+    assert _knockout_feasible(_FakeModel(spurious)) is True
+    assert spurious.resets == 1
+    real = _FakeProblem(feasible=False, warm_status="infeasible")
+    assert _knockout_feasible(_FakeModel(real)) is False
+
+
+def test_knockout_feasible_statuses_follow_raven_check_solution():
+    """Optimal and suboptimal count as feasible without a retry; time_limit gets one."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    for status in ("optimal", "suboptimal"):
+        p = _FakeProblem(feasible=False, warm_status=status)
+        assert _knockout_feasible(_FakeModel(p)) is True
+        assert p.resets == 0
+    p = _FakeProblem(feasible=False, warm_status="time_limit")
+    assert _knockout_feasible(_FakeModel(p)) is False
+    assert p.resets == 1
+
+
+def test_knockout_feasible_on_solver_model():
+    """On a real solver: blocking the only route to a required output is infeasible."""
+    from raven_toolbox.tasks.check import _knockout_feasible
+    m = cobra.Model("ko")
+    a, b = cobra.Metabolite("a"), cobra.Metabolite("b")
+    uptake, r1, r2, out = (cobra.Reaction(i) for i in ("EX_a", "R1", "R2", "EX_b"))
+    uptake.add_metabolites({a: 1})
+    r1.add_metabolites({a: -1, b: 1})
+    r2.add_metabolites({a: -1, b: 1})
+    out.add_metabolites({b: -1})
+    m.add_reactions([uptake, r1, r2, out])
+    uptake.bounds, r1.bounds, r2.bounds, out.bounds = (0, 10), (0, 10), (0, 10), (1, 10)
+    r1.bounds = (0.0, 0.0)
+    assert _knockout_feasible(m) is True       # R2 still carries the flux
+    r2.bounds = (0.0, 0.0)
+    assert _knockout_feasible(m) is False

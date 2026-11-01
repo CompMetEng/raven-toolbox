@@ -11,7 +11,7 @@ parsimony effect is large and direction-robust; the assignment-accuracy differen
 
 RUN THIS IN A CPLEX-ENABLED PYTHON (3.10-3.12 where ``import cplex`` works). The bundled PyPI ``cplex``
 is Community-capped at 1000 constraints; for the full model, point its ``_internal/cplexXXXX.dll`` at a
-licensed CPLEX Studio runtime of the same version (see docs/studies/carvefungi_milp_benchmark.md). No
+licensed CPLEX Studio runtime of the same version (see raven-gecko-parity/docs/localization/carvefungi_milp_benchmark.md). No
 Gurobi needed.
 
 Arms (only the objective's parsimony differs; same candidate set, same scores, same connectivity):
@@ -27,7 +27,7 @@ Inputs:
   universal model data/reactionDatabase/bigModelv2.21b.sbml + universal_v2.21.csv).
 * ``--scores`` : the DeepLoc-injected CarveFungi yeast score dict (reaction_id,score) -- produced by
   running CarveFungi's unmodified scoring with a DeepLoc-derived loc file (see
-  docs/studies/carvefungi_milp_benchmark.md). Provided alongside this script.
+  raven-gecko-parity/docs/localization/carvefungi_milp_benchmark.md). Provided alongside this script.
 * ``--yeast-gem`` : yeast-GEM.xml, for the EC-mapped curated gold reference.
 
 ASCII-only output.

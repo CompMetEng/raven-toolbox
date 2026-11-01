@@ -1,28 +1,26 @@
 """Gap-filling against template models.
 
-Four complementary strategies are provided:
+Four strategies are provided:
 
-- :func:`connect_blocked_reactions` (connectivity MILP) — minimum-penalty template
-  reactions so blocked draft reactions can carry flux.
-- :func:`fill_gaps_fast_lp` (LP, fast) — L1-norm LP per blocked reaction; no MILP solver
-  required; scales better to large models (fastGapFill / swiftGapFill).
-- :func:`analyse_topology` (no solver) — BFS metabolite-producibility pre-screening;
+- :func:`connect_blocked_reactions` (connectivity MILP): minimum-penalty template
+  reactions so that blocked draft reactions can carry flux.
+- :func:`fill_gaps_fast_lp` (LP): L1-norm LP per blocked reaction; needs no MILP solver
+  (fastGapFill and swiftGapFill).
+- :func:`analyse_topology` (no solver): BFS metabolite-producibility pre-screening;
   identifies unreachable metabolites and prunes the candidate reaction pool.
-- :func:`fill_gaps_kumar_milp` (objective MILP) — growth-floor MILP with directionality
-  reversal repair (Kumar et al. 2007).
+- :func:`fill_gaps_milp` (objective MILP): fewest template reactions that let the
+  objective reach a growth floor (Kumar et al. 2007); ``cobra.flux_analysis.gapfill``
+  solves a similar problem.
 
-For the objective-feasibility flavour without directionality repair, also see
-``cobra.flux_analysis.gapfill``.
-
-Separately, :func:`find_leak_metabolite` tests whether the model itself contains a
-stoichiometric leak (a metabolite it can produce or consume for free) rather than
-filling a gap against a template, and :func:`gap_report` (or :func:`print_gap_report`)
-runs a full battery of connectivity checks and summarizes the result.
+:func:`find_leak_metabolite` tests whether the model itself contains a
+stoichiometric leak (a metabolite it can produce or consume for free); it does not fill
+a gap against a template. :func:`gap_report` and :func:`print_gap_report`
+run a set of connectivity checks and summarise the result.
 """
 from raven_toolbox.gapfilling.fast_lp import FastLPResult, fill_gaps_fast_lp
 from raven_toolbox.gapfilling.fill import GapFillResult, connect_blocked_reactions
-from raven_toolbox.gapfilling.kumar_milp import KumarGapFillResult, fill_gaps_kumar_milp
 from raven_toolbox.gapfilling.leak import LeakMetaboliteResult, find_leak_metabolite
+from raven_toolbox.gapfilling.milp import MILPGapFillResult, fill_gaps_milp
 from raven_toolbox.gapfilling.report import (
     GapReportResult,
     MinToConnect,
@@ -38,8 +36,8 @@ __all__ = [
     "fill_gaps_fast_lp",
     "TopologicalAnalysisResult",
     "analyse_topology",
-    "KumarGapFillResult",
-    "fill_gaps_kumar_milp",
+    "MILPGapFillResult",
+    "fill_gaps_milp",
     "LeakMetaboliteResult",
     "find_leak_metabolite",
     "GapReportResult",

@@ -1,26 +1,27 @@
 """Check whether a model performs a set of metabolic tasks.
 
-For each task the model is constrained by the task's allowed inputs/outputs (and any
-extra reactions / bound changes), then tested for feasibility: a task *passes* if a
-steady-state flux exists, unless it is marked ``should_fail`` (then it passes iff
-infeasible).
+For each task the model is constrained by the allowed inputs and outputs of the task (and
+any extra reactions and bound changes), then tested for feasibility: a task passes if a
+steady-state flux exists, unless it is marked ``should_fail`` (then it passes if and
+only if it is infeasible).
 
-Inputs/outputs are encoded as ranges on the per-metabolite mass-balance constraint
+Inputs and outputs are encoded as ranges on the per-metabolite mass-balance constraint
 (``model.constraints[met.id]``): an input allows net consumption (``Sv ∈ [-UB, -LB]``)
-and an output allows / requires net production (``Sv ≤ UB``, and ``≥ LB`` if
-``LB > 0``). By default, existing boundary reactions are left exactly as they are: a
-task's inputs/outputs *add to* whatever the model's own open exchanges already allow,
-rather than replacing them (RAVEN's ``checkTasks`` semantics, and what the published
-task lists this module reads were curated against). Pass ``close_boundaries=True`` for
-the stricter reading, where a task's declared inputs/outputs are the complete boundary
-of the system for that check.
+and an output allows net production (``Sv ≤ UB``) and requires it (``≥ LB``) if
+``LB > 0``. By default, existing boundary reactions are left as they are: the inputs and
+outputs of a task add to what the open exchanges of the model already allow, as in
+RAVEN's ``checkTasks`` on a model without boundary metabolites, such as one read from
+YAML. With ``close_boundaries=True``, the declared inputs and outputs of a task are the
+complete boundary of the system for that check; this corresponds to RAVEN's
+``checkTasks(closeModel(model), ...)``, which is how ``prepINITModel`` runs it.
 """
 from __future__ import annotations
 
 import concurrent.futures as cf
-import pickle
+import json
+import warnings
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -33,6 +34,7 @@ from raven_toolbox.manipulation.add import add_reactions_from_equations
 from raven_toolbox.manipulation.boundary import close_model_in_place
 from raven_toolbox.tasks.tasklist import Task, parse_task_list
 
+_CACHE_VERSION = 1
 _ALLMETS = "ALLMETS"
 _ALLMETSIN = "ALLMETSIN"
 
@@ -61,7 +63,7 @@ def _set_constraint_bounds(constraint, lb: float, ub: float) -> None:
 def _classify(token: str) -> tuple[str, str]:
     """Return ``("all", "")``, ``("comp", COMP)``, or ``("met", token_upper)``.
 
-    The arg is empty only for ``"all"``, which never reads it.
+    The second element is empty for ``"all"``, which never reads it.
     """
     upper = token.upper()
     if upper == _ALLMETS:
@@ -74,13 +76,22 @@ def _classify(token: str) -> tuple[str, str]:
 def _metabolite_bounds(
     task: Task, name_to_ids: dict[str, list[str]], comp_to_ids: dict[str, list[str]]
 ) -> tuple[dict[str, list[float]], list[str]]:
-    """Compute ``{met_id: [lb, ub]}`` from a task's inputs/outputs (RAVEN ``b``).
+    """Compute ``{met_id: [lb, ub]}`` from the inputs and outputs of a task (RAVEN ``b``).
 
-    Bulk tokens (ALLMETS / ALLMETSIN) are applied before specific metabolites, as
-    RAVEN does. Returns the bounds and a list of unresolved tokens (→ task error).
+    Bulk tokens (ALLMETS and ALLMETSIN) are applied before specific metabolites, as
+    RAVEN does. Returns the bounds and a list of unresolved tokens, which cause a task
+    error.
+
+    Raises
+    ------
+    ValueError
+        If a metabolite is listed more than once among the inputs or among the
+        outputs, or if it is both an input and an output with a nonzero lower bound
+        on both sides. The messages are those of RAVEN's ``checkTasks``.
     """
     bounds: dict[str, list[float]] = {}
     missing: list[str] = []
+    label = f'"[{task.id}] {task.description}"'
 
     def touch(mid: str) -> list[float]:
         return bounds.setdefault(mid, [0.0, 0.0])
@@ -88,6 +99,14 @@ def _metabolite_bounds(
     for entries, is_input in ((task.inputs, True), (task.outputs, False)):
         bulk = [(t, lb, ub) for (t, lb, ub) in entries if _classify(t)[0] != "met"]
         specific = [(t, lb, ub) for (t, lb, ub) in entries if _classify(t)[0] == "met"]
+        # As in RAVEN, only the tokens that match a model metabolite are compared.
+        listed = [_classify(t)[1] for t, _, _ in specific]
+        listed = [arg for arg in listed if arg in name_to_ids]
+        if len(listed) != len(set(listed)):
+            side = "input(s)" if is_input else "output(s)"
+            raise ValueError(
+                f"The constraints on some {side} in {label} are defined more than one time"
+            )
         for token, lb, ub in bulk + specific:
             kind, arg = _classify(token)
             if kind == "all":
@@ -99,6 +118,13 @@ def _metabolite_bounds(
                 if not ids:
                     missing.append(token)
                     continue
+                if len(ids) > 1:
+                    warnings.warn(
+                        f"task {task.id!r}: {token!r} matches {len(ids)} model metabolites "
+                        f"({', '.join(ids)}); all of them are constrained (RAVEN constrains "
+                        "only the first).",
+                        stacklevel=2,
+                    )
             for mid in ids:
                 b = touch(mid)
                 if is_input:
@@ -106,6 +132,11 @@ def _metabolite_bounds(
                     if kind == "met":
                         b[1] = -lb
                 else:
+                    if kind == "met" and lb > 0 and b[1] < 0:
+                        raise ValueError(
+                            f"The IN LB and OUT LB in {label} cannot be nonzero for the "
+                            "same metabolite"
+                        )
                     b[1] = ub  # allow net production up to UB
                     if kind == "met" and lb > 0:
                         b[0] = lb  # require at least LB produced
@@ -113,11 +144,12 @@ def _metabolite_bounds(
 
 
 def task_name_maps(model: cobra.Model) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Build ``name[comp]→[ids]`` and ``comp→[ids]`` lookups for a model's metabolites.
+    """Build lookups from ``name[comp]`` to metabolite ids and from ``comp`` to metabolite ids.
 
-    ``name[comp]`` maps to a *list* because a model can carry several metabolites with
-    the same name and compartment; a task referencing it constrains all of them (as
-    RAVEN does), rather than an arbitrary one.
+    ``name[comp]`` maps to a list because a model can contain several metabolites with
+    the same name and compartment. A task referencing it constrains all of them. RAVEN's
+    ``checkTasks`` constrains only the first match; both implementations warn when a task
+    matches several metabolites.
     """
     name_to_ids: dict[str, list[str]] = {}
     comp_to_ids: dict[str, list[str]] = {}
@@ -130,7 +162,7 @@ def task_name_maps(model: cobra.Model) -> tuple[dict[str, list[str]], dict[str, 
 def apply_task_constraints(
     model: cobra.Model, task: Task, name_to_id, comp_to_ids
 ) -> tuple[set[str], str | None]:
-    """Apply a task's inputs/outputs/equations/bound-changes to ``model`` in place.
+    """Apply the inputs, outputs, equations and bound changes of a task to ``model`` in place.
 
     Sets a feasibility (zero) objective. Returns ``(task_metabolite_ids, error)``;
     ``task_metabolite_ids`` are the model metabolites the task references (RAVEN's
@@ -155,10 +187,15 @@ def apply_task_constraints(
             tmp = model.reactions.get_by_id(f"TASK_TMP_{i}")
             task_mets |= {m.id for m in tmp.metabolites if m.id in existing}
 
-    for rxn_id, lb, ub in task.changed:
+    for rxn_id, new_lb, new_ub in task.changed:
         if rxn_id not in model.reactions:
             return set(), f"CHANGED RXN not in model: {rxn_id!r}"
-        model.reactions.get_by_id(rxn_id).bounds = (lb, ub)
+        rxn = model.reactions.get_by_id(rxn_id)
+        # An empty bound in the task list means "leave this bound as it is".
+        rxn.bounds = (
+            rxn.lower_bound if new_lb is None else new_lb,
+            rxn.upper_bound if new_ub is None else new_ub,
+        )
 
     model.objective = model.problem.Objective(Zero, direction="max")  # feasibility only
     return task_mets, None
@@ -167,7 +204,7 @@ def apply_task_constraints(
 def _build_task_model(
     base: cobra.Model, task: Task, name_to_id, comp_to_ids
 ) -> tuple[cobra.Model | None, set[str], str | None]:
-    """Copy ``base`` and apply a task's constraints (``model``/``error`` exclusive)."""
+    """Copy ``base`` and apply a task's constraints; either the model or the error is ``None``."""
     model = base.copy()
     task_mets, error = apply_task_constraints(model, task, name_to_id, comp_to_ids)
     return (None if error else model), task_mets, error
@@ -176,12 +213,12 @@ def _build_task_model(
 def _run_task(base: cobra.Model, task: Task, name_to_id, comp_to_ids) -> TaskResult:
     """Test one task by applying its constraints to ``base`` in place, then reverting.
 
-    Avoids copying the (genome-scale) model per task — the copy dominates ``check_tasks``
-    runtime. ``with base:`` reverts everything ``apply_task_constraints`` does through
-    cobra's API (temp reactions/metabolites for equations, reaction bounds, objective);
-    the one untracked change — direct metabolite mass-balance (``model.constraints[mid]``)
-    bound edits — is snapshotted and restored explicitly. Net result is identical to the
-    copy-based version but reuses a single model across all tasks.
+    The model is not copied per task, because the copy would dominate the run time of
+    ``check_tasks``. ``with base:`` reverts everything ``apply_task_constraints`` does
+    through cobra's API (temporary reactions and metabolites for equations, reaction
+    bounds, objective). The direct edits of the metabolite mass-balance bounds
+    (``model.constraints[mid]``) are not tracked by cobra; they are saved and restored
+    explicitly. The result equals that of applying the constraints to a copy of the model.
     """
     bounds, missing = _metabolite_bounds(task, name_to_id, comp_to_ids)
     if missing:
@@ -209,12 +246,18 @@ def check_tasks(
 ) -> list[TaskResult]:
     """Run a task list against ``model`` and return a :class:`TaskResult` per task.
 
-    ``tasks`` is a parsed list of :class:`Task` or a path to a task-list file. By
-    default (``close_boundaries=False``), existing exchange/sink/demand reactions are
-    left open, so a task's inputs/outputs add to whatever the model's own boundary
-    already allows — matching RAVEN's ``checkTasks``, which published task lists were
-    curated against. Pass ``close_boundaries=True`` for the stricter reading, where
-    inputs/outputs are defined purely by the tasks.
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to test. It is copied, so the model is not modified.
+    tasks : str or Iterable[Task]
+        A parsed list of :class:`Task` or a path to a task-list file.
+    close_boundaries : bool
+        By default (``False``), existing exchange, sink and demand reactions are left open, so
+        the inputs and outputs of a task add to what the boundary of the model already allows,
+        as RAVEN's ``checkTasks`` does on a model without boundary metabolites. With ``True``,
+        the inputs and outputs are defined only by the tasks, as with RAVEN's
+        ``checkTasks(closeModel(model), ...)``.
     """
     tasks = _as_tasks(tasks)
     base, name_to_id, comp_to_ids = _prepare_base(model, close_boundaries)
@@ -241,13 +284,14 @@ def _prepare_base(model: cobra.Model, close_boundaries: bool):
 
 
 def _set_deterministic_solver(model: cobra.Model) -> None:
-    """Configure the solver to match RAVEN's ``solveLP`` and be deterministic.
+    """Configure the solver to match RAVEN's ``solveLP`` and to be deterministic.
 
-    RAVEN's ``getEssentialRxns`` runs ``solveLP`` (Gurobi via ``optimizeProb``) at
-    ``FeasibilityTol/OptimalityTol = 1e-9`` and single-threaded. Multi-threaded Gurobi
-    picks among the degenerate min-flux optima non-deterministically, so the candidate set
-    (and the discovered essential-reaction count) varies run to run; ``Threads=1`` plus a
-    fixed ``Seed`` makes it reproducible. Gurobi-specific; a no-op on other backends.
+    RAVEN's ``getEssentialRxns`` runs ``solveLP`` (Gurobi via ``optimizeProb``) with
+    ``FeasibilityTol`` and ``OptimalityTol`` set to 1e-9, single-threaded. Multi-threaded
+    Gurobi selects among the degenerate min-flux optima non-deterministically, so the
+    candidate set (and the number of essential reactions found) varies between runs;
+    ``Threads=1`` with a fixed ``Seed`` makes it reproducible. The function sets Gurobi
+    parameters and has no effect on other backends.
     """
     try:
         model.solver.problem.Params.Threads = 1
@@ -260,44 +304,53 @@ def _set_deterministic_solver(model: cobra.Model) -> None:
 
 @dataclass
 class EssentialReactionsResult:
-    """Reactions a model *must* use to perform a task list (RAVEN ``essentialRxns``).
+    """Reactions a model must use to perform a task list (RAVEN ``essentialRxns``).
 
-    ``reactions`` maps reaction id → forced flux direction (``+1`` forward, ``-1``
+    ``reactions`` maps reaction id to forced flux direction (``+1`` forward, ``-1``
     reverse): the reaction must carry flux of that sign in every feasible solution of
     at least one task. ``per_task`` is the same, split by task id. ``task_metabolites``
     are the model metabolites the tasks reference (RAVEN ``essentialMetsForTasks``,
-    protected from removal). ``failed_tasks`` are tasks that were infeasible or
-    malformed and thus skipped (RAVEN drops these from the task list).
+    protected from removal). ``failed_tasks`` are the ids of tasks that were infeasible or
+    malformed and thus skipped (RAVEN drops these from the task list); ``failed_indices`` are
+    their positions in the task list, which stay distinct when several tasks share an id.
     """
 
     reactions: dict[str, int]
     per_task: dict[str, dict[str, int]]
     task_metabolites: set[str]
     failed_tasks: list[str]
+    failed_indices: list[int] = field(default_factory=list)
 
 
 def _task_essential_reactions(
     task_model: cobra.Model, original_ids: set[str]
 ) -> dict[str, int]:
-    """Reactions whose removal makes the task infeasible — faithful port of ``getEssentialRxns``.
+    """Reactions whose removal makes the task infeasible, ported from ``getEssentialRxns``.
 
-    Mirrors RAVEN ``getEssentialRxns.m`` step for step:
+    Mirrors RAVEN ``getEssentialRxns.m`` step by step:
 
     1. **Min-flux solve** (``solveLP(model,1)`` = pFBA, minimise ``Σ|flux|``); candidates are
        the reactions carrying ``|flux| > 1e-12``.
-    2. **Shrink loop** (``getEssentialRxns.m:38-55``): minimise, then maximise, the *sum of
-       the candidate fluxes*, each time keeping only candidates still carrying
+    2. **Shrink loop** (``getEssentialRxns.m:55-71``): minimise, then maximise, the sum of
+       the candidate fluxes, each time keeping only candidates still carrying
        ``|flux| > 1e-8``; repeat within a phase until it stops shrinking, then switch
        min→max, then stop. This yields a candidate set that does not depend on which
        degenerate min-flux vertex the solver happened to pick.
-    3. **Exact test** (``:57-63``): constrain each remaining candidate to 0 and re-solve; if
-       the task is then infeasible the reaction is essential. Direction is the sign it
-       carries in the min-flux solution (RAVEN's ``essentialFluxes``).
+    3. **Exact test** (``:73-79``): constrain each remaining candidate to 0 and re-solve; if
+       the task is then infeasible the reaction is essential. A solve that does not report
+       a feasible status is repeated from a cold start before the reaction counts as
+       essential, as ``solveLP`` does after a failed hot-started solve
+       (:func:`_knockout_feasible`). Direction is the sign it carries in the min-flux
+       solution (RAVEN's ``essentialFluxes``).
 
     Returns ``{reaction id: +1 forward | -1 reverse}``.
     """
     fluxes = pfba(task_model).fluxes
-    candidates = [rid for rid in original_ids if abs(fluxes.get(rid, 0.0)) > 1e-12]
+    # Model reaction order, so the candidate order does not depend on the hash seed.
+    candidates = [
+        r.id for r in task_model.reactions
+        if r.id in original_ids and abs(fluxes.get(r.id, 0.0)) > 1e-12
+    ]
 
     n_to_check = len(candidates)
     minimize = True
@@ -323,11 +376,44 @@ def _task_essential_reactions(
         rxn = task_model.reactions.get_by_id(rid)
         saved = rxn.bounds
         rxn.bounds = (0.0, 0.0)
-        task_model.slim_optimize()
-        if task_model.solver.status != "optimal":   # infeasible ⇒ essential
+        if not _knockout_feasible(task_model):
             essential[rid] = 1 if fluxes.get(rid, 0.0) >= 0 else -1
         rxn.bounds = saved
     return essential
+
+
+# Statuses RAVEN's checkSolution counts as feasible (Gurobi OPTIMAL, SUBOPTIMAL, UNBOUNDED).
+_FEASIBLE_STATUSES = frozenset({"optimal", "suboptimal", "unbounded"})
+
+
+def _discard_basis(model: cobra.Model) -> None:
+    """Drop the solver's stored basis so the next solve starts cold (Gurobi and GLPK)."""
+    problem = model.solver.problem
+    if hasattr(problem, "reset"):          # gurobipy.Model
+        problem.reset()
+        return
+    try:
+        import swiglpk
+        swiglpk.glp_std_basis(problem)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _knockout_feasible(model: cobra.Model) -> bool:
+    """Whether the current constrain-to-0 problem is feasible, with RAVEN ``solveLP``'s retry.
+
+    The solve starts from the basis the previous knock-out left behind. From such a start
+    Gurobi can declare a feasible LP infeasible (seen on Human-GEM tasks), so a status
+    outside :data:`_FEASIBLE_STATUSES` is checked again from a cold start, as ``solveLP``
+    re-solves without its hot-start basis when the hot-started solve is not feasible. Only a
+    problem that is not feasible on both solves counts as infeasible.
+    """
+    model.slim_optimize()
+    if model.solver.status in _FEASIBLE_STATUSES:
+        return True
+    _discard_basis(model)
+    model.slim_optimize()
+    return model.solver.status in _FEASIBLE_STATUSES
 
 
 def _compute_one_task(
@@ -368,6 +454,25 @@ def _essential_worker(i: int, task: Task) -> tuple[int, dict[str, int] | None, s
     return i, essential, task_mets, error
 
 
+def _read_cache(path: Path) -> dict | None:
+    """Read a checkpoint written by :func:`find_task_essential_reactions`.
+
+    Returns the cache dictionary with the keys ``per_index``, ``mets`` and ``failed``, or
+    ``None`` with a warning when the file is not a JSON cache of the current version.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        cached = None
+    if (not isinstance(cached, dict) or cached.get("version") != _CACHE_VERSION
+            or not {"per_index", "mets", "failed"} <= cached.keys()):
+        warnings.warn(f"{path} is not a task-essentials cache of version {_CACHE_VERSION} "
+                      "and is ignored; all tasks are recomputed.", stacklevel=3)
+        return None
+    return cached
+
+
 def find_task_essential_reactions(
     model: cobra.Model,
     tasks: str | Iterable[Task],
@@ -380,38 +485,56 @@ def find_task_essential_reactions(
 ) -> EssentialReactionsResult:
     """Find the reactions a model must use to satisfy a task list.
 
-    A faithful port of RAVEN's ``checkTasks(getEssential=true)`` → ``getEssentialRxns``:
-    each task is constrained as in :func:`check_tasks`, then :func:`_task_essential_reactions`
-    finds the reactions it must use (min-flux solve → shrink loop → exact constrain-to-0
-    test). This is the ``prepINITModel`` step that feeds (ft)INIT: essential reactions are
-    kept regardless of expression score and made irreversible in their forced direction.
-    When a reaction is essential in several tasks with conflicting directions, the majority
-    wins (ties → forward), matching RAVEN's ``pos < neg``. ``close_boundaries`` defaults to
-    ``False``, matching RAVEN: a task's inputs/outputs add to whatever the model's own
-    open exchanges already allow, rather than replacing them.
+    Ports RAVEN's ``checkTasks(getEssential=true)`` and ``getEssentialRxns``: each task is
+    constrained as in :func:`check_tasks`, then :func:`_task_essential_reactions` finds the
+    reactions it must use (min-flux solve, shrink loop, constrain-to-0 test). This is the
+    ``prepINITModel`` step that feeds (ft)INIT: essential reactions are kept regardless of
+    expression score and made irreversible in their forced direction. When a reaction is
+    essential in several tasks with conflicting directions, the direction of the majority
+    is used (ties give forward), matching RAVEN's ``pos < neg``.
 
     The solver is configured per task to match RAVEN's ``solveLP`` (``FeasibilityTol =
-    1e-9``, single-threaded with a fixed seed) so the degenerate min-flux vertex — and thus
-    the discovered essential set — is reproducible. ``Threads=1`` only pins *that one solve*;
-    it says nothing about the tasks themselves, which are independent of each other.
-    ``processes`` (default 1, sequential) parallelises *across* tasks with a
-    ``ProcessPoolExecutor`` — each worker still solves single-threaded, so results are
-    identical to the sequential run, just computed concurrently. Pick it against available
-    cores and memory: each worker holds its own copy of ``model``, sent once at pool
-    startup, not per task.
+    1e-9``, single-threaded with a fixed seed), so the degenerate min-flux vertex, and thus
+    the discovered essential set, is reproducible. ``Threads=1`` applies to each solve; the
+    tasks are independent of each other. Tasks with ``should_fail`` set are skipped.
 
-    On a genome-scale model this is slow (a min-flux solve plus a feasibility LP per
-    candidate, per task). Pass ``cache_path`` to make it **resumable**: the accumulated
-    results are written there (atomically) every ``checkpoint_every`` tasks (across both
-    sequential and parallel execution) and once more after the last one, and a re-run skips
-    tasks already cached — so it survives interruptions across sessions. Re-serializing the
-    whole accumulated result after every single task would make total checkpoint I/O grow
-    quadratically in the task count; ``checkpoint_every`` trades a little resumability
-    granularity (at most that many completed tasks are redone after an interruption) for
-    checkpoint I/O that scales with ``n_tasks / checkpoint_every`` instead. ``verbose``
-    prints one line per task as it completes (or is skipped because it is already cached),
-    silent by default. In parallel, lines print in completion order, not task order.
+    Each task needs a min-flux solve and a feasibility LP per candidate reaction.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to analyse. It is copied, so the model is not modified.
+    tasks : str or Iterable[Task]
+        A parsed list of :class:`Task` or a path to a task-list file.
+    close_boundaries : bool
+        Default ``False``: the inputs and outputs of a task add to what the open exchanges of
+        the model already allow, as in :func:`check_tasks`. RAVEN's ``prepINITModel`` calls
+        ``closeModel`` first, which corresponds to ``close_boundaries=True``.
+    cache_path : str or Path or None
+        File that makes the run resumable. The accumulated results are written there
+        (atomically, as JSON) every ``checkpoint_every`` tasks, in sequential and parallel
+        execution, and once more after the last task, and a rerun skips tasks already cached.
+        An existing file is read at the start. A file that is not a JSON cache of the current
+        version, such as a pickle written by an earlier release, is ignored with a warning and
+        overwritten by the first checkpoint. Default ``None``, which writes no cache.
+    verbose : bool
+        Prints one line per task as it completes or is skipped because it is cached. In
+        parallel, lines print in completion order, not task order. Default ``False``.
+    processes : int
+        Number of worker processes. Default 1, which runs the tasks sequentially. A larger
+        value runs the tasks in parallel with a ``ProcessPoolExecutor``. Each worker solves
+        single-threaded, so the results equal those of the sequential run. Each worker holds
+        its own copy of ``model``, sent once at pool startup and not per task.
+    checkpoint_every : int
+        Number of finished tasks between two writes to ``cache_path``. Default 10. Writing
+        the whole accumulated result after every task would make the total checkpoint I/O grow
+        quadratically with the number of tasks; with ``checkpoint_every`` it scales with
+        ``n_tasks / checkpoint_every``, and fewer than ``checkpoint_every`` completed tasks are
+        redone after an interruption. A value below 1 raises ``ValueError``, with or without
+        ``cache_path``; without ``cache_path`` the value has no other effect.
     """
+    if checkpoint_every < 1:
+        raise ValueError(f"checkpoint_every must be at least 1, got {checkpoint_every}.")
     tasks = _as_tasks(tasks)
     base, name_to_id, comp_to_ids = _prepare_base(model, close_boundaries)
     original_ids = {r.id for r in base.reactions}
@@ -426,23 +549,22 @@ def find_task_essential_reactions(
     failed_index: list[int] = []
     task_metabolites: set[str] = set()
     if cache_path is not None and Path(cache_path).exists():
-        cached = pickle.load(open(cache_path, "rb"))
-        if "per_index" in cached:  # ignore any pre-fix, id-keyed cache and recompute
+        cached = _read_cache(Path(cache_path))
+        if cached is not None:
             per_index = {int(k): v for k, v in cached["per_index"].items()}
             task_metabolites = set(cached["mets"])
             failed_index = list(cached["failed"])
 
     def write_checkpoint() -> None:
         assert cache_path is not None  # only called when a cache_path was given
-        # The handle must be closed *before* the rename, not merely dropped: a
-        # buffered write is only guaranteed flushed on close, and on Windows
-        # renaming a file that still has an open handle raises PermissionError.
-        # Passing open() straight into pickle.dump left that to refcount timing —
-        # it happens to work on CPython, and emitted a ResourceWarning per task.
+        # The handle is closed before the rename: a buffered write is flushed on close, and
+        # on Windows renaming a file with an open handle raises PermissionError.
         tmp = Path(f"{cache_path}.part")
-        with open(tmp, "wb") as fh:
-            pickle.dump({"per_index": per_index, "mets": task_metabolites,
-                         "failed": failed_index}, fh)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": _CACHE_VERSION,
+                       "per_index": {str(i): v for i, v in per_index.items()},
+                       "mets": sorted(task_metabolites),
+                       "failed": failed_index}, fh)
         tmp.replace(cache_path)
 
     since_checkpoint = 0
@@ -511,4 +633,5 @@ def find_task_essential_reactions(
     per_task = {tid: {r: (-1 if v < 0 else 1) for r, v in d.items()} for tid, d in per_task.items()}
 
     failed = sorted({tasks[i].id for i in failed_index})
-    return EssentialReactionsResult(reactions, per_task, task_metabolites, failed)
+    return EssentialReactionsResult(reactions, per_task, task_metabolites, failed,
+                                    sorted(failed_index))

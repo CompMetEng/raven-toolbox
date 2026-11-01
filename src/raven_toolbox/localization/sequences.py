@@ -1,20 +1,23 @@
 """Prepare input for sequence-based localisation predictors (DeepLoc 2.1, MULocDeep, …).
 
-These predictors take protein sequences in **FASTA** and emit a per-protein localisation table you
-then load with :func:`load_deeploc` / :func:`load_mulocdeep`. This module fetches protein sequences
-for a model's genes from UniProtKB and writes a FASTA whose headers are the model's **gene ids**, so
-the predictor's output lines up with the model — and with the loaders here — directly:
+These predictors take protein sequences in FASTA and write a per-protein localisation table that
+:func:`load_deeploc` or :func:`load_mulocdeep` reads. This module fetches protein sequences
+for the genes of a model from UniProtKB and writes a FASTA whose headers are the gene ids of the
+model, so the output of the predictor matches the model and the loaders here:
 
-    fetch + write FASTA ─▶ run DeepLoc 2.1 (you) ─▶ load_deeploc(output) ─▶ predict_localization
+    fetch + write FASTA ─▶ run DeepLoc 2.1 (external) ─▶ load_deeploc(output) ─▶
+    predict_localization
 
-**There is no public batch API for DeepLoc 2.1.** Run it yourself on the FASTA this writes, either on
-the web server (https://services.healthtech.dtu.dk/services/DeepLoc-2.1/, **max 500 sequences per
-submission** — :func:`prepare_deeploc_input` chunks for you) or with the downloadable standalone
-(no per-submission limit). DeepLoc requires sequences of **≥ 10 amino acids**.
+DeepLoc 2.1 has no public batch API. It runs on the FASTA that this module writes, either on the web
+server (https://services.healthtech.dtu.dk/services/DeepLoc-2.1/, **max 500 sequences per
+submission**; :func:`prepare_deeploc_input` splits the output into files of that size) or with the
+downloadable standalone (no per-submission limit). DeepLoc requires sequences of **≥ 10 amino
+acids**.
 
-Sequences come from UniProtKB by the same identifier the localisation loaders key on
-(``gene_oln`` = the ORF / ordered-locus name like ``YNR001C`` for yeast-GEM). Genes with no reviewed
-UniProt entry are reported back to you rather than silently dropped.
+Sequences come from UniProtKB by the same identifier that the localisation loaders use
+(``gene_oln`` = the ORF / ordered-locus name like ``YNR001C`` for yeast-GEM). Genes without a
+sequence are listed in :attr:`PreparedFasta.missing`; with the default ``reviewed=True`` a gene is
+missing when UniProtKB has no reviewed (Swiss-Prot) sequence for it.
 """
 from __future__ import annotations
 
@@ -55,15 +58,28 @@ def fetch_protein_sequences(
 ) -> dict[str, str]:
     """Fetch ``{gene_id: protein_sequence}`` from the UniProtKB REST API for an organism.
 
-    ``organism`` is a UniProt organism/taxon id (e.g. ``559292`` for *S. cerevisiae* S288C).
-    ``id_field`` picks which identifier becomes the key — ``"gene_oln"`` (ordered locus, the ORF name
-    like ``YNR001C``) matches yeast-GEM gene ids; also ``"accession"`` or ``"gene_primary"``. A
-    UniProt entry listing several ids for the field maps each of them to its sequence.
+    A UniProt entry listing several ids for the field maps each of them to its sequence. The query
+    is the same as in :func:`fetch_uniprot_localization`. Raises :class:`ValueError` when
+    ``id_field`` is not one of the accepted values.
 
-    ``genes`` restricts the result to those gene ids (others are still fetched but dropped); ``None``
-    returns every entry. ``reviewed=True`` keeps only curated Swiss-Prot entries; ``extra_query`` is
-    ANDed into the UniProt query. ``min_length`` drops sequences shorter than it (DeepLoc 2.1 needs
-    ≥ 10 aa). The query mirrors :func:`fetch_uniprot_localization`.
+    Parameters
+    ----------
+    organism : int or str
+        UniProt organism or taxon id (for example ``559292`` for *S. cerevisiae* S288C).
+    genes : iterable of str or None
+        Restricts the result to those gene ids (other entries are fetched and dropped). ``None``
+        (default) returns every entry.
+    id_field : str
+        Identifier used as key (default ``"gene_oln"``): ``"gene_oln"`` (ordered locus, the ORF
+        name like ``YNR001C``; matches yeast-GEM gene ids), ``"accession"`` or ``"gene_primary"``.
+    reviewed : bool
+        If True (default), keep only curated Swiss-Prot entries.
+    extra_query : str or None
+        UniProt query string that is ANDed into the query (default ``None``).
+    min_length : int
+        Drops sequences shorter than it (default ``1``; DeepLoc 2.1 needs >= 10 aa).
+    timeout : float
+        Timeout of the HTTP request in seconds (default ``120.0``).
     """
     if id_field not in _ID_COLUMN:
         raise ValueError(f"id_field must be one of {list(_ID_COLUMN)}")
@@ -123,13 +139,22 @@ def write_fasta(sequences: Mapping[str, str], path: str | Path, *,
     """Write ``{id: sequence}`` to FASTA and return the file path(s).
 
     Headers are the dict keys verbatim (no leading ``>``). FASTA truncates a header at the first
-    space and many tools key results on that token, so ids **must not contain whitespace** — a
-    ``ValueError`` is raised otherwise (it would silently corrupt the id↔result mapping).
+    space and many tools identify results by that token, so ids must not contain whitespace; a
+    ``ValueError`` is raised otherwise.
 
-    With ``max_records_per_file`` set (e.g. ``500`` for the DeepLoc 2.1 web server), records are
-    split across ``<stem>_001<suffix>``, ``<stem>_002<suffix>``, … and every path is returned;
-    otherwise a single file is written at ``path``. ``wrap`` sets the residues-per-line (≤ 0 = one
-    line per sequence).
+    Parameters
+    ----------
+    sequences : mapping of str to str
+        Maps each FASTA header to its sequence. An empty sequence gives the header line only.
+    path : str or Path
+        Output file. With chunking, the chunk number is added to the stem (see
+        ``max_records_per_file``).
+    max_records_per_file : int or None
+        With a value set (for example ``500`` for the DeepLoc 2.1 web server) and more records than
+        that, records are split across ``<stem>_001<suffix>``, ``<stem>_002<suffix>``, ... and
+        every path is returned. Otherwise (default ``None``) a single file is written at ``path``.
+    wrap : int
+        Residues per line (default ``60``; ``<= 0`` gives one line per sequence).
     """
     items = list(sequences.items())
     bad = [k for k, _ in items if k != k.strip() or any(ch.isspace() for ch in k)]
@@ -154,6 +179,8 @@ def write_fasta(sequences: Mapping[str, str], path: str | Path, *,
 
 
 def _fasta_record(gid: str, seq: str, wrap: int) -> str:
+    if not seq:
+        return f">{gid}\n"
     body = seq if wrap <= 0 else "\n".join(seq[i:i + wrap] for i in range(0, len(seq), wrap))
     return f">{gid}\n{body}\n"
 
@@ -167,18 +194,30 @@ def prepare_deeploc_input(
     min_length: int = 10,
     **fetch_kwargs,
 ) -> PreparedFasta:
-    """Write a DeepLoc-2.1-ready FASTA of protein sequences for ``genes``.
+    """Write a FASTA of protein sequences for ``genes`` as input for DeepLoc 2.1.
 
-    ``genes`` is an iterable of gene ids, **or** a cobra model (its ``.genes`` ids are used) — for
-    yeast-GEM those are the ORF names that line up with ``id_field="gene_oln"``. Sequences are
-    fetched from UniProtKB (see :func:`fetch_protein_sequences`; pass e.g. ``reviewed=``,
-    ``id_field=`` through ``fetch_kwargs``). The FASTA is chunked at ``max_records_per_file``
-    (default ``500`` — the DeepLoc 2.1 web-server limit; pass ``None`` for the standalone tool which
-    has no limit). ``min_length`` drops sequences below DeepLoc's 10-aa minimum.
+    Sequences are fetched from UniProtKB (see :func:`fetch_protein_sequences`). Returns a
+    :class:`PreparedFasta` with the file path(s) and the genes that had no sequence (with the
+    default ``reviewed=True``, no reviewed sequence). The CSV that DeepLoc 2.1 writes for these
+    files is read with :func:`load_deeploc`; its ``Protein_ID`` column holds these gene ids.
 
-    Returns a :class:`PreparedFasta` with the file path(s) and the genes that had no reviewed
-    sequence, so you can chase those separately. Run DeepLoc 2.1 on the file(s), then read its CSV
-    with :func:`load_deeploc` — the ``Protein_ID`` column will be these gene ids.
+    Parameters
+    ----------
+    genes : iterable of str or cobra.Model
+        Gene ids, or a cobra model (its ``.genes`` ids are used). For yeast-GEM those are the ORF
+        names that match ``id_field="gene_oln"``.
+    organism : int or str
+        UniProt organism or taxon id, as in :func:`fetch_protein_sequences`.
+    path : str or Path
+        Output FASTA file. When the output is split, the chunk number is added to the stem.
+    max_records_per_file : int or None
+        The FASTA is split into files of this many records (default ``500``, the DeepLoc 2.1
+        web-server limit). ``None`` writes one file, for the standalone tool, which has no limit.
+    min_length : int
+        Drops sequences below this length (default ``10``, the DeepLoc minimum of 10 aa).
+    **fetch_kwargs : dict
+        Forwarded to :func:`fetch_protein_sequences`, for example ``reviewed``, ``id_field``,
+        ``extra_query`` and ``timeout``.
     """
     gene_ids = [g.id for g in genes.genes] if isinstance(genes, cobra.Model) else list(genes)
     requested = list(dict.fromkeys(gene_ids))        # de-dupe, keep order

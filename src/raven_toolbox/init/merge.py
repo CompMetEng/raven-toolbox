@@ -1,25 +1,27 @@
 """Linear reaction merging for ftINIT.
 
-ftINIT shrinks the MILP losslessly by **contracting linear reaction chains**: a
+ftINIT shrinks the MILP losslessly by contracting linear reaction chains: a
 metabolite that appears in exactly two reactions (one net producer, one net consumer)
 links them into a single combined reaction. Iterating this collapses unbranched
-pathways — on Human-GEM ~12k → ~8k reactions, a ~⅓ smaller MILP — without changing
-the feasible flux space. Reversible reactions may merge too (unlike
-``simplifyModel``'s merge), which is why ftINIT ships its own.
+pathways; on Human-GEM the number of reactions falls from ~12k to ~8k, a ~1/3 smaller
+MILP, and the feasible flux space is unchanged. ftINIT has its own merge because
+reversible reactions may merge too, unlike in ``simplifyModel``.
 
-:func:`merge_linear` returns the reduced model plus the bookkeeping needed to map
-scores and results back to the original reactions:
+:func:`merge_linear` returns the reduced model plus the lists that map scores and
+results back to the original reactions:
 
-* ``group_ids`` — one integer per original reaction; ``0`` = not merged, equal
+* ``group_ids``: one integer per original reaction; ``0`` = not merged, equal
   non-zero integers = merged into the same combined reaction (which keeps one
-  member's id).
-* ``reversed_rxns`` — which originals were flipped (their stored direction negated)
-  when oriented for merging; needed to map fluxes/directions back.
+  member's id). The groups are numbered 1, 2, ... in the order of their first
+  reaction in the original model, as RAVEN's ``mergeLinear`` numbers them.
+* ``reversed_rxns``: which originals were flipped (their stored direction negated)
+  when oriented for merging; the flags map fluxes and directions back.
 
 :func:`group_rxn_scores` then sums the original per-reaction scores over each group,
-with RAVEN's zero-handling (see its docstring): genuine 0 → 0.01, ignore-masked → 0,
-a group cancelling to 0 with non-zero members → 0.01 — all so the MILP never sees an
-exactly-zero score (whose on/off would be arbitrary).
+with RAVEN's zero-handling (see its docstring): a score of 0 becomes 0.01, an
+ignore-masked reaction gets 0, and a group that cancels to 0 with non-zero members
+gets 0.01. A scored reaction thus never has an exactly zero score, whose on/off state
+would be arbitrary.
 """
 from __future__ import annotations
 
@@ -53,6 +55,13 @@ def merge_linear(
     ``no_merge`` reaction ids are never merged. The reduced model carries no genes
     (merging makes GPRs meaningless); scores are remapped with
     :func:`group_rxn_scores`.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model to reduce. It is not modified.
+    no_merge : Iterable[str]
+        Ids of reactions that are never merged. The default is an empty tuple.
     """
     banned = set(no_merge)
     orig_ids = [r.id for r in model.reactions]
@@ -158,13 +167,20 @@ def merge_linear(
             break
         rxns = [rx for rx in rxns if rx.coeffs]
 
-    return _build_model(model, rxns), orig_ids, [group_of[o] for o in orig_ids], \
-        [reversed_of[o] for o in orig_ids]
+    # Number the groups in the order of their first original reaction, so the numbers do not
+    # depend on the order in which the reactions were merged.
+    number: dict[int, int] = {}
+    for o in orig_ids:
+        if group_of[o] and group_of[o] not in number:
+            number[group_of[o]] = len(number) + 1
+    group_ids = [number.get(group_of[o], 0) for o in orig_ids]
+    return _build_model(model, rxns), orig_ids, group_ids, [reversed_of[o] for o in orig_ids]
 
 
 def _build_model(template: cobra.Model, rxns: list[_Rxn]) -> cobra.Model:
     """Assemble the reduced cobra model (gene-free) from the merged working reactions."""
     reduced = cobra.Model(template.id)
+    reduced.solver = template.problem  # else cobra's global default, not the template's
     used = {m for rx in rxns for m in rx.coeffs}
     reduced.add_metabolites([
         cobra.Metabolite(m.id, name=m.name, compartment=m.compartment, formula=m.formula)
@@ -189,10 +205,28 @@ def group_rxn_scores(
 ) -> dict[str, float]:
     """Sum original reaction scores over merged groups (RAVEN ``groupRxnScores``).
 
-    ``orig_scores`` maps original reaction id → score; ``to_zero`` are reactions to
-    drop from the problem (the ``toIgnore`` masks) — their score becomes 0. Genuine
-    zeros and groups cancelling to zero become 0.01 so the MILP never sees an exactly
-    zero score. Returns ``{reduced_reaction_id: score}``.
+    ``orig_scores`` maps original reaction id to score (a missing id has score 0);
+    ``to_zero`` are reactions to drop from the problem (the ``toIgnore`` masks), and
+    their score becomes 0. A score of 0 and a group that cancels to 0 become 0.01, so
+    that only ignore-masked reactions have a score of exactly 0 in the MILP. Returns
+    ``{reduced_reaction_id: score}``.
+
+    Parameters
+    ----------
+    reduced_model : cobra.Model
+        Reduced model from :func:`merge_linear`. The result has one score per reaction of
+        this model, and each of its reaction ids must be in ``orig_rxn_ids``.
+    orig_scores : Mapping[str, float]
+        Score of each original reaction, keyed by reaction id. A missing id scores 0, and a
+        score of 0 is set to 0.01 (see above).
+    orig_rxn_ids : list of str
+        Original reaction ids, in the order of ``group_ids``.
+    group_ids : list of int
+        Group number of each original reaction, as returned by :func:`merge_linear`; 0 marks
+        a reaction that is not merged. It must have the length of ``orig_rxn_ids``.
+    to_zero : Iterable[str]
+        Ids of original reactions whose score becomes 0 (the reactions dropped from the
+        problem). The default is an empty tuple.
     """
     zero = set(to_zero)
     group_of = dict(zip(orig_rxn_ids, group_ids, strict=True))

@@ -1,4 +1,4 @@
-"""Reporter Metabolites — metabolites around which transcriptional change concentrates.
+"""Reporter Metabolites: metabolites around which transcriptional change concentrates.
 
 Patil & Nielsen, PNAS 2005. Each gene's differential-expression p-value becomes a
 Z-score ``z = -Φ⁻¹(p)``; for every metabolite the Z-scores of the genes on its
@@ -7,8 +7,8 @@ back into a p-value.
 
 The background correction has an exact closed form (sampling with replacement from the
 scored-gene pool: a random ``Σz/√n`` has mean ``√n·μ`` and standard deviation ``σ``
-with μ, σ the mean/std of the scored Z-scores), so the corrected score is just
-``(metZ − √n·μ) / σ`` — no Monte-Carlo sampling needed.
+with μ, σ the mean and standard deviation of the scored Z-scores), so the corrected
+score is ``(metZ − √n·μ) / σ`` and needs no Monte-Carlo sampling.
 """
 from __future__ import annotations
 
@@ -47,8 +47,17 @@ def _gene_z(pvalues: dict[str, float]) -> dict[str, float]:
 
 def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> ReporterResult:
     z_values = np.fromiter(gene_z.values(), dtype=float)
-    mu = float(z_values.mean()) if z_values.size else 0.0
-    sigma = float(z_values.std(ddof=0)) if z_values.size else 0.0
+    # Moments are taken on z-scores centred on c, the first z-score plus the mean of the
+    # z-scores relative to it (two passes). A spread of a few ulps between otherwise identical
+    # z-scores is then not lost in the rounding of the mean, also when the first z-score is an outlier.
+    z_first = float(z_values[0]) if z_values.size else 0.0
+    centre = z_first + float((z_values - z_first).mean()) if z_values.size else 0.0
+    centred = z_values - centre
+    mu_c = float(centred.mean()) if z_values.size else 0.0
+    sigma = float(centred.std(ddof=0)) if z_values.size else 0.0
+    # The spread is tested for being 0 up to 100 * eps(max|z|), as in RAVEN.
+    spread = float(z_values.max() - z_values.min()) if z_values.size else 0.0
+    has_spread = spread > 100 * float(np.spacing(np.abs(z_values).max())) if z_values.size else False
 
     rows = []
     for met in model.metabolites:
@@ -57,9 +66,9 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
             continue
         zs = np.array([gene_z[g] for g in neighbours])
         n = zs.size
-        raw = zs.sum() / math.sqrt(n)
+        raw_c = (zs - centre).sum() / math.sqrt(n)
         # Exact background correction for sampling-with-replacement (see module doc).
-        corrected = (raw - math.sqrt(n) * mu) / sigma if sigma > 0 else 0.0
+        corrected = (raw_c - math.sqrt(n) * mu_c) / sigma if has_spread else 0.0
         if not math.isfinite(corrected):  # never on clamped z-scores; guards the p-value
             corrected = 0.0
         rows.append(
@@ -70,7 +79,7 @@ def _reporter_one(model: cobra.Model, gene_z: dict[str, float], test: str) -> Re
                 "p_value": float(1.0 - norm.cdf(corrected)),
                 "n_genes": n,
                 "mean_z": float(zs.mean()),
-                "std_z": float(zs.std(ddof=1)) if n > 1 else float("nan"),
+                "std_z": float(zs.std(ddof=1)) if n > 1 else 0.0,
             }
         )
     table = pd.DataFrame(rows, columns=["metabolite", "name", "z_score", "p_value", "n_genes", "mean_z", "std_z"])
@@ -86,34 +95,58 @@ def reporter_metabolites(
 ) -> list[ReporterResult]:
     """Compute Reporter Metabolites from per-gene differential-expression p-values.
 
-    ``gene_pvalues`` maps gene id → p-value (genes not in the model, or with a NaN or
-    out-of-``[0, 1]`` p-value, are dropped — a stray invalid p-value would otherwise
-    turn the whole result NaN). If ``gene_fold_changes`` (gene id → log fold change)
-    is given, two extra results are returned for the up- (fc ≥ 0) and down- (fc < 0)
-    regulated gene subsets, in addition to ``"all"``.
+    ``gene_pvalues`` maps gene id to p-value. Genes not in the model and genes with a
+    NaN (or ``None``) p-value are dropped. Any other p-value outside ``[0, 1]``,
+    including ±inf and for genes that are not in the model, raises ``ValueError``
+    (RAVEN raises ``RAVEN:badInput``). If ``gene_fold_changes`` (gene id to log fold change)
+    has at least one non-zero value, two extra results are returned for the up- (fc ≥ 0)
+    and down- (fc < 0) regulated gene subsets, in addition to ``"all"``; with all fold
+    changes zero (or none given) only ``"all"`` is returned, as in RAVEN. A metabolite
+    with a single scored neighbouring gene has ``std_z`` 0.
 
-    Parity with RAVEN's ``reporterMetabolites``: the ``z_score`` and underlying
-    background correction match exactly (exact closed-form instead of RAVEN's
-    Monte-Carlo, see IMPROVEMENTS RM1). The reported ``p_value`` is the
-    *one-sided* (``"up"``) enrichment ``1 - Φ(z)`` and the result is sorted by
-    ``z_score`` descending. RAVEN sorts by p-value and reports both tails
-    (``allPValues``, ``allUpPValues``, ``allDownPValues``); the up/down splits
-    here come from the ``gene_fold_changes`` subset partition instead, so the
-    same information is available via the three returned ``ReporterResult``
-    rows.
+    The background correction uses the population standard deviation
+    (``ddof=0``) of the scored Z-scores, which the closed form requires. The
+    reported ``p_value`` is the one-sided enrichment ``1 - Φ(z)`` and each
+    table is sorted by ``z_score`` in descending order.
+
+    Parity with RAVEN's ``reporterMetabolites``: the same closed-form
+    correction, one-sided p-value and sort order, with ``"up"`` and ``"down"``
+    matching its ``"only up"`` and ``"only down"`` entries.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        Model whose metabolites are scored through the genes of their neighbouring reactions.
+    gene_pvalues : Mapping[str, float]
+        Gene id to differential-expression p-value, as described above.
+    gene_fold_changes : Mapping[str, float] or None
+        Gene id to log fold change. The default ``None`` returns only the ``"all"`` result.
+        A gene with a p-value but no entry here, or a NaN entry, is in neither subset (RAVEN takes
+        one fold change per gene, and a NaN fold change satisfies neither ``>= 0`` nor ``< 0``).
     """
+    given = {g: float(p) for g, p in gene_pvalues.items() if p is not None and not math.isnan(p)}
+    invalid = [(g, p) for g, p in given.items() if not 0.0 <= p <= 1.0]
+    if invalid:
+        gene, value = invalid[0]
+        msg = (
+            f"The P-values must lie between 0 and 1, but {len(invalid)} of them do not. "
+            f"The first is {value:g} (gene {gene})"
+        )
+        raise ValueError(msg)
     model_genes = {g.id for g in model.genes}
-    scored = {
-        g: float(p)
-        for g, p in gene_pvalues.items()
-        if g in model_genes and p is not None and not math.isnan(p) and 0.0 <= p <= 1.0
-    }
+    scored = {g: p for g, p in given.items() if g in model_genes}
     gene_z = _gene_z(scored)
     results = [_reporter_one(model, gene_z, "all")]
 
-    if gene_fold_changes is not None:
-        up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) >= 0}
-        down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, 0.0) < 0}
+    # RAVEN's any(geneFoldChanges) runs after genes outside the model or without a
+    # p-value are dropped, and ignores NaN.
+    if gene_fold_changes is not None and any(
+        v != 0 and not math.isnan(v) for g, v in gene_fold_changes.items() if g in scored
+    ):
+        # A scored gene without a fold change, like one with a NaN fold change, is in
+        # neither subset.
+        up = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, math.nan) >= 0}
+        down = {g: z for g, z in gene_z.items() if gene_fold_changes.get(g, math.nan) < 0}
         results.append(_reporter_one(model, up, "up"))
         results.append(_reporter_one(model, down, "down"))
     return results

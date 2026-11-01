@@ -2,7 +2,7 @@
 """Faithful CarveFungi carve-MILP vs the same MILP with our parsimony objective (intermediate-stage swap).
 
 This is the *fair* CarveFungi head-to-head the strawman emulation could not be (see
-``docs/studies/carvefungi_analysis.md``). We hold CarveFungi's **real intermediate state** fixed --
+``raven-gecko-parity/docs/localization/carvefungi_analysis.md``). We hold CarveFungi's **real intermediate state** fixed --
 its universal model (the actual candidate set: each reaction exists only in the compartments where the
 DB instantiates it) and its real per-(reaction, compartment) scores for S. cerevisiae -- and swap only
 the compartment-assignment objective:
@@ -28,7 +28,7 @@ confirms the carve is hard for CPLEX too (its big-M leaves an 18-27% gap), so ne
 optimality; both arms are deterministic, time-budget-stable near-optimal incumbents. The robust finding
 (both here and in CPLEX) is the transport rate: our transport cost (which dwarfs CarveFungi's ~1e-11
 transport scores) yields a much leaner transport network at no detectable accuracy cost. See
-``docs/studies/carvefungi_milp_benchmark.md`` for the CPLEX numbers.
+``raven-gecko-parity/docs/localization/carvefungi_milp_benchmark.md`` for the CPLEX numbers.
 """
 from __future__ import annotations
 

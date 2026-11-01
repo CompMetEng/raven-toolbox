@@ -5,7 +5,7 @@ made smarter/faster, or where a logical gap in RAVEN's feature set is worth fill
 change — with enough detail that it can **also be back-ported to MATLAB RAVEN** later.
 
 > **Implemented improvements** — and the ones worth carrying upstream into MATLAB RAVEN — now live
-> in [matlab_raven_backports.md](https://github.com/SysBioChalmers/raven-toolbox/blob/develop/docs/reference/matlab_raven_backports.md),
+> in [matlab_raven_backports.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/matlab_raven_backports.md),
 > the MATLAB ↔ raven-toolbox **differences** record (both directions: improvements to back-port, and
 > functionality MATLAB has that raven-toolbox deliberately doesn't). **This file** keeps only the
 > design decisions behind what was ported *differently* or *not at all*, and the improvements still
@@ -92,7 +92,7 @@ several places — and ask before re-adding (see process note: argue pros/cons f
 ### removeReactions — not ported (orphan cleanup kept coupled)
 
 `remove_metabolites` / `remove_genes` are ported
-([manipulation/remove.py](https://github.com/SysBioChalmers/raven-toolbox/blob/develop/src/raven_toolbox/manipulation/remove.py)).
+([manipulation/remove.py](https://github.com/CompMetEng/raven-toolbox/blob/develop/src/raven_toolbox/manipulation/remove.py)).
 `removeReactions` was **not** ported: with orphan cleanup kept coupled (decision: don't separate
 metabolites from genes), it is identical to `cobra.Model.remove_reactions(remove_orphans=...)`.
 Separable orphan-met vs orphan-gene cleanup (**R1**, ❌ rejected) was considered then dropped — keep
@@ -127,7 +127,7 @@ OR-of-AND-complex (DNF) form (`findPotentialErrors`). **Decision (raven-toolbox)
 only.** cobra auto-normalizes a GPR on assignment (`"(G1 AND G2)  OR  G3"` is stored as
 `"(G1 and G2) or G3"`), so the normalization half is redundant. The non-DNF lint has no cobra
 equivalent and was ported as `find_non_dnf_grrules`/`is_dnf`
-([utils/gpr.py](https://github.com/SysBioChalmers/raven-toolbox/blob/develop/src/raven_toolbox/utils/gpr.py)).
+([utils/gpr.py](https://github.com/CompMetEng/raven-toolbox/blob/develop/src/raven_toolbox/utils/gpr.py)).
 
 ### readYAMLmodel — no separate legacy parser needed
 

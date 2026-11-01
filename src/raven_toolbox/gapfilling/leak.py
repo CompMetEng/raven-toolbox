@@ -1,20 +1,17 @@
-"""Stoichiometric leak detection — port of RAVEN's ``findLeakMetabolite``.
+"""Stoichiometric leak detection; port of RAVEN's ``findLeakMetabolite``.
 
 Tests whether a model can produce (excrete) or consume (take up) any
-metabolite for free — a sign of a stoichiometric leak, futile cycle, or
-unconstrained exchange somewhere in the network. This is the unified
-replacement for RAVEN's ``makeSomething`` (``'produce'``) and
-``consumeSomething`` (``'consume'``), both now deprecated wrappers around it
-(SysBioChalmers/RAVEN#732).
+metabolite for free, which indicates a stoichiometric leak, a futile cycle or an
+unconstrained exchange in the network. The function covers RAVEN's ``makeSomething``
+(``'produce'``) and ``consumeSomething`` (``'consume'``).
 
-Works by grafting a throwaway exchange reaction onto every metabolite (an
-"any metabolite" probe), forcing at least one unit of combined flux through
-them via a synthetic metabolite, and minimizing the L1 norm of the resulting
-flux distribution (equivalent to :func:`cobra.flux_analysis.pfba` against a
-zero objective). If more than one metabolite ends up in the minimal
-solution, a second pass tries every implicated metabolite alone to see if it
-can carry the probe on its own; some metabolites can only leak in pairs (or
-larger groups), in which case all of them are reported together.
+The search adds a temporary exchange reaction (a probe) to every metabolite, forces at
+least one unit of combined flux through the probes via a synthetic metabolite, and
+minimises the L1 norm of the resulting flux distribution (equivalent to
+:func:`cobra.flux_analysis.pfba` against a zero objective). If more than one metabolite
+is in the minimal solution, a second pass tests each implicated metabolite alone for
+whether it can carry the probe flux. Some metabolites leak only in pairs or larger
+groups; all of them are then reported together.
 """
 from __future__ import annotations
 
@@ -37,7 +34,7 @@ _FAKE_EXCHANGE_ID = "_leak_fake_exchange"
 
 @dataclass
 class LeakMetaboliteResult:
-    """Outcome of a leak search.
+    """Result of a leak search.
 
     Parameters
     ----------
@@ -45,8 +42,8 @@ class LeakMetaboliteResult:
         Flux for every reaction in the original model (empty if no leak was
         found).
     metabolites:
-        Ids of the metabolite(s) implicated. Usually one; more than one
-        means those metabolites could only be exchanged together.
+        Ids of the metabolites implicated. More than one means that those metabolites
+        can only be exchanged together.
     status:
         ``"optimal"`` if a leak was found, ``"infeasible"`` otherwise.
     """
@@ -135,23 +132,29 @@ def find_leak_metabolite(
     ----------
     model:
         Model to test. Never modified; the search runs on an internal copy.
+        Its boundary reactions are used as they are: close every exchange,
+        sink and demand reaction first (``for r in model.boundary: r.bounds =
+        (0, 0)`` on a copy), or an open uptake or excretion counts as a leak.
+        Positive lower bounds (such as on a maintenance reaction) still
+        apply and can make the search infeasible; the result then has status
+        ``"infeasible"``, which does not show that the model is leak-free.
     direction:
         ``"produce"`` to look for freely excreted metabolites, or
         ``"consume"`` to look for freely consumed metabolites.
     ignore_mets:
         Metabolite ids (or names, with ``is_names=True``) to exclude from
-        the search. Unlike ``findLeakMetabolite.m``, this only accepts
-        ids/names, not a logical or index vector — there is no positional
-        model-array equivalent to index into in cobrapy.
+        the search. Unlike ``findLeakMetabolite.m``, the argument accepts only
+        ids or names, not a logical or index vector.
     is_names:
-        If True, ``ignore_mets`` holds metabolite names rather than ids;
+        If True, ``ignore_mets`` holds metabolite names (default: ids);
         every metabolite sharing one of those names, in any compartment, is
         excluded.
     min_nr_fluxes:
-        Solve for the minimum *number* of active fluxes
-        (:func:`~raven_toolbox.analysis.get_min_nr_fluxes`) instead of the
-        minimum sum. Slower, but can be used if the sum gives too many
-        active reactions to interpret.
+        Solve for the minimum number of active fluxes
+        (:func:`~raven_toolbox.analysis.get_min_nr_fluxes`); the default is the
+        minimum sum. Setting it true is slower, because the minimum number of fluxes is
+        a MILP and the minimum sum is an LP. The MILP solution has the fewest active
+        reactions; the LP solution can have more.
     allow_excretion:
         Allow every metabolite to freely accumulate. Only used when
         ``direction`` is ``"produce"`` (default True).
