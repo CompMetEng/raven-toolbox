@@ -341,6 +341,7 @@ def test_legacy_reverse_direction_prot_flipped(tmp_path):
             "metabolites": {"prot_P1": -1, "prot_pool": 1},  # swapped signs
             "lower_bound": -1000.0,
             "upper_bound": 0.0,
+            "objective_coefficient": 2.0,
         }
     )
     with pytest.warns(UserWarning, match="reverse-direction"):
@@ -352,6 +353,8 @@ def test_legacy_reverse_direction_prot_flipped(tmp_path):
     coefs = {m.id: c for m, c in r.metabolites.items()}
     assert coefs["prot_P1"] == 1.0
     assert coefs["prot_pool"] == -1.0
+    # The objective coefficient changes sign with the flux.
+    assert r.objective_coefficient == -2.0
 
 
 def test_legacy_bare_sequence_root_merged(tmp_path):

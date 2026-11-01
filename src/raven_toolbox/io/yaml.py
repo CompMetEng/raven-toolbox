@@ -597,7 +597,8 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
     The current convention (in both geckopy and recent MATLAB GECKO)
     treats them as ordinary forward reactions with positive flux. When a
     loaded model still uses the older convention we flip the affected
-    reactions in place so consumers never have to handle two shapes.
+    reactions in place so consumers never have to handle two shapes. The
+    objective coefficient of a flipped reaction changes sign with its flux.
 
     The signature we look for is any ``usage_prot_*`` or
     ``prot_pool_exchange`` reaction whose lower bound is negative.
@@ -618,6 +619,7 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
         lb, ub = rxn.lower_bound, rxn.upper_bound
         rxn.lower_bound = -ub
         rxn.upper_bound = -lb
+        rxn.objective_coefficient = -rxn.objective_coefficient
         flipped.append(rxn.id)
     if flipped:
         warnings.warn(
