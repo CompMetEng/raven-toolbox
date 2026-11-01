@@ -34,8 +34,8 @@ Legacy quirks the reader also accepts (silent normalisation):
 * very old RAVEN files written as a bare ``-`` sequence of single-key mappings
   rather than one big mapping;
 * MATLAB GECKO ecModels whose ``usage_prot_*`` and ``prot_pool_exchange``
-  reactions use the older reverse-direction convention (negative lower bound,
-  swapped stoichiometry signs); these are flipped on load so consumers always
+  reactions use the older reverse-direction convention (swapped
+  stoichiometry signs, negative flux); these are flipped on load so consumers always
   see the forward convention.
 """
 from __future__ import annotations
@@ -597,19 +597,27 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
     The current convention (in both geckopy and recent MATLAB GECKO)
     treats them as ordinary forward reactions with positive flux. When a
     loaded model still uses the older convention we flip the affected
-    reactions in place so consumers never have to handle two shapes.
+    reactions in place so consumers never have to handle two shapes. The
+    objective coefficient of a flipped reaction changes sign with its flux.
 
-    The signature we look for is any ``usage_prot_*`` or
-    ``prot_pool_exchange`` reaction whose lower bound is negative.
+    The signature we look for is the sign of the ``prot_pool`` coefficient:
+    positive in a ``usage_prot_*`` reaction, negative in
+    ``prot_pool_exchange``. The bounds do not decide, so a reaction with
+    the current stoichiometry and a negative lower bound is left as it is.
     """
+    try:
+        pool = model.metabolites.get_by_id("prot_pool")
+    except KeyError:
+        return
     flipped: list[str] = []
     for rxn in model.reactions:
-        if not (
-            rxn.id.startswith("usage_prot_")
-            or rxn.id == "prot_pool_exchange"
-        ):
+        if rxn.id == "prot_pool_exchange":
+            legacy = rxn.metabolites.get(pool, 0.0) < 0
+        elif rxn.id.startswith("usage_prot_"):
+            legacy = rxn.metabolites.get(pool, 0.0) > 0
+        else:
             continue
-        if rxn.lower_bound >= -1e-9:
+        if not legacy:
             continue
         rxn.add_metabolites(
             {met: -2.0 * coef for met, coef in rxn.metabolites.items()},
@@ -618,6 +626,7 @@ def _flip_legacy_prot_direction(model: cobra.Model) -> None:
         lb, ub = rxn.lower_bound, rxn.upper_bound
         rxn.lower_bound = -ub
         rxn.upper_bound = -lb
+        rxn.objective_coefficient = -rxn.objective_coefficient
         flipped.append(rxn.id)
     if flipped:
         warnings.warn(
