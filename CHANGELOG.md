@@ -191,6 +191,7 @@ Breaking changes: `fill_gaps_kumar_milp` is renamed `fill_gaps_milp`, `omics.hpa
 ### Packaging and docs
 
 * Assets are downloaded from `CompMetEng/toolbox-assets`; `publish_to_raven_data.py` is renamed `publish_to_toolbox_assets.py`.
+* The package metadata and the README name the GPL-3.0 licence of the `LICENSE` file (was: MIT).
 * The `docs/` tree and its Read the Docs build are removed; the documentation is on [raven-docs](https://github.com/CompMetEng/raven-docs). The project URLs point to `CompMetEng`, and `data/deeploc` is not part of the source distribution.
 * Docstrings are corrected for `reporter_metabolites`, `random_sampling`, `remove_no_flux_reactions`, `check_tasks`, `connect_blocked_reactions` and `find_leak_metabolite`.
 

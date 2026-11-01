@@ -88,4 +88,4 @@ raven-toolbox is an independent Python reimplementation of RAVEN. If you use it 
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
