@@ -27,7 +27,7 @@ Reconstruction, Analysis and Visualisation of Metabolic Networks in Python: the 
 
 ## Design
 
-The in-memory model is a [`cobra.Model`](https://cobrapy.readthedocs.io). raven-toolbox has no RAVEN struct and no adapter for one. Fields that cobra does not model, such as `rxnMiriams`, `metDeltaG` and `rxnConfidenceScores`, are kept in the `annotation` and `notes` dictionaries of cobra, so that raven-toolbox stays interoperable with the COBRA ecosystem.
+The in-memory model is a [`cobra.Model`](https://cobrapy.readthedocs.io). raven-toolbox has no RAVEN struct and no adapter for one. Fields that cobra does not model, such as `rxnMiriams`, `metDeltaG` and `rxnConfidenceScores`, are kept in the `annotation` and `notes` dictionaries of cobra. This keeps raven-toolbox interoperable with the COBRA ecosystem.
 
 ## Status
 
