@@ -89,7 +89,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-      # RAVEN is GPL and this package is MIT, so its files are never vendored
+      # RAVEN is a separate repository, so its files are never vendored
       # here -- the cross-language checks read them from a checkout instead.
       # develop is the RAVEN branch raven-docs documents and raven-toolbox tracks.
       - name: Check out MATLAB RAVEN
