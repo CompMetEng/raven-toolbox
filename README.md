@@ -1,78 +1,53 @@
-# raven-toolbox
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/CompMetEng/raven-toolbox/develop/img/raven-logo-white.png">
+  <img src="https://raw.githubusercontent.com/CompMetEng/raven-toolbox/develop/img/raven-logo.png" alt="RAVEN" width="400px">
+</picture>
 
 [![CI](https://github.com/CompMetEng/raven-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/CompMetEng/raven-toolbox/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/raven-toolbox.svg)](https://pypi.org/project/raven-toolbox/)
+[![PyPI](https://img.shields.io/pypi/v/raven-toolbox.svg?include_prereleases)](https://pypi.org/project/raven-toolbox/)
+[![Documentation](https://readthedocs.org/projects/raven-docs/badge/?version=latest)](https://raven-docs.readthedocs.io/en/latest/)
+[![GitHub Discussions](https://img.shields.io/github/discussions-search?query=repo%3ACompMetEng%2Fraven-toolbox&label=GitHub%20Discussions)](https://github.com/CompMetEng/raven-toolbox/discussions)
 
-**Reconstruction, Analysis and Visualisation of Metabolic Networks — in Python.**
+**[Documentation](https://raven-docs.readthedocs.io/en/latest/)** · [Installation](https://raven-docs.readthedocs.io/en/latest/installation/python.html) · [Guide](https://raven-docs.readthedocs.io/en/latest/guide/index.html) · [API reference](https://raven-docs.readthedocs.io/en/latest/api/index.html) · [Compare with RAVEN](https://raven-docs.readthedocs.io/en/latest/raven3-vs-raven-toolbox.html) · [Citations](https://raven-docs.readthedocs.io/en/latest/references.html)
 
-`raven-toolbox` is the Python counterpart of the
-[RAVEN Toolbox](https://github.com/CompMetEng/RAVEN) (MATLAB). It builds on
-[**cobrapy**](https://github.com/opencobra/cobrapy) for everything cobrapy already does
-well — simulation, standard analyses, SBML I/O, model manipulation — and adds the
-functionality that is unique to RAVEN:
+# raven-toolbox
 
-* **De novo reconstruction** from KEGG and protein homology (BLAST / DIAMOND).
-* **Context-specific models** from omics data via **ftINIT**, with task-aware gap-filling,
-  the linear-merge MILP reduction, and metabolomics-informed reaction scoring.
-* **Metabolic-task** validation (`check_tasks`, `find_task_essential_reactions`).
-* **Gap-filling** — connectivity gap-filling against template models, plus LP/SWIFTCORE,
-  MILP, and topological strategies.
-* **Omics integration** — Human Protein Atlas (proteomics + RNA-seq) ingestion.
-* **Sub-cellular localisation** prediction by MILP, with partial-update mode and pluggable
-  evidence sources (DeepLoc 2, MULocDeep, COMPARTMENTS, UniProt, …).
-* **N-model comparison**; **reporter metabolites**; **FSEOF**; **flux sampling** (ACHR, CHRR,
-  and the classic random-objective vertex method).
-* **YAML I/O** following the cobra standard, plus geckopy's `ec-*` enzyme-constrained
-  fields, and **RAVEN-style Excel** export.
+Reconstruction, Analysis and Visualisation of Metabolic Networks in Python: the Python counterpart of the [RAVEN Toolbox](https://github.com/CompMetEng/RAVEN) (MATLAB). raven-toolbox builds on [cobrapy](https://github.com/opencobra/cobrapy) for simulation, standard analyses, SBML input and output, and model manipulation, and it adds the functionality that is specific to RAVEN:
 
-The status of every RAVEN function (ported, mapped to a cobra equivalent, or
-explicitly not ported) is documented function-by-function in
-**[RAVEN 3 and raven-toolbox](https://raven-docs.readthedocs.io/en/latest/raven3-vs-raven-toolbox.html)**.
+- Reconstruction from KEGG and from protein homology (BLAST or DIAMOND).
+- Context-specific models from omics data with ftINIT, with task-aware gap-filling, the linear-merge MILP reduction and scoring with metabolomics.
+- Validation with metabolic tasks (`check_tasks`, `find_task_essential_reactions`).
+- Gap-filling: connectivity gap-filling against template models, and LP, SWIFTCORE, MILP and topological strategies.
+- Omics integration with Human Protein Atlas data (proteomics and RNA-seq).
+- Prediction of sub-cellular localisation by MILP, with a partial-update mode and exchangeable evidence sources (DeepLoc 2, MULocDeep, COMPARTMENTS, UniProt).
+- Comparison of several models, reporter metabolites, FSEOF, and flux sampling (ACHR, CHRR and the random-objective vertex method).
+- YAML input and output that follows the cobra standard and adds the `ec-*` fields for enzyme-constrained models of [geckopy](https://github.com/CompMetEng/geckopy), and export to the RAVEN Excel format.
 
-## Design principle
+[RAVEN 3 and raven-toolbox](https://raven-docs.readthedocs.io/en/latest/raven3-vs-raven-toolbox.html) gives the status of every RAVEN function: ported, mapped to a cobra equivalent, or not ported.
 
-The canonical in-memory object is always a [`cobra.Model`](https://cobrapy.readthedocs.io).
-There is no parallel RAVEN struct, no `ravenCobraWrapper`-style adapter. RAVEN-specific
-fields that cobra doesn't model natively (`rxnMiriams`, `metDeltaG`,
-`rxnConfidenceScores`, …) live in cobra's `annotation` / `notes` dictionaries. This
-avoids duplicating cobra's data model and keeps raven-toolbox interoperable with the wider
-COBRA ecosystem.
+## Design
+
+The in-memory model is a [`cobra.Model`](https://cobrapy.readthedocs.io). raven-toolbox has no RAVEN struct and no adapter for one. Fields that cobra does not model, such as `rxnMiriams`, `metDeltaG` and `rxnConfidenceScores`, are kept in the `annotation` and `notes` dictionaries of cobra, so that raven-toolbox stays interoperable with the COBRA ecosystem.
 
 ## Status
 
-**raven-toolbox 3.0.0b1** is out — the first beta toward 3.0, tracking the upcoming MATLAB
-RAVEN 3.0 beta ([release notes](https://github.com/CompMetEng/raven-toolbox/releases/tag/v3.0.0b1),
-[changelog](CHANGELOG.md)). It has been validated against MATLAB RAVEN on **Human-GEM** (5 Hart2015
-cell-line models, Jaccard 0.975–0.980 — see
-[the Human-GEM validation study](https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/humangem-validation.md)
-on raven-docs).
+raven-toolbox 3.x tracks the RAVEN 3 pre-releases and is a pre-release itself ([releases](https://github.com/CompMetEng/raven-toolbox/releases), [changelog](CHANGELOG.md)). On Human-GEM, the five cell-line models of Hart2015 extracted with ftINIT have a Jaccard index of 0.975 to 0.980 against MATLAB RAVEN ([Human-GEM validation](https://raven-docs.readthedocs.io/en/latest/parameter-tuning/studies/humangem-validation.html)).
 
-Two deliberate scope decisions, not pending work:
+Three functions of RAVEN are not implemented:
 
-* **Classic tINIT is not implemented — only ftINIT.** raven-toolbox is a new
-  implementation with no installed base of tINIT-built models to support; MATLAB RAVEN
-  keeps both algorithms for backwards compatibility, but ftINIT is the algorithm tINIT
-  was superseded by.
-* **MetaCyc-based reconstruction** is not implemented and is flagged for removal from
-  MATLAB RAVEN as well — see [IMPROVEMENTS.md](IMPROVEMENTS.md) under `R-MetaCyc`.
-* **Dynamic FBA** is not implemented — several maintained Python packages already cover
-  it ([`dfba`](https://pypi.org/project/dfba/), [`reframed`](https://pypi.org/project/reframed/),
-  [`mewpy`](https://pypi.org/project/mewpy/)).
+- Classic tINIT. raven-toolbox has no installed base of tINIT models, and ftINIT supersedes tINIT. MATLAB RAVEN keeps both for backward compatibility.
+- MetaCyc-based reconstruction, which is flagged for removal from MATLAB RAVEN as well ([IMPROVEMENTS.md](IMPROVEMENTS.md), `R-MetaCyc`).
+- Dynamic FBA, which maintained Python packages cover ([`dfba`](https://pypi.org/project/dfba/), [`reframed`](https://pypi.org/project/reframed/) and [`mewpy`](https://pypi.org/project/mewpy/)).
 
-## Installation
+## Install
 
-```bash
-pip install raven-toolbox
-```
-
-That installs the latest **stable** release. PyPI pre-releases are opt-in, so get the
-3.0.0b1 beta with:
+The 3.x releases are pre-releases, so pip needs `--pre`. Without it, pip installs the older stable release 0.4.0.
 
 ```bash
 pip install --pre raven-toolbox
 ```
 
-To work against the unreleased code on `develop` instead, install from git:
+Python 3.11 or newer is required. The unreleased code on `develop` installs from git:
 
 ```bash
 git clone https://github.com/CompMetEng/raven-toolbox
@@ -80,67 +55,36 @@ cd raven-toolbox
 pip install -e ".[dev]"
 ```
 
-raven-toolbox requires Python ≥ 3.11. Genome-scale ftINIT MILPs currently require **Gurobi**
-([details on solver portability](https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-solver-benchmark.md)
-on raven-docs); toy and unit-test work runs on the open-source GLPK.
+Genome-scale ftINIT problems need Gurobi ([ftINIT on different solvers](https://raven-docs.readthedocs.io/en/latest/parameter-tuning/studies/init-solver-benchmark.html)), and small models and the unit tests run on the open-source GLPK. [Installation](https://raven-docs.readthedocs.io/en/latest/installation/python.html) describes the solver configuration.
 
-### External command-line tools (BLAST, DIAMOND, HMMER, MAFFT, CD-HIT)
+### External command-line tools
 
-Some workflows call external tools. **For most users there is nothing to do** —
-raven-toolbox downloads each tool it needs automatically the first time it's used.
+BLAST, DIAMOND and HMMER (and MAFFT and CD-HIT for building HMM libraries) are downloaded the first time a workflow needs them. A tool on the `PATH` takes precedence over a download, `raven-toolbox-binaries --set runtime` fetches the tools in advance, and `RAVEN_PYTHON_AUTOFETCH=0` disables downloads for air-gapped systems. [Download data and binaries](https://raven-docs.readthedocs.io/en/latest/installation/data-and-binaries.html) lists the tools per workflow, the cache locations and the platforms. On Windows, homology reconstruction and the KEGG species model run natively, and building the KEGG HMM libraries needs WSL2.
 
-Which tools a workflow uses:
+[SuppOrth](https://github.com/fma91/SuppOrth) orthologs can start a homology reconstruction. `hits_from_supporth` reads an existing `suppOrth.tsv` and needs nothing else. `run_supporth` needs the `suppOrth` command, which is not downloaded automatically and runs on Linux and macOS: `pip install 'git+https://github.com/fma91/SuppOrth.git@stand_alone'`, then `suppOrth install`.
 
-| Workflow | Tools |
-|---|---|
-| Homology-based reconstruction | `blastp` + `makeblastdb`, or `diamond` |
-| KEGG HMM query (`get_kegg_model_for_organism`) | `hmmsearch` |
-| Building the KEGG HMM libraries (maintainers) | `hmmbuild`, `mafft`, `cd-hit` |
+## Quick start
 
-Optional:
+```python
+from raven_toolbox.io import read_yaml_model
 
-- **Fetch them up front** instead of on first use:
-  ```bash
-  raven-toolbox-binaries --set runtime   # blastp, makeblastdb, diamond, hmmsearch
-  raven-toolbox-binaries --set build     # hmmbuild, mafft, cd-hit
-  ```
-- **Use your own install** — if a tool is on your `PATH` it's used instead of a
-  download, e.g. `conda install -c bioconda blast diamond hmmer mafft cd-hit`.
-- **Disable automatic downloads** (air-gapped / conda-only setups): set
-  `RAVEN_PYTHON_AUTOFETCH=0`.
+model = read_yaml_model("yeast-GEM.yml")      # a cobra.Model
+model.objective = "r_2111"                    # growth
+model.reactions.get_by_id("r_1714").lower_bound = -1.0   # glucose uptake
+print(model.optimize().objective_value)       # cobrapy
+```
 
-**SuppOrth (optional):** homology reconstruction can also start from the consensus
-orthologs of [SuppOrth](https://github.com/fma91/SuppOrth). `hits_from_supporth` reads an
-existing `suppOrth.tsv` and needs nothing extra. `run_supporth` needs the `suppOrth`
-command, which is not downloaded automatically and runs on Linux and macOS:
-`pip install 'git+https://github.com/fma91/SuppOrth.git@stand_alone'`, then `suppOrth install`.
+[Getting started](https://raven-docs.readthedocs.io/en/latest/guide/getting-started.html) continues from here.
 
-**Windows:** homology reconstruction and the KEGG species model work as-is. To
-*build* the KEGG HMM libraries (needs MAFFT/CD-HIT), use **WSL2**.
+## Documentation and support
 
-## Documentation
+[raven-docs](https://raven-docs.readthedocs.io/en/latest/) documents MATLAB RAVEN and raven-toolbox side by side: each task is shown in both languages, and the CI of the documentation runs the examples in both. This repository has no prose documentation of its own. The API reference on the site is generated from the docstrings here when the site is built. [CONTRIBUTING.md](CONTRIBUTING.md) has the notes for contributors and maintainers, and [raven-gecko-parity](https://github.com/CompMetEng/raven-gecko-parity) holds the roadmap, the backlog and the MATLAB parity record. Use [GitHub Discussions](https://github.com/CompMetEng/raven-toolbox/discussions) for questions.
 
-[**raven-docs**](https://raven-docs.readthedocs.io/) is the documentation, and it
-covers MATLAB RAVEN and raven-toolbox side by side: the same task shown in both
-languages, with the examples run in both languages by the documentation's CI.
+## Cite us
 
-This repository carries no prose documentation of its own. The API reference on the
-site is generated from the docstrings here at build time, so a docstring edit
-reaches the site without anything being copied across. Contributor and maintainer
-notes are in [CONTRIBUTING.md](CONTRIBUTING.md); the roadmap, the backlog and the
-MATLAB parity record are in
-[raven-gecko-parity](https://github.com/CompMetEng/raven-gecko-parity).
+raven-toolbox is an independent Python reimplementation of RAVEN. If you use it in scientific work, please cite the RAVEN 2 paper:
 
-## Relationship to MATLAB RAVEN
-
-`raven-toolbox` is an independent Python reimplementation of the
-[RAVEN Toolbox](https://github.com/CompMetEng/RAVEN), released under the permissive
-**MIT** license. If you use it in scientific work, please cite the RAVEN 2 paper:
-
-> Wang H, Marcišauskas S, Sánchez BJ, Domenzain I, Hermansson D, Agren R, Nielsen J,
-> Kerkhoven EJ. (2018) RAVEN 2.0: A versatile toolbox for metabolic network
-> reconstruction and a case study on *Streptomyces coelicolor*. PLoS Comput Biol 14(10):
-> e1006541.
+> Wang H, Marcišauskas S, Sánchez BJ, Domenzain I, Hermansson D, Agren R, Nielsen J, Kerkhoven EJ. (2018) RAVEN 2.0: A versatile toolbox for metabolic network reconstruction and a case study on _Streptomyces coelicolor_. PLoS Comput Biol 14(10): e1006541. doi:[10.1371/journal.pcbi.1006541](https://doi.org/10.1371/journal.pcbi.1006541).
 
 ## License
 
