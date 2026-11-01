@@ -97,12 +97,8 @@ def _reaction_big_m(lb: float, ub: float, cap: float, force_on: float) -> float:
 
 # A resolve_ties tie-break phase is adopted whether it proves or times out (see
 # _resolve_ties), so it is given a fraction of the primary solve's own budget rather than
-# the full amount again: a phase that would not converge within the full budget has been
-# observed (on genome-scale Human-GEM) to still not converge, only slower; a phase that
-# does converge does so far inside either budget (a pure integer count/id-rank objective
-# with a 0.4 absolute gap). Not independently tuned — see the ftINIT reproducibility study
-# on raven-docs for the experiment that would calibrate this properly instead of halving
-# on general principle.
+# the full amount again: a phase that does converge does so far inside either budget (a
+# pure integer count/id-rank objective with a 0.4 absolute gap). Not tuned.
 _TIE_BREAK_TIME_FRACTION = 0.5
 
 
@@ -223,15 +219,12 @@ def run_ftinit(
     prove_abs_gap : float or None
         When set, proves the solve to this fixed absolute objective gap (on Gurobi: ``MIPGap``
         0 and ``MIPGapAbs`` this value); ``mip_gap`` and ``mip_gap_abs`` do not apply then. The
-        default None leaves the gap to ``mip_gap`` and ``mip_gap_abs``. In the four-seed sweep
-        (seeds 1234, 7, 1 and 2; ``resolve_ties=True``; no gap-fill; Human-GEM v2.0.0-38, one
-        cell line) the default escalation returned a step-1 objective 4.0 to 12.0 below the
-        proven optimum without a warning, while every value from 2.0 to 0.05 reached the
-        optimum for all four seeds and gave the same reaction sets. Every step solve (the 48
-        primary solves) ended with status ``optimal``; the flux phases ``phase2c-minflux`` (3
-        of 4 seeds) and ``phase2d-direction`` (4 of 4 seeds) reached the time limit and were
-        adopted as unproven incumbents. The docstring of :func:`raven_toolbox.init.ftinit`
-        gives the measured run times.
+        default None leaves the gap to ``mip_gap`` and ``mip_gap_abs``. The default escalation
+        can stop at an objective below the proven optimum without a warning. The flux phases
+        ``phase2c-minflux`` and ``phase2d-direction`` can reach the time limit, in which case
+        the incumbent is adopted as an unproven tie-break. The docstring of
+        :func:`raven_toolbox.init.ftinit` links the study that measures the effect of this
+        setting.
     resolve_ties : bool
         Opt-in; the default False gives RAVEN's result. When True, the degeneracy of the MILP
         is resolved deterministically. After the score optimum is found, a lexicographic
@@ -282,11 +275,10 @@ def run_ftinit(
         Gurobi's ``Threads`` (default 1, RAVEN's value). More threads can shorten the solve, and
         with more than one thread two runs of the same input can return different reaction
         sets, because multi-threaded Gurobi chooses between equal optima non-deterministically.
-        The studies on raven-docs ran with one thread. The number of threads has no measured
-        effect on the spread between different seeds, so it does not replace ``resolve_ties``;
-        see the `ftINIT reproducibility study
+        The number of threads does not select between equal optima in a controlled way, so it
+        does not replace ``resolve_ties``. The `ftINIT reproducibility study
         <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
-        on raven-docs. It is applied on Gurobi only.
+        on raven-docs measures the spread between seeds. It is applied on Gurobi only.
     feas_tol : float
         Gurobi's ``FeasibilityTol``. The default is 1e-9 (RAVEN's value and Gurobi's minimum;
         Gurobi's own default is 1e-6). See the note on tolerances below.
@@ -305,8 +297,7 @@ def run_ftinit(
     ``feas_tol``, ``opt_tol``, ``int_feas_tol`` and ``presolve`` are RAVEN parity settings:
     they determine which optimal vertex the solver returns for the degenerate MILP and how
     binaries round at the 0.5 on/off cut. Changing them changes the optimum returned and the
-    run time. The studies on raven-docs ran at the defaults; the effect of other values on the
-    run time and on the extracted model has not been benchmarked.
+    run time.
 
     The private parameter ``_pin_fluxes`` (default True) is set by
     :func:`raven_toolbox.init.ftinit`: it is False in the last step, whose fluxes no later
@@ -635,9 +626,7 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit, rank_key
 
     Many reaction subsets reach the same score optimum of the ftINIT MILP, and the solver
     returns one of them. The choice is reproducible for a fixed solver build and seed, and can
-    change with the Gurobi version, the platform or the seed. In the determinism study
-    (Human-GEM v2.0.0-38, one cell line) two seeds gave kept-reaction sets that differ by 110
-    reactions and 17 predicted essential genes.
+    change with the Gurobi version, the platform or the seed.
 
     The function runs a lexicographic phase 2 that holds the score objective at its optimum
     with a floor constraint: first it minimises the count of kept removable reactions (the
@@ -655,14 +644,11 @@ def _resolve_ties(opt, prob, obj_expr, indicators, primary, time_limit, rank_key
     distribution, which the staged schedule reads for the forced directions and the
     ``ess_force`` clamp of the next step, is pinned afterwards by :func:`_min_abs_flux`.
 
-    Caveat, measured on genome-scale Human-GEM (both phases prove in milliseconds at toy or
-    unit-test scale): the phases can exhaust ``time_limit``, in which case the incumbent
-    adopted is an unproven tie-break. It reduces the run-to-run spread relative to no
-    tie-break at all, and it does not guarantee a unique result. A warning is issued when this
-    happens; see the `ftINIT reproducibility
-    study
+    Caveat: the phases can exhaust ``time_limit``, in which case the incumbent adopted is an
+    unproven tie-break. It does not guarantee a unique result. A warning is issued when this
+    happens. The `ftINIT reproducibility study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
-    on raven-docs.
+    on raven-docs measures the spread between seeds with and without the tie-break.
 
     Returns ``True`` if phase 2 produced a usable solution (the caller then reads the
     resolved "on" set and fluxes), ``False`` if it did not converge to an incumbent (the
@@ -1158,21 +1144,12 @@ def ftinit(
         relative-gap escalation with a single solve per step proven to this fixed absolute
         gap, so the kept-set objective is optimal at any scale and not an arbitrary within-gap
         incumbent. It changes which optimum is returned and not its score; the alternative
-        optima are equally consistent with the expression data. The sweep ran on Human-GEM
-        v2.0.0-38 with one cell line, four seeds (1234, 7, 1 and 2), ``resolve_ties=True``,
-        no gap-fill and ``time_limit`` 1800 s. The default escalation returned a step-1
-        objective 4.0 to 12.0 below the proven optimum; with seeds 1234 and 7 alone it ended
-        7.0 and 12.0 below, and 4.0 is seed 2. Every value from 2.0 to 0.05 reached the
-        optimum for all four seeds and gave the same reaction sets, so 1.0 lies in the range
-        of equal results; 5.0 stopped 2.0 below the optimum for one seed. Every step solve
-        (the 48 primary solves) ended with status ``optimal``; the flux phases
-        ``phase2c-minflux`` (3 of 4 seeds) and ``phase2d-direction`` (4 of 4 seeds) reached
-        the time limit and were adopted as unproven incumbents. The mean build time was about
-        5770 s at 0.05 against 5640 s at 1.0. The study recommends 1.0 together with
-        ``resolve_ties`` when the seed-to-seed swing of ``resolve_ties`` alone (41 reactions,
-        1 gene here) is too large and the run time is acceptable. The full-pipeline runs of
-        the calibration study used ``time_limit`` 600 s per step and the determinism builds
-        1800 s.
+        optima are equally consistent with the expression data. A larger value stops the
+        solve at a larger distance from the proven optimum. The flux phases of ``resolve_ties``
+        can reach ``time_limit`` and are then adopted as unproven incumbents. The `ftINIT
+        reproducibility study
+        <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
+        on raven-docs sweeps this setting and reports the run times.
     resolve_ties : bool
         Opt-in; the default False gives RAVEN's behaviour. It reduces the arbitrariness of the
         tie-break in the degenerate MILP and gives a more parsimonious and more reproducible
@@ -1206,20 +1183,13 @@ def ftinit(
 
     Notes
     -----
-    The studies on raven-docs ran at the default tolerances, ``presolve`` and one thread (see
-    :func:`run_ftinit`). The stability of the extraction under small input changes is a
-    separate property that neither ``seed`` nor ``threads`` determines; see the `ftINIT
-    reproducibility study
+    The stability of the extraction under small input changes is a separate property that
+    neither ``seed`` nor ``threads`` determines. The `ftINIT reproducibility study
     <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/ftinit-determinism.md>`_
-    on raven-docs. Measured there on Human-GEM v2.0.0-38 with one cell line (seeds 1234 and 7,
-    ``time_limit`` 1800 s): the default escalation differs between the seeds by 110 reactions
-    and 17 predicted essential genes. ``resolve_ties`` alone gives identical reaction sets for
-    repeated builds at a fixed seed and differs between the seeds by 41 reactions and 1 gene,
-    at about 3.6 times the run time (about 14 min against 4 min). ``resolve_ties`` with
-    ``prove_abs_gap=1.0`` differs by 1 reaction and 0 genes, at about 26 times the baseline
-    run time (about 100 min). The tie-break phases of ``resolve_ties`` can exhaust
-    ``time_limit`` at genome scale; the spread is then reduced and not eliminated, and a
-    warning is issued.
+    on raven-docs measures the spread between seeds and the run time for the default
+    escalation, for ``resolve_ties`` and for ``resolve_ties`` with ``prove_abs_gap``. The
+    tie-break phases of ``resolve_ties`` can exhaust ``time_limit``; the result is then an
+    unproven tie-break, not a unique optimum, and a warning is issued.
 
     When models are compared before and after a curation, an edit applied to the template
     (followed by a new extraction) and the same edit applied to the extracted model are

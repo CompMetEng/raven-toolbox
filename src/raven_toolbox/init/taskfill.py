@@ -41,12 +41,8 @@ _MAX_SCORE = -0.1       # RAVEN min(score, -0.1): every added reaction costs ≥
 
 # A resolve_ties tie-break phase is adopted whether it proves or times out (see
 # _resolve_ties_fill), so it is given a fraction of the primary fill's own budget rather
-# than the full amount again: a phase that would not converge within the full budget has
-# been observed (on genome-scale Human-GEM) to still not converge, only slower; a phase
-# that does converge does so far inside either budget (a pure integer count/id-rank
-# objective with a 0.4 absolute gap). Not independently tuned — see the ftINIT
-# reproducibility study on raven-docs for the experiment that would calibrate this
-# properly instead of halving on general principle.
+# than the full amount again: a phase that does converge does so far inside either budget
+# (a pure integer count/id-rank objective with a 0.4 absolute gap). Not tuned.
 _TIE_BREAK_TIME_FRACTION = 0.5
 
 

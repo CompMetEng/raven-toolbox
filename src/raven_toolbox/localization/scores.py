@@ -193,8 +193,7 @@ def load_deeploc(path: str | Path, *,
         labels). A label absent from the map is dropped with its column (see the module docstring).
     min_confidence : float
         Drops genes whose top compartment probability (before per-gene normalisation) is below it
-        (default ``0.0``, which keeps every gene). In the yeast-GEM benchmark of the confidence
-        study, the share of calls that other evidence corroborates rises with the raw probability.
+        (default ``0.0``, which keeps every gene).
     membrane_split : mapping of str to str or None
         For example ``{"m": "mm"}`` (default ``None``, no split). It moves the probability of an
         organelle to its membrane sub-compartment when the protein is membrane-associated
@@ -202,7 +201,7 @@ def load_deeploc(path: str | Path, *,
         it stays in the lumen. Keys and values are the compartment ids of the model (after
         ``compartment_map``). A key that is not a compartment of the table is skipped. Raises
         :class:`ValueError` when the file has no ``Soluble`` column. The evidence supports only the
-        mitochondrial split (``m``/``mm``; matrix versus membrane AUC ~0.93). DeepLoc does not
+        mitochondrial split (``m``/``mm``). DeepLoc does not
         separate the ER lumen from the membrane, so a split of ``er`` has no support.
     membrane_threshold : float
         Value of ``1 - P(Soluble)`` from which a protein counts as membrane-associated (default
@@ -214,9 +213,8 @@ def load_deeploc(path: str | Path, *,
     normalise : bool
         If True (default), rescale the best compartment of every gene to 1.0. This follows the
         RAVEN ``parseScores`` convention and keeps the scales of several sources comparable. False
-        keeps DeepLoc's raw probabilities. The raw probabilities are calibrated (a 0.97 call is
-        more reliable than a 0.40 one), so a downstream assignment can weight confident genes more
-        heavily.
+        keeps DeepLoc's raw probabilities, so a downstream assignment can weight confident genes
+        more heavily.
     """
     raw = pd.read_csv(path)
     wide = _wide_mapped(raw, id_column=None, compartment_map=compartment_map, source=str(path))

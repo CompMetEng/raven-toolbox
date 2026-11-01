@@ -131,13 +131,11 @@ def _prepare_scope(model, scores, reactions_to_relocate, *, transportable, base_
 # --------------------------------------------------------------------------- master
 def _pin_deterministic(prob, opt) -> None:
     """Pin solver parameters so a degenerate placement objective gives the same solution on every
-    run and on every machine. In a benchmark of the yeast master (identical model, one parameter
-    varied at a time), three settings changed which co-optimal placement Gurobi returned: thread
-    count, seed and presolve level. The MIP gap changed the result only when loosened above ~1e-2,
-    which also gives non-optimal solutions, and no tolerance changed it. The function sets one
-    thread, a fixed seed, presolve level 2 (the optimizeProb default of the MATLAB port), a MIP gap
-    of 0 (exact optimum) and an integrality tolerance of 1e-9. Only the Gurobi backend is
-    configured; other backends keep their defaults."""
+    run and on every machine. The objective is degenerate, so thread count, seed and presolve level
+    can change which co-optimal placement Gurobi returns. The function sets one thread, a fixed
+    seed, presolve level 2 (the optimizeProb default of the MATLAB port), a MIP gap of 0 (exact
+    optimum) and an integrality tolerance of 1e-9. Only the Gurobi backend is configured; other
+    backends keep their defaults."""
     if "gurobi" not in getattr(prob, "__name__", ""):
         return
     try:

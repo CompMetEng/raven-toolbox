@@ -323,9 +323,10 @@ def prep_init_model(
         larger merged model that may reach a different extraction optimum.
     scale : bool
         Keyword-only; default ``True``. When ``False``, the merged model's stoichiometry is
-        not rescaled. In the INIT parameter calibration study on raven-docs (Human-GEM, one
-        cell line), the full ftINIT pipeline without scaling was feasible at ``big_m`` 1000
-        and took 157 s against 83 s with scaling, and it was infeasible at ``big_m`` 100.
+        not rescaled. Without scaling, a small ``big_m`` can make the MILP infeasible. The
+        `INIT parameter calibration study
+        <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/init-param-calibration.md>`_
+        on raven-docs compares the pipeline with and without scaling.
     verbose : bool
         Keyword-only; default ``False``. Prints one line per phase plus per-task progress
         during essential-reaction discovery.
