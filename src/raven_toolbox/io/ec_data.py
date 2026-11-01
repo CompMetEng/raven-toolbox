@@ -29,7 +29,8 @@ YAML schema (one entry per row):
         source: brenda      # optional, omitted if empty
         notes: free-text    # optional, omitted if empty
         eccodes: "1.1.1.1"  # optional; scalar OR a list when multiple
-        enzymes:            # column -> stoichiometric subunit count
+        enzymes:            # optional, omitted if the reaction has no enzymes;
+                            #   column -> stoichiometric subunit count
           P12345: 1.0
           P67890: 2.0       # heteromeric complex with 2 copies of P67890
     ec-enzymes:
@@ -306,7 +307,8 @@ def _build_ec_rxns_list(ec: EcData) -> list[dict[str, Any]]:
     """Translate the per-reaction ec fields and the ``rxn_enz_mat`` rows to the
     list-of-mappings YAML form.
 
-    Empty ``source`` / ``notes`` / ``eccodes`` strings are omitted.
+    Empty ``source`` / ``notes`` / ``eccodes`` strings are omitted, and so is
+    ``enzymes`` for a reaction whose ``rxn_enz_mat`` row has no entry.
     ``kcat`` is always written: a real turnover number when set,
     otherwise ``0`` (0 marks "no kcat assigned").
     """
@@ -330,7 +332,8 @@ def _build_ec_rxns_list(ec: EcData) -> list[dict[str, Any]]:
             entry["notes"] = ec.notes[i]
         if ec.eccodes[i]:
             entry["eccodes"] = _eccodes_to_yaml(ec.eccodes[i])
-        entry["enzymes"] = per_row_enzymes[i]
+        if per_row_enzymes[i]:
+            entry["enzymes"] = per_row_enzymes[i]
         out.append(entry)
     return out
 

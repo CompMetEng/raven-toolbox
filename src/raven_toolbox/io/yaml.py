@@ -90,8 +90,9 @@ _write_yaml.indent(mapping=2, sequence=2, offset=0)
 class _OmapConstructor(RoundTripConstructor):
     """Round-trip constructor that reads a content-less ``!!omap`` as an empty map.
 
-    GECKO and RAVEN write an ec reaction without enzymes as ``- enzymes: !!omap``
-    with nothing under the tag. YAML parses that as a null scalar carrying the omap
+    Files written by earlier GECKO and RAVEN versions have an ec reaction without
+    enzymes as ``- enzymes: !!omap`` with nothing under the tag (current writers
+    omit the ``enzymes`` entry). YAML parses that as a null scalar carrying the omap
     tag, which ruamel's own constructor rejects; RAVEN's ``readYAMLmodel.m`` reads
     it as an empty enzyme list.
     """
