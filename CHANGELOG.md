@@ -1,9 +1,5 @@
 # Changelog
 
-Milestones in the raven-toolbox port. For function-level status see
-[docs/raven_migration.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/migration.md); for open work see
-[docs/todo.md](https://github.com/CompMetEng/raven-toolbox/blob/develop/docs/reference/todo.md).
-
 ## 3.0.0b2 — 2026-11-01
 
 Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input,
