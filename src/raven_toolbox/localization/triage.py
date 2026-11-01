@@ -8,9 +8,7 @@ The triage needs no solver and reads only the proposal and the scores. Each cand
 ``uncertainty`` in ``[0, 1]`` blended from the signals that apply, and the list is ranked by it. The
 signals that fire differ per gene:
 
-* **low confidence**: the raw top probability of the predictor is low (in the yeast-GEM
-  benchmark, the share of calls that other evidence corroborates rises with the raw
-  probability). This signal carries the largest default weight (0.35) of the signals in the
+* **low confidence**: the raw top probability of the predictor is low. This signal carries the largest default weight (0.35) of the signals in the
   blended ``uncertainty``. Needs ``scores.raw_confidence``
   (``load_deeploc(keep_raw_confidence=True)``) or an explicit ``raw_confidence=``, because
   normalisation hides the raw probability.
@@ -28,7 +26,8 @@ reaction.
 
 See the `DeepLoc yeast-GEM benchmark
 <https://github.com/CompMetEng/raven-gecko-parity/blob/develop/docs/localization/deeploc_yeast_benchmark.md>`_
-on raven-gecko-parity for the source of the thresholds.
+on raven-gecko-parity compares the raw predictor probability with other evidence for the
+yeast-GEM calls and gives the bins and thresholds.
 """
 from __future__ import annotations
 
@@ -61,7 +60,7 @@ _DEFAULT_WEIGHTS = {"confidence": 0.35, "disagreement": 0.25, "margin": 0.20,
 
 
 def confidence_bin(p: float) -> str:
-    """Calibration bin of a raw confidence, with the bins of the benchmark's corroboration rates."""
+    """Bin of a raw confidence, with the bins of the benchmark's corroboration table."""
     for lo, hi in ((0.0, 0.5), (0.5, 0.7), (0.7, 0.9)):
         if lo <= p < hi:
             return f"[{lo:.1f},{hi:.1f})"

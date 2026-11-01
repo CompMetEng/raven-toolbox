@@ -104,18 +104,10 @@ def random_sampling(
         Seed for reproducible chains and draws.
     thinning:
         ``achr`` and ``chrr``: Markov-chain steps between recorded samples (default 100).
-        The default is calibrated for small models (~200 to 500 reactions). On genome-scale
-        models (>2000 reactions) lag-1 autocorrelation remains high even at thinning=100
-        (measured: 0.926 on yeast-GEM with 4102 reactions), giving about 12 effective
-        samples from 300 stored samples (ESS ≈ n × (1−ρ)/(1+ρ)). Independent chains at
-        these default settings also fail to agree with each other: on
-        yeast-GEM, 67.5% of reactions fail the Gelman-Rubin R-hat>1.1 convergence
-        threshold across 4 independent chains (96.5% fail the stricter R-hat>1.01).
-        Default-settings genome-scale output is therefore unconverged for most
-        reactions. Options for genome-scale analyses are increasing thinning
-        substantially (≥1000), increasing n_samples to compensate, using
-        ``method='chrr'`` (raven-toolbox's rounding-based alternative to ACHR), or
-        assessing sample quality with an ESS or R-hat diagnostic (see the
+        On genome-scale models (>2000 reactions) consecutive samples remain strongly
+        correlated at the default, and independent chains can disagree. Options for
+        genome-scale analyses are increasing thinning substantially (≥1000), increasing
+        n_samples, or assessing sample quality with an ESS or R-hat diagnostic (see the
         `sampling convergence calibration study
         <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/sampling-convergence-calibration.md>`_
         on raven-docs).

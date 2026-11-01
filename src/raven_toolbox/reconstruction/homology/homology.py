@@ -352,14 +352,10 @@ def get_model_from_homology(
         exclude every hit that it would exclude.
     min_align_len : int
         A hit passes only when its alignment length is at least this value. Default 100, as
-        RAVEN's ``minLen``. Values at or below 150 measured the same; on each of the four
-        organisms tested, the score against KEGG annotations (wrong matches counted double)
-        was 0.010 to 0.020 lower at 200 than at 100.
+        RAVEN's ``minLen``.
     min_identity : float
-        A hit passes only when its identity is at least this value. Default 40. The value
-        lies in the 35 to 45 range that the two reference sources favour; 35 scores higher
-        for two organisms (``yli`` 0.868 against 0.860, ``ani`` 0.814 against 0.804). It is
-        the filter that limits the result.
+        A hit passes only when its identity is at least this value. Default 40. It is the
+        filter that limits the result.
     review_identity : float or None
         Lower identity threshold (for example 25) that collects the reactions the thresholds
         reject. Any reaction that transfers at this lower identity but not at

@@ -56,8 +56,8 @@ def run_hmmsearch(
     One ``hmmsearch`` of the whole concatenated multi-profile ``library`` (query)
     against ``fasta`` (target), which is the fast search direction. It runs with
     ``--cpu`` and needs no ``hmmpress``. ``-Z`` is set to the profile count (when it
-    is positive) so that the per-hit E-values match the convention :func:`assign_kos` is
-    calibrated against (identical to a ``hmmscan`` against the same library). A
+    is positive) so that the per-hit E-values match the convention that :func:`assign_kos`
+    expects (identical to a ``hmmscan`` against the same library). A
     ``RuntimeError`` is raised if ``hmmsearch`` exits with a non-zero status.
 
     Parameters
@@ -134,21 +134,13 @@ def assign_kos(
     negative, the best (smallest) hit has ratio 1, and weaker hits have a smaller
     positive ratio.
 
-    The defaults were calibrated by cross-validation against the KEGG gene and KO
-    annotation of four organisms that span the prokaryote and eukaryote libraries and
-    well- and less-studied species (*S. cerevisiae*, *Cyanidioschyzon merolae*,
-    *E. coli*, *Mycoplasma genitalium*). Annotated genes have a median E-value of
-    1e-100 to 1e-155, and spurious hits cluster at about 1e-8, a separation of ~20
-    orders of magnitude. RAVEN's cut-off of ``1e-50`` lies within the E-value range of
-    the annotated genes and drops real but divergent hits. For the divergent minimal genome
-    (*M. genitalium*, ``mge``) the gene-to-KO recall is 0.95 at 1e-30 and 0.84 at 1e-50,
-    with no gain in rejecting noise (noise E-values are far weaker). The default cut-off
-    is therefore 1e-30, which recovers those hits and is ~22 orders of magnitude above
-    the noise level. ``min_score_ratio_g`` (default 0.9) sets the precision, because it
-    resolves genes with several KOs. Against RAVEN's settings (1e-50 and 0.8), the
-    recall for ``mge`` rises from 0.84 to 0.94. ``min_score_ratio_ko`` values of 0.0, 0.3
-    and 0.5 changed precision and recall by at most 0.02 across the four organisms; 0.3 is
-    kept as in RAVEN.
+    The default cut-off is 1e-30, weaker than RAVEN's ``1e-50``, so that real but divergent
+    hits are kept; the ratio filters then remove weak members. ``min_score_ratio_g`` (default
+    0.9, RAVEN uses 0.8) sets the precision, because it resolves genes with several KOs.
+    ``min_score_ratio_ko`` (default 0.3) is kept as in RAVEN.
+    The `KEGG HMM cut-off calibration study
+    <https://github.com/CompMetEng/raven-docs/blob/main/docs/parameter-tuning/studies/kegg-hmm-cutoff-calibration.md>`_
+    on raven-docs compares these settings with the KEGG gene and KO annotation of four organisms.
 
     Parameters
     ----------
