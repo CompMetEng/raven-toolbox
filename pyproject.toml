@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "raven-toolbox"
-version = "3.0.0b1"
+version = "3.0.0b2"
 description = "Reconstruction, Analysis and Visualization of Metabolic Networks in Python, a port of the RAVEN Toolbox built on cobrapy"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "GPL-3.0" }
 authors = [
     { name = "Eduard Kerkhoven", email = "eduardk@chalmers.se" },
 ]
@@ -27,7 +27,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",

@@ -231,7 +231,7 @@ documented fallback.
 Redistribution terms differ and must be complied with. BLAST+ is NCBI-produced
 and public domain; include its `LICENSE` for provenance. DIAMOND is **GPL-3.0**,
 so the licence text must be in the ZIP and the binary unmodified, and it must
-stay a separate asset rather than going inside the MIT wheel. HMMER is
+stay a separate asset outside the wheel. HMMER is
 BSD-3-Clause; include its `LICENSE`.
 
 Record per asset, in the release body or a provenance file: upstream URL,

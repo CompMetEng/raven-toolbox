@@ -62,7 +62,7 @@ Two sources, with different trade-offs:
    RAVEN_ROOT=$PWD/RAVEN pytest -m parity
    ```
 
-   RAVEN is GPL and raven-toolbox is MIT, so those files are **read where they
+   RAVEN is a separate repository, so those files are **read where they
    are** and never copied into this repository.
 
 2. **Recorded oracles** (`test_oracles.py`). For behaviour that cannot be

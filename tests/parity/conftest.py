@@ -22,7 +22,7 @@ FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "parity"
 def raven_root() -> Path:
     """A MATLAB RAVEN checkout, from ``$RAVEN_ROOT``.
 
-    RAVEN is GPL and this package is MIT, so its files are read in place and
+    RAVEN is a separate repository, so its files are read in place and
     never vendored here.
     """
     root = os.environ.get("RAVEN_ROOT")
