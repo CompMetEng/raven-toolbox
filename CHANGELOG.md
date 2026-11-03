@@ -6,7 +6,7 @@
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
 
-## 3.0.0b2 — 2026-11-01
+## 3.0.0b2 (2026-11-01)
 
 Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input, and a closer match to RAVEN in homology, gap-filling, curation tables and `ftinit`.
 
@@ -201,17 +201,17 @@ Breaking changes: `fill_gaps_kumar_milp` is renamed `fill_gaps_milp`, `omics.hpa
 * The `docs/` tree and its Read the Docs build are removed; the documentation is on [raven-docs](https://github.com/CompMetEng/raven-docs). The project URLs point to `CompMetEng`, and `data/deeploc` is not part of the source distribution.
 * Docstrings are corrected for `reporter_metabolites`, `random_sampling`, `remove_no_flux_reactions`, `check_tasks`, `connect_blocked_reactions` and `find_leak_metabolite`.
 
-## 3.0.0b1 — 2026-09-07
+## 3.0.0b1 (2026-09-07)
 
 First beta toward 3.0, matching the upcoming MATLAB RAVEN 3.0 beta.
 
 * keep `ftinit()` as the only extraction pipeline.
-* `analysis.compare_fluxes` replaces `follow_changed` — a `compareFluxes` port, following RAVEN
+* `analysis.compare_fluxes` replaces `follow_changed`: a `compareFluxes` port, following RAVEN
   dropping `followChanged`/`followFluxes`/`mapCompartments`.
 * `comparison.compare_models` gained EC-code / metabolite-name / equation overlap matrices,
   folded from `compareRxnsGenesMetsComps`.
 * New: `curation.rename_model_genes`, ported from `renameModelGenes`.
-* New: `curation.get_gene_data`, `download_genome_data`, `process_protein_fasta_file` — the
+* New: `curation.get_gene_data`, `download_genome_data`, `process_protein_fasta_file`: the
   genome-data cluster.
 * New: `manipulation.replace_metabolite`, ported from `replaceMets`.
 * New: `gapfilling.find_leak_metabolite`, ported from `findLeakMetabolite`.
@@ -227,7 +227,7 @@ First beta toward 3.0, matching the upcoming MATLAB RAVEN 3.0 beta.
 * `init.ftinit` implements the metabolomics production-bonus (`metabolomics=`, `prod_weight=`).
 * `init.ftinit` reproducibility parameters renamed: `strict_gap`/`canonical` are now
   `prove_abs_gap`/`resolve_ties`, with corrected determinism numbers.
-* ftINIT task gap-filling now edits the reference model in place instead of copying it — ~23%
+* ftINIT task gap-filling now edits the reference model in place instead of copying it, and is ~23%
   faster on a genome-scale extraction.
 * Fixed three ftINIT/task-essential bugs: a task-essential boundary default, a checkpoint
   file-handle leak, and a non-finite tie-break objective.
@@ -250,9 +250,9 @@ First beta toward 3.0, matching the upcoming MATLAB RAVEN 3.0 beta.
   a null genes/reactions/metabolites key as empty.
 * Parameter defaults measured and unified: BLAST/DIAMOND/HMMER threading, homology
   `min_align_len`/`evalue`, `get_init_model.allow_excretion`.
-* Removed `io.export_model_to_sif` — a mislabeled port of a MATLAB function that never existed.
+* Removed `io.export_model_to_sif`: a mislabeled port of a MATLAB function that never existed.
 
-## 0.4.0 — 2026-08-28
+## 0.4.0 (2026-08-28)
 
 A `raven-gecko-parity` cross-validation harness closed six MATLAB-parity divergences and brought
 the YAML writer to byte-parity; ftINIT gained an opt-in deterministic-extraction mode; compartment
@@ -266,7 +266,7 @@ placement and gap-filling in `assign_compartments` were fixed for determinism an
   unreliable indicator-MILP gapfill.
 * `assign_compartments` reaction placement is now deterministic and score-aligned instead of a
   solver tie-break (yeast agreement 52.8% → 72.5%).
-* `diff_models` compares GPRs as logic (DNF-normalised), not text — operand order no longer
+* `diff_models` compares GPRs as logic (DNF-normalised), not text; operand order no longer
   registers as a difference.
 * `load_delta_g_csv` now stamps every matched value literally by default, matching `deltaGCSV`.
 * `confidence.annotate_confidence` runs every applicable scorer in one call; `curation_priority`
@@ -285,11 +285,11 @@ placement and gap-filling in `assign_compartments` were fixed for determinism an
 * BLAST/homology defaults matched to RAVEN and measured: `run_blast.evalue` → `1e-4`,
   `min_align_len` → `100`; new `review_identity` surfaces near-miss homology candidates.
 * New `set_exchange_bounds`, RAVEN's `setExchangeBounds` port.
-* New cross-language parity testing harness (`tests/parity/`) — exact, set-level, and
+* New cross-language parity testing harness (`tests/parity/`): exact, set-level, and
   statistical comparison tiers against real MATLAB RAVEN output.
 * Fixed a downloaded binary bundle leaving its non-primary executables non-executable.
 
-## 0.3.0 — 2026-07-16
+## 0.3.0 (2026-07-16)
 
 Compartment localisation and per-reaction confidence tracking, new gap-filling and
 flux-sampling algorithms, ftINIT brought to parity with RAVEN, and KEGG artefact hosting
@@ -303,23 +303,23 @@ moved to the dedicated `raven-data` repository.
 * Fixed `get_elemental_balance` crashing on an unparseable polymer formula (now `unknown`).
 * Fixed `score_localization_confidence` vetoing reactions it simply couldn't measure.
 * Fixed gap-fill materialising on the wrong compartment metabolite in `assign_compartments`.
-* New `localization.transport_evidence` — per-gene transporter evidence lowers a metabolite's
+* New `localization.transport_evidence`: per-gene transporter evidence lowers a metabolite's
   transport cost in the assignment MILPs.
 * `assign_compartments`/`apply_assignment`/`AssignmentProposal` consolidated into raven-toolbox
   from the standalone `assignCompartments` repo.
 * Benchmarked the compartment-assignment MILP against CarveFungi's own carve-MILP and against
-  RAVEN's `predictLocalization` — more accurate and deterministic on both.
-* New `triage_localization` — flags genes/reactions whose localisation call is shakiest, each
+  RAVEN's `predictLocalization`, more accurate and deterministic on both.
+* New `triage_localization`: flags genes/reactions whose localisation call is shakiest, each
   with a plain-English reason.
 * Retuned `DEEPLOC_COMPARTMENT_TRUST` and the `min_confidence`/`membrane_threshold` gates from
   real yeast validation data.
-* Cross-species DeepLoc benchmarks (yeast, *Arabidopsis*, *Chlamydomonas*, Human-GEM) — DeepLoc
+* Cross-species DeepLoc benchmarks (yeast, *Arabidopsis*, *Chlamydomonas*, Human-GEM): DeepLoc
   2.1 generalises across kingdoms.
 * `load_deeploc` gained `normalise=False` for raw calibrated probabilities (accuracy-neutral for
   assignment).
 * New `combine_scores` (weighted-sum consensus across localisation predictors) and
   `min_confidence=`/`membrane_split=` loader gates.
-* New `prepare_deeploc_input`, `fetch_protein_sequences`, `write_fasta` — writes a
+* New `prepare_deeploc_input`, `fetch_protein_sequences`, `write_fasta`: writes a
   DeepLoc-ready protein FASTA for a model's genes.
 * New localisation loaders: `load_mulocdeep`, `load_compartments`, `load_uniprot`,
   `fetch_uniprot_localization`. Removed `load_wolfpsort`.
@@ -337,18 +337,18 @@ moved to the dedicated `raven-data` repository.
 * CI now runs on macOS and Windows in addition to Linux.
 * Docstring rendering fixes for `set_gam` and `add_sbo_terms` (no API change).
 
-## 0.2.0 — 2026-06-14
+## 0.2.0 (2026-06-14)
 
 Project rename plus KEGG-reconstruction and CI improvements.
 
 * Project renamed `raven-python` → `raven-toolbox`; import package is now `raven_toolbox`.
 * `get_kegg_model_from_sequences` uses `hmmsearch` instead of `hmmscan`.
 * `get_kegg_model_for_organism_from_artefacts` auto-resolves its taxonomy artefact.
-* Test data no longer ships real KEGG records — generated at runtime instead.
+* Test data no longer ships real KEGG records; they are generated at runtime instead.
 * Removed the unimplemented `visualization` stub and its extra.
 * CI updated to Node 24 / `actions/checkout@v5` / `actions/setup-python@v6`.
 
-## 0.1.0 — 2026-06-10
+## 0.1.0 (2026-06-10)
 
 First release with published, downloadable KEGG artefacts, plus a cobra-aligned hardening pass.
 
@@ -362,7 +362,7 @@ First release with published, downloadable KEGG artefacts, plus a cobra-aligned 
   `connect_blocked_reactions` non-positive-penalty guard, SHA256 cache re-verification, and
   fixes for a handful of latent edge-case crashes, each with a regression test.
 
-## 0.1.0a1 — 2026-05-30
+## 0.1.0a1 (2026-05-30)
 
 First alpha release. Covers the functional scope of RAVEN built on cobrapy: de-novo
 reconstruction (KEGG / homology), context-specific modeling (tINIT / ftINIT), metabolic-task
