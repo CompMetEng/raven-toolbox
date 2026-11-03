@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Data
+
+* The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
+
 ## 3.0.0b2 — 2026-11-01
 
 Second beta toward 3.0. The main changes are RAVEN-format model export, SuppOrth homology input, and a closer match to RAVEN in homology, gap-filling, curation tables and `ftinit`.
