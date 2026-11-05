@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+* `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
+
 ### Data
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
