@@ -91,27 +91,23 @@ def _rewrite_node(node, ortho: dict):
     return _group("and", children)
 
 
-def _contains_unmapped(expr) -> bool:
-    if isinstance(expr, _Unmapped):
-        return True
-    return isinstance(expr, tuple) and any(_contains_unmapped(c) for c in expr[1])
-
-
 def _apply_policy(expr, policy: str, model_id: str):
     """Resolve the unmapped leaves of a rewritten tree under ``complex_policy``.
 
-    ``flag`` turns each into an ``OLD_<model>_<gene>`` placeholder gene, ``keep`` removes
-    them (a group left empty disappears with them) and ``drop`` removes the whole reaction
-    as soon as one is left. Returns ``None`` when nothing remains.
+    ``flag`` turns each into an ``OLD_<model>_<gene>`` placeholder gene and ``keep`` removes
+    them (a group left empty disappears with them). ``drop`` removes each complex that has
+    one: an AND group with an unmapped subunit is removed as a whole, and an OR group keeps
+    its remaining alternatives. Returns ``None`` when nothing remains.
     """
-    if policy == "drop":
-        return None if _contains_unmapped(expr) else expr
     if isinstance(expr, _Unmapped):
         return f"OLD_{model_id}_{expr.gene}" if policy == "flag" else None
     if isinstance(expr, str):
         return expr
     op, children = expr
-    return _group(op, [c for c in (_apply_policy(c, policy, model_id) for c in children) if c is not None])
+    resolved = [_apply_policy(c, policy, model_id) for c in children]
+    if policy == "drop" and op == "and" and any(c is None for c in resolved):
+        return None
+    return _group(op, [c for c in resolved if c is not None])
 
 
 def _prune_genes(node, removed: set):
@@ -334,11 +330,15 @@ def get_model_from_homology(
     complex_policy : str
         What happens to an AND-linked subunit with no ortholog. Default ``"flag"``.
         ``"flag"`` keeps the reaction with a placeholder gene (``OLD_<model>_<gene>``) for
-        later curator review, ``"keep"`` removes that subunit, ``"drop"`` drops the whole
-        reaction. An isozyme group counts as a subunit without an ortholog only when none of
-        its members has one, and then one placeholder stands for it. ``"drop"`` removes the
-        reaction whenever a placeholder would remain, also when another isozyme branch is
-        complete. Any other value raises :class:`ValueError`.
+        later curator review, ``"keep"`` removes that subunit, ``"drop"`` removes each complex
+        that has such a subunit and removes the reaction when no complex remains. An isozyme
+        group counts as a subunit without an ortholog only when none of its members has one,
+        and then one placeholder stands for it. Under ``"drop"``, the rule
+        ``(A and B) or (C and D)`` with no ortholog of ``B`` becomes ``C and D``, and the rule
+        ``(A or B) and C`` with no ortholog of ``A`` or ``B`` removes the reaction. A complex
+        that contains another complete complex is kept, and a gene shared by several complexes
+        removes only the complexes in which it has no ortholog. Any other value raises
+        :class:`ValueError`.
     only_genes_in_models : bool
         Restricts the hits table to hits whose template gene appears in the given ``models``
         before mapping orthologs, so a gene the templates lack cannot be a best hit. It raises

@@ -130,9 +130,28 @@ def test_flagged_subunit_stays_beside_a_complete_isozyme_branch():
     assert _policy_draft("A or (B and C)", ["A", "C"], "keep") == {"R1": "nA or nC"}
 
 
-def test_complex_policy_drop_removes_reaction_with_any_flagged_subunit():
-    assert _policy_draft("A or (B and C)", ["A", "C"], "drop") == {}
-    assert _policy_draft("(A and B) or C", ["C"], "drop") == {}
+def test_complex_policy_drop_removes_each_complex_with_a_flagged_subunit():
+    assert _policy_draft("A or (B and C)", ["A", "C"], "drop") == {"R1": "nA"}
+    assert _policy_draft("(A and B) or C", ["C"], "drop") == {"R1": "nC"}
+    assert _policy_draft("A and B", ["A"], "drop") == {}
+    assert _policy_draft("(A and B) or (C and D)", ["A", "C", "D"], "drop") == {"R1": "nC and nD"}
+
+
+def test_complex_policy_drop_keeps_complete_complexes_of_a_shared_subunit():
+    rule = "(A and B) or (A and C) or (D and E) or (A and B and F)"
+    assert _policy_draft(rule, ["A", "B", "C", "D", "F"], "drop") == {
+        "R1": "(nA and nB) or (nA and nC) or (nA and nB and nF)"}
+    assert _policy_draft("(A and B) or B", ["B"], "drop") == {"R1": "nB"}
+    assert _policy_draft("(A and B) or B", ["A", "B"], "drop") == {"R1": "(nA and nB) or nB"}
+
+
+def test_complex_policy_drop_keeps_isozyme_groups_inside_a_complex():
+    hits = make_ortholog_hits([("A", "n1"), ("A", "n2"), ("B", "n3")], "T", "N")
+    draft = get_model_from_homology([_one_rule_template("T", "R1", "A and B")], hits, "N", complex_policy="drop")
+    assert _rules(draft) == {"R1": "(n1 or n2) and n3"}
+
+
+def test_complex_policy_flag_and_keep_on_an_incomplete_complex_beside_an_isozyme():
     assert _policy_draft("(A and B) or C", ["C"], "flag") == {"R1": "(OLD_T_A and OLD_T_B) or nC"}
     assert _policy_draft("(A and B) or C", ["C"], "keep") == {"R1": "nC"}
 
