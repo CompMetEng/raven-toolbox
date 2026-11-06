@@ -4,6 +4,7 @@
 
 ### Breaking changes
 
+* `get_model_from_homology` with `preferred_order` treats a template gene that maps to a gene an earlier template already maps as a subunit without an ortholog, and `complex_policy` decides what happens to it (was: the gene and every part of the rule that needs it were removed). For the rule `(a and b) or x` with `a` taken by an earlier template, `flag` gives `(OLD_T2_a and nb) or nx`, `keep` gives `nb or nx` and `drop` gives `nx`. A reaction that has genes, none of which keeps a mapping, is not transferred.
 * `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
 
 ### Data

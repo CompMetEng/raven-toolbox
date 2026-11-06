@@ -110,21 +110,6 @@ def _apply_policy(expr, policy: str, model_id: str):
     return _group(op, [c for c in resolved if c is not None])
 
 
-def _prune_genes(node, removed: set):
-    """Remove template genes from a GPR AST, as RAVEN's removeGenes does.
-
-    Returns the pruned tree, or ``None`` when the rule cannot be satisfied without them
-    (a removed gene in an AND, or every branch of an OR removed).
-    """
-    if isinstance(node, ast.Name):
-        return None if node.id in removed else node
-    kids = [_prune_genes(c, removed) for c in node.values]
-    if isinstance(node.op, ast.And):
-        return None if any(k is None for k in kids) else node
-    kept = [k for k in kids if k is not None]
-    return ast.BoolOp(op=ast.Or(), values=kept) if kept else None
-
-
 def _group(op: str, children: list):
     """Flatten same-operator groups, drop duplicates, and unwrap a single child."""
     flat: list = []
@@ -146,23 +131,18 @@ def _render(expr, parent: str | None = None) -> str:
     return f"({text})" if parent is not None and parent != op else text
 
 
-def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str, removed: frozenset = frozenset()):
+def _rewrite_gpr(rxn, ortho: dict, policy: str, model_id: str):
     """Return the rewritten GPR string, or None if the reaction is unsupported.
 
-    ``removed`` holds template genes taken out of the template before the rewrite (genes a
-    preferred model already covers); a reaction that cannot work without them is unsupported.
+    A template gene that ``ortho`` does not map, including one that a preferred model already
+    covers, is a subunit without an ortholog and follows ``policy``.
     """
     if not rxn.gene_reaction_rule:
         return None
     # A reaction is only transferred if at least one of its genes has an ortholog.
-    if not any(g.id in ortho or g.id in removed for g in rxn.genes):
+    if not any(g.id in ortho for g in rxn.genes):
         return None
-    body = rxn.gpr.body
-    if removed:
-        body = _prune_genes(body, set(removed))
-        if body is None:
-            return None
-    result = _apply_policy(_rewrite_node(body, ortho), policy, model_id)
+    result = _apply_policy(_rewrite_node(rxn.gpr.body, ortho), policy, model_id)
     return None if result is None else _render(result)
 
 
@@ -235,26 +215,23 @@ def _ortholog_map(
     return ortho
 
 
-def _apply_preferred_order(ortho: dict, order: list[str]) -> tuple[dict, dict]:
+def _apply_preferred_order(ortho: dict, order: list[str]) -> dict:
     """Give each new gene to the first model (in order) that maps it, as RAVEN does.
 
     A template gene of a later model that maps to any new gene an earlier model already
-    maps is removed from that model altogether, together with its other mappings. The
-    new genes of every model count as taken, including those of its removed genes.
-    Returns the pruned mapping and ``{model_id: {removed template genes}}``.
+    maps loses all its mappings and counts as a gene without an ortholog. The new genes of
+    every model count as taken, including those of the genes that lose their mappings.
+    Returns the pruned mapping.
     """
     taken: set = set()
     pruned: dict = {mid: {} for mid in ortho}
-    removed: dict = {mid: set() for mid in ortho}
     for position, model_id in enumerate(order):
         per_model = ortho.get(model_id, {})
         for template_gene, new_genes in per_model.items():
-            if position > 0 and taken.intersection(new_genes):
-                removed[model_id].add(template_gene)
-            else:
+            if not (position > 0 and taken.intersection(new_genes)):
                 pruned[model_id][template_gene] = new_genes
         taken.update(ng for new_genes in per_model.values() for ng in new_genes)
-    return pruned, removed
+    return pruned
 
 
 def get_model_from_homology(
@@ -303,11 +280,14 @@ def get_model_from_homology(
     preferred_order : Sequence[str] or None
         Breaks ties when more than one template maps the same new-organism gene: the gene is
         mapped to the earlier template in the list, and a gene of a later template that maps
-        to any gene an earlier template already maps is removed from that template
-        altogether, with its other mappings. A reaction of the later template that cannot work
-        without the removed gene is not transferred. Templates are merged in the order they
-        were given in ``models``, whatever the preferred order is, and a template that
-        ``preferred_order`` leaves out contributes nothing. The tie-break applies only when
+        to any gene an earlier template already maps loses all its mappings. It counts as a
+        subunit without an ortholog and follows ``complex_policy``: for the rule
+        ``(a and b) or x`` with ``a`` taken by an earlier template, ``"flag"`` gives
+        ``(OLD_<model>_a and nb) or nx``, ``"keep"`` gives ``nb or nx`` and ``"drop"`` gives
+        ``nx``. A reaction of the later template that has genes, none of which keeps a mapping, is
+        not transferred. Templates are merged in the order they were given in ``models``,
+        whatever the preferred order is, and a template that ``preferred_order`` leaves out
+        contributes nothing. The tie-break applies only when
         more than one model is given. Default ``None``, which uses the order of ``models``.
         RAVEN's ``preferredOrder`` decides which template receives a gene in the same way and
         merges the models in the order of ``models``.
@@ -473,12 +453,11 @@ def get_model_from_homology(
         )
 
     order = [str(x) for x in preferred_order] if preferred_order else model_ids
-    removed: dict = {}
     if preferred_order and len(models) > 1:
-        ortho, removed = _apply_preferred_order(ortho, order)
+        ortho = _apply_preferred_order(ortho, order)
 
     draft = _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
-                      keep_gene_free, preserve_notes, removed)
+                      keep_gene_free, preserve_notes)
 
     candidates = None
     if review_identity is not None:
@@ -491,12 +470,11 @@ def get_model_from_homology(
             model_genes=model_genes, max_evalue=max_evalue,
             min_align_len=min_align_len, min_identity=review_identity,
         )
-        loose_removed: dict = {}
         if preferred_order and len(models) > 1:
-            loose_ortho, loose_removed = _apply_preferred_order(loose_ortho, order)
+            loose_ortho = _apply_preferred_order(loose_ortho, order)
         loose = _transfer(
             model_by_id, order, loose_ortho, model_for, model_ids, complex_policy,
-            keep_gene_free, preserve_notes, loose_removed,
+            keep_gene_free, preserve_notes,
         )
         extra = {r.id for r in loose.reactions} - {r.id for r in draft.reactions}
         candidates = _candidate_evidence(
@@ -509,14 +487,13 @@ def get_model_from_homology(
 
 
 def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
-              keep_gene_free=False, preserve_notes=False, removed=None) -> cobra.Model:
+              keep_gene_free=False, preserve_notes=False) -> cobra.Model:
     """Assemble the draft from the reactions of each template whose GPRs survive rewriting.
 
     The templates are merged in the order of ``model_ids`` (the order they were given),
     whatever the preferred order is; reaction ids shared between templates are resolved
     by that merge. Templates left out of ``order`` contribute nothing.
     """
-    removed = removed or {}
     transferred = []
     for mid in model_ids:
         model = model_by_id.get(mid)
@@ -526,7 +503,7 @@ def _transfer(model_by_id, order, ortho, model_for, model_ids, complex_policy,
         m = model.copy()
         keep: dict[str, str] = {}
         for rxn in m.reactions:
-            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid, frozenset(removed.get(mid, ())))
+            new_gpr = _rewrite_gpr(rxn, per_model, complex_policy, mid)
             if new_gpr is None and keep_gene_free and not rxn.gene_reaction_rule:
                 new_gpr = ""
             if new_gpr is not None:
