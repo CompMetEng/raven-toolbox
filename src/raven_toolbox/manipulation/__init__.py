@@ -15,10 +15,10 @@ from .remove import remove_genes, remove_metabolites
 from .replace import replace_metabolite
 from .simplify import (
     constrain_reversible_reactions,
+    contract_model,
     find_duplicate_reactions,
     group_linear_reactions,
     remove_dead_end_reactions,
-    remove_duplicate_reactions,
     remove_no_flux_reactions,
     remove_zero_interval_reactions,
     simplify_model,
@@ -34,6 +34,7 @@ __all__ = [
     "change_reaction_equations",
     "close_model",
     "constrain_reversible_reactions",
+    "contract_model",
     "convert_to_irreversible",
     "copy_to_compartment",
     "expand_model",
@@ -44,7 +45,6 @@ __all__ = [
     "merge_models",
     "remove_bad_reactions",
     "remove_dead_end_reactions",
-    "remove_duplicate_reactions",
     "remove_genes",
     "remove_metabolites",
     "remove_no_flux_reactions",

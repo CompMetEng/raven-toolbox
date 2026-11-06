@@ -21,7 +21,7 @@ import cobra
 import pytest
 
 from raven_toolbox.gapfilling import connect_blocked_reactions
-from raven_toolbox.manipulation import remove_duplicate_reactions
+from raven_toolbox.manipulation import contract_model
 
 pytestmark = pytest.mark.parity
 
@@ -107,7 +107,7 @@ def test_duplicate_removal_keeps_the_same_reaction_every_run():
                 {m: c for m, c in model.reactions.R1.metabolites.items()}
             )
             model.add_reactions([clone])
-        remove_duplicate_reactions(model)
+        contract_model(model)
         kept.append(tuple(sorted(r.id for r in model.reactions)))
 
     assert all("R1_dup1" not in run or "R1_dup2" not in run for run in kept), (
@@ -115,7 +115,7 @@ def test_duplicate_removal_keeps_the_same_reaction_every_run():
         "selection does -- fix the fixture, not the assertion"
     )
     assert len(set(kept)) == 1, (
-        f"remove_duplicate_reactions kept different reactions across {RUNS} "
+        f"contract_model kept different reactions across {RUNS} "
         f"runs: {set(kept)}"
     )
 

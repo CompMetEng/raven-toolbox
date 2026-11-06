@@ -5,6 +5,7 @@
 ### Breaking changes
 
 * `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
+* `manipulation.contract_model` is the new name of `remove_duplicate_reactions`, after RAVEN's `contractModel`, and the old name is removed. `contract_model` takes `dist_reverse` (default `True`), the `distReverse` option of `contractModel`: with `False`, reactions with the same metabolites and a different reversibility are duplicates.
 
 ### Data
 

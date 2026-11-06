@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import cobra
 
-from raven_toolbox.manipulation.simplify import remove_duplicate_reactions
+from raven_toolbox.manipulation.simplify import contract_model
 
 __all__ = ["replace_metabolite"]
 
@@ -109,7 +109,7 @@ def replace_metabolite(
             rxn.add_metabolites({old: -coef, rep: coef})
         model.remove_metabolites([old])
 
-        return remove_duplicate_reactions(model, restrict_to_metabolites=[rep])
+        return contract_model(model, restrict_to_metabolites=[rep])
 
     reps = [m for m in model.metabolites if m.name == replacement]
     if not reps:
@@ -142,7 +142,7 @@ def replace_metabolite(
         survivor, *duplicates = group
         # Track the metabolite that actually ends up holding this group's
         # stoichiometry (not necessarily r itself -- the first-encountered
-        # member of the group survives, same as remove_duplicate_reactions'
+        # member of the group survives, same as contract_model's
         # own survivor rule, and r can be the one that gets merged away).
         # Reactions touching it are what may have become duplicates.
         survivors.append(survivor)
@@ -155,4 +155,4 @@ def replace_metabolite(
     if to_delete:
         model.remove_metabolites(to_delete)
 
-    return remove_duplicate_reactions(model, restrict_to_metabolites=survivors)
+    return contract_model(model, restrict_to_metabolites=survivors)
