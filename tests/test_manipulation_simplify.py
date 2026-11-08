@@ -5,9 +5,9 @@ import pytest
 from raven_toolbox.manipulation import (
     add_reactions_from_equations,
     constrain_reversible_reactions,
+    contract_model,
     group_linear_reactions,
     remove_dead_end_reactions,
-    remove_duplicate_reactions,
     remove_no_flux_reactions,
     remove_zero_interval_reactions,
     simplify_model,
@@ -72,7 +72,7 @@ def test_dead_end_ignores_bounds_on_its_own_matching_raven():
     assert {"R_in", "R1", "R_locked", "R_out"} == {r.id for r in m.reactions}
 
 
-# --- remove_duplicate_reactions -------------------------------------------
+# --- contract_model -------------------------------------------
 
 def _two_rxn_model(eq1, b1, eq2, b2, c2=0.0):
     m = cobra.Model("t")
@@ -90,14 +90,14 @@ def _two_rxn_model(eq1, b1, eq2, b2, c2=0.0):
 
 def test_duplicates_removed():
     m = _two_rxn_model("a --> b", (0, 1000), "a --> b", (0, 1000))
-    assert remove_duplicate_reactions(m) == ["R2"]
+    assert contract_model(m) == ["R2"]
     assert [r.id for r in m.reactions] == ["R1"]
 
 
 def test_duplicates_with_different_bounds_merge_to_the_widest():
     m = _two_rxn_model("a <=> b", (-5, 10), "a <=> b", (-10, 20), c2=1.0)
     with pytest.warns(UserWarning) as rec:
-        removed = remove_duplicate_reactions(m)
+        removed = contract_model(m)
     assert removed == ["R2"]
     assert m.reactions.R1.bounds == (-10, 20)
     assert m.reactions.R1.objective_coefficient == 1.0
@@ -106,17 +106,24 @@ def test_duplicates_with_different_bounds_merge_to_the_widest():
 
 def test_duplicates_differing_in_reversibility_are_kept():
     m = _two_rxn_model("a --> b", (0, 10), "a <=> b", (-10, 10))
-    assert remove_duplicate_reactions(m) == []
+    assert contract_model(m) == []
+
+
+def test_dist_reverse_false_merges_reactions_that_differ_in_reversibility():
+    m = _two_rxn_model("a --> b", (0, 10), "a <=> b", (-10, 10))
+    with pytest.warns(UserWarning):
+        assert contract_model(m, dist_reverse=False) == ["R2"]
+    assert [r.id for r in m.reactions] == ["R1"]
 
 
 def test_reversible_duplicates_in_opposite_directions_merge():
     m = _two_rxn_model("a <=> b", (-10, 10), "b <=> a", (-10, 10))
-    assert remove_duplicate_reactions(m) == ["R2"]
+    assert contract_model(m) == ["R2"]
 
 
 def test_irreversible_opposite_directions_are_kept():
     m = _two_rxn_model("a --> b", (0, 10), "b --> a", (0, 10))
-    assert remove_duplicate_reactions(m) == []
+    assert contract_model(m) == []
 
 
 def test_duplicates_ignore_reserved_like_contract_model():
@@ -349,7 +356,7 @@ def test_simplify_model_runs_modes_in_raven_order(monkeypatch):
 
     calls = []
     for name in (
-        "remove_duplicate_reactions", "remove_zero_interval_reactions",
+        "contract_model", "remove_zero_interval_reactions",
         "remove_dead_end_reactions", "remove_no_flux_reactions",
         "constrain_reversible_reactions", "group_linear_reactions",
     ):
@@ -359,7 +366,7 @@ def test_simplify_model_runs_modes_in_raven_order(monkeypatch):
         delete_duplicates=True, group_linear=True, constrain_reversible=True,
     )
     assert calls == [
-        "remove_duplicate_reactions", "remove_zero_interval_reactions",
+        "contract_model", "remove_zero_interval_reactions",
         "remove_dead_end_reactions", "remove_no_flux_reactions",
         "constrain_reversible_reactions", "group_linear_reactions",
     ]
