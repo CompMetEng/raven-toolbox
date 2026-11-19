@@ -236,11 +236,12 @@ def _write_txt(model: cobra.Model, path: Path) -> None:
             )
 
 
-def _write_dependencies(path: Path, model: cobra.Model) -> None:
-    """Versions of everything that writes the files, then the model's own version and date.
+def _write_dependencies(path: Path, model: cobra.Model, *, model_version: bool = False) -> None:
+    """Versions of everything that writes the files, then optionally the model's version and date.
 
     The order is fixed and nothing depends on the time of the export, so the same model
-    exported twice gives the same file.
+    exported twice gives the same file. With ``model_version`` false the file lists the
+    toolchain only, as RAVEN's exportForGit does.
     """
     lines = [
         ("python", platform.python_version()),
@@ -251,10 +252,11 @@ def _write_dependencies(path: Path, model: cobra.Model) -> None:
         ("openpyxl", _version("openpyxl")),
         ("raven_toolbox", _version("raven_toolbox")),
     ]
-    meta = get_model_metadata(model)
-    for key in ("version", "date"):
-        if meta.get(key) is not None:
-            lines.append((f"model_{key}", str(meta[key])))
+    if model_version:
+        meta = get_model_metadata(model)
+        for key in ("version", "date"):
+            if meta.get(key) is not None:
+                lines.append((f"model_{key}", str(meta[key])))
     with open(path, "w", encoding="utf-8") as fh:
         for name, value in lines:
             fh.write(f"{name}\t{value}\n")
@@ -303,6 +305,7 @@ def export_for_git(
     varname: str | None = None,
     version: str | None = None,
     date: str | datetime.date | None = None,
+    model_version_in_dependencies: bool = False,
 ) -> Path:
     """Write ``model`` into a Standard-GEM repository layout.
 
@@ -338,6 +341,10 @@ def export_for_git(
     date : str or datetime.date or None
         Date stamped into the exported copy's metadata in the same way. When not given, the
         model's own date is written.
+    model_version_in_dependencies : bool
+        A ``bool``. If True, ``dependencies.txt`` also lists ``model_version`` and
+        ``model_date`` from the model metadata. The default (False) lists the toolchain
+        only, as RAVEN's ``exportForGit`` does.
 
     Returns
     -------
@@ -347,9 +354,14 @@ def export_for_git(
     Raises
     ------
     TypeError
-        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool`` or ``numpy.bool_``.
+        If ``main_branch_flag``, ``sub_dirs`` or ``model_version_in_dependencies`` is not a
+        ``bool`` or ``numpy.bool_``.
     """
-    for name, flag in (("main_branch_flag", main_branch_flag), ("sub_dirs", sub_dirs)):
+    for name, flag in (
+        ("main_branch_flag", main_branch_flag),
+        ("sub_dirs", sub_dirs),
+        ("model_version_in_dependencies", model_version_in_dependencies),
+    ):
         if not isinstance(flag, (bool, np.bool_)):
             raise TypeError(
                 f"{name} must be a bool or numpy.bool_, got {type(flag).__module__}.{type(flag).__qualname__}"
@@ -385,6 +397,6 @@ def export_for_git(
     if "txt" in formats:
         _write_txt(model, target("txt"))
 
-    _write_dependencies(root / "dependencies.txt", model)
+    _write_dependencies(root / "dependencies.txt", model, model_version=model_version_in_dependencies)
 
     return root

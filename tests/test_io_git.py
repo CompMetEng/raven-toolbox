@@ -93,10 +93,17 @@ def test_all_five_formats_are_written_by_default(model, tmp_path):
         assert (root / fmt / f"model.{fmt}").exists()
 
 
+def test_dependencies_list_the_toolchain_only_by_default(model, tmp_path):
+    set_model_metadata(model, version="1.2.0", date="2026-10-05")
+    root = export_for_git(model, tmp_path, formats=("yml",))
+    names = [line.split("\t")[0] for line in (root / "dependencies.txt").read_text().splitlines()]
+    assert names == ["python", "cobra", "libSBML", "ruamel.yaml", "scipy", "openpyxl", "raven_toolbox"]
+
+
 def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     set_model_metadata(model, version="1.2.0", date="2026-10-05")
-    first = export_for_git(model, tmp_path / "a", formats=("yml",))
-    second = export_for_git(model, tmp_path / "b", formats=("yml",))
+    first = export_for_git(model, tmp_path / "a", formats=("yml",), model_version_in_dependencies=True)
+    second = export_for_git(model, tmp_path / "b", formats=("yml",), model_version_in_dependencies=True)
     text = (first / "dependencies.txt").read_text()
     assert text == (second / "dependencies.txt").read_text()
     names = [line.split("\t")[0] for line in text.splitlines()]
@@ -107,7 +114,7 @@ def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     assert "model_version\t1.2.0" in text
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies"])
 @pytest.mark.parametrize("value", ["false", "true", "", 0, 1, None])
 def test_export_for_git_refuses_a_flag_that_is_not_a_bool(model, tmp_path, flag, value):
     with pytest.raises(TypeError, match=flag):
@@ -392,7 +399,7 @@ def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
     assert out.returncode != 0 and "feature" in out.stderr
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies"])
 def test_export_for_git_accepts_numpy_booleans(model, tmp_path, flag):
     import numpy as np
 

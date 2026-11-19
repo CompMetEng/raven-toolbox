@@ -8,6 +8,7 @@
 * `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
 * `manipulation.contract_model` is the new name of `remove_duplicate_reactions`, after RAVEN's `contractModel`, and the old name is removed. `contract_model` takes `dist_reverse` (default `True`), the `distReverse` option of `contractModel`: with `False`, reactions with the same metabolites and a different reversibility are duplicates.
 * The SBML file of `export_for_git` writes the protein of a gene as `fbc:name` and the gene short name as `fbc:label`, as RAVEN's `exportModel` does, so cobra reads the protein as the gene name (was: the gene short name as both, and the protein as a note).
+* `export_for_git` lists only the toolchain in `dependencies.txt`, as RAVEN's `exportForGit` does, and lists `model_version` and `model_date` only with `model_version_in_dependencies=True` (was: always).
 
 ### Model I/O
 
