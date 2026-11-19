@@ -235,7 +235,10 @@ def _consistency(path):
 
 
 def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
-    """RAVEN's importModel reads geneShortNames from fbc:label before fbc:name."""
+    """RAVEN's importModel reads geneShortNames from fbc:label and proteins from fbc:name.
+
+    A gene without a protein has no fbc:name, and its label is the short name or the gene id.
+    """
     model.reactions.R1.gene_reaction_rule = "ENSG1 or ENSG2"
     model.genes.ENSG1.name = "DPM1"
     root = export_for_git(model, tmp_path, formats=("xml",))
@@ -244,17 +247,28 @@ def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
     doc = libsbml.readSBMLFromFile(str(path))
     products = doc.getModel().getPlugin("fbc").getListOfGeneProducts()
     labels = {gp.getId(): (gp.getName(), gp.getLabel()) for gp in products}
-    assert labels == {"G_ENSG1": ("DPM1", "DPM1"), "G_ENSG2": ("G_ENSG2", "G_ENSG2")}
+    assert labels == {"G_ENSG1": ("", "DPM1"), "G_ENSG2": ("", "ENSG2")}
 
     plain = tmp_path / "plain.xml"
     cobra.io.write_sbml_model(_for_sbml(model), str(plain))
     assert _consistency(path) == _consistency(plain)
 
-    back, plain_back = cobra.io.read_sbml_model(str(path)), cobra.io.read_sbml_model(str(plain))
-    assert sorted((g.id, g.name) for g in back.genes) == sorted(
-        (g.id, g.name) for g in plain_back.genes
-    )
+    back = cobra.io.read_sbml_model(str(path))
+    assert sorted(g.id for g in back.genes) == ["ENSG1", "ENSG2"]
     assert back.reactions.R1.gene_reaction_rule == "ENSG1 or ENSG2"
+
+
+def test_sbml_protein_is_the_gene_product_name(model, tmp_path):
+    model.reactions.R1.gene_reaction_rule = "ENSG1 or ENSG2"
+    model.genes.ENSG1.name = "DPM1"
+    model.genes.ENSG1.notes = {"protein": "dolichol-phosphate mannosyltransferase"}
+    root = export_for_git(model, tmp_path, formats=("xml",))
+    doc = libsbml.readSBMLFromFile(str(root / "xml" / "model.xml"))
+    products = {gp.getId(): gp for gp in doc.getModel().getPlugin("fbc").getListOfGeneProducts()}
+    assert products["G_ENSG1"].getName() == "dolichol-phosphate mannosyltransferase"
+    assert products["G_ENSG1"].getLabel() == "DPM1"
+    assert not products["G_ENSG2"].isSetName()
+    assert model.genes.ENSG1.notes == {"protein": "dolichol-phosphate mannosyltransferase"}
 
 
 def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):

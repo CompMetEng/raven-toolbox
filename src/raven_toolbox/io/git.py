@@ -50,6 +50,19 @@ _SBML_NOTE_LABELS = {
     "confidence_score": "Confidence Level",
 }
 
+# RAVEN's exportModel writes each character of the model id outside [0-9_a-zA-Z] as
+# __<character code>__ and importModel decodes it again. cobra passes the model id to libSBML
+# unchanged, and libSBML writes no id attribute for an id that is not a valid SId.
+_SBML_ID_UNSAFE = re.compile(r"[^0-9_a-zA-Z]")
+
+# The SBO term RAVEN's exportModel gives every gene product that has no SBO term of its own.
+_SBO_GENE_PRODUCT = "SBO:0000243"
+
+
+def _sbml_id(identifier: str) -> str:
+    """``identifier`` with each character outside [0-9_a-zA-Z] written as ``__<code>__``."""
+    return _SBML_ID_UNSAFE.sub(lambda match: f"__{ord(match.group())}__", identifier)
+
 
 def _for_sbml(model: cobra.Model) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
@@ -63,9 +76,22 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     * **rxnNotes, rxnReferences and rxnConfidenceScores.** The file contains them under
       cobra's key names, while RAVEN parses other labels.
 
+    The model id is escaped as in RAVEN's exportModel, each gene gets the SBO term
+    ``SBO:0000243`` unless it has one of its own, and the protein of a gene leaves the gene's
+    notes because :func:`_write_sbml` writes it as ``fbc:name``.
+
     The model passed in is not changed.
     """
     out = model.copy()
+
+    if out.id:
+        out.id = _sbml_id(out.id)
+
+    for gene in out.genes:
+        # model.copy() shares each gene's notes and annotation dicts with the original, so the
+        # copy gets new dicts instead of changes in place.
+        gene.annotation = {"sbo": _SBO_GENE_PRODUCT, **gene.annotation}
+        gene.notes = {key: value for key, value in (gene.notes or {}).items() if key != "protein"}
 
     for rxn in out.reactions:
         notes = rxn.notes or {}
@@ -132,19 +158,30 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
 
 
 def _write_sbml(model: cobra.Model, path: Path) -> None:
-    """Write ``model`` as SBML with each gene product's fbc:label set to the gene name.
+    """Write ``model`` as SBML in the shape of RAVEN's exportModel.
 
-    cobra's writer sets fbc:label to the gene product id (``G_<id>``), while RAVEN's
-    exportModel writes the gene short name there, and RAVEN's importModel reads
-    geneShortNames from fbc:label before fbc:name. cobra writes the gene name as
-    fbc:name, or the id when the gene has no name, so copying fbc:name into fbc:label
-    keeps the id as label for unnamed genes. cobra reads gene ids from fbc:id and
-    names from fbc:name, so the label does not change what cobra reads back.
+    Each gene product gets the protein as fbc:name, as RAVEN writes it, and no fbc:name
+    when the gene has no protein; RAVEN's importModel reads proteins from fbc:name. The
+    gene short name, or the gene id when there is none, goes into fbc:label, from which
+    importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
+    does not change what cobra reads back.
     """
     cobra.io.write_sbml_model(_for_sbml(model), str(path))
     doc = libsbml.readSBMLFromFile(str(path))
-    for gene_product in doc.getModel().getPlugin("fbc").getListOfGeneProducts():
-        gene_product.setLabel(gene_product.getName())
+    sbml_model = doc.getModel()
+    products = sbml_model.getPlugin("fbc").getListOfGeneProducts()
+    if len(products) != len(model.genes):
+        raise RuntimeError(
+            f"the SBML has {len(products)} gene products for {len(model.genes)} genes"
+        )
+    # cobra writes the gene products in the order of model.genes.
+    for gene, product in zip(model.genes, products, strict=True):
+        protein = (gene.notes or {}).get("protein")
+        product.setLabel(gene.name or gene.id)
+        if protein:
+            product.setName(str(protein))
+        else:
+            product.unsetName()
     libsbml.writeSBMLToFile(doc, str(path))
 
 
