@@ -140,8 +140,9 @@ def export_to_excel(
         Output file path; the workbook is saved to it (``str`` or ``pathlib.Path``).
     sort_ids : bool
         If True, write reactions, metabolites and genes sorted alphabetically by ID
-        (the model itself is not modified); compartments are sorted by abbreviation. The ec
-        sheets keep the order of the ec data.
+        (the model itself is not modified). The compartments are always written sorted by
+        abbreviation, because cobra lists them in the order in which the metabolites first
+        mention them. The ec sheets keep the order of the ec data.
     """
     try:
         from openpyxl import Workbook
@@ -201,7 +202,7 @@ def export_to_excel(
     # --- COMPS ---
     ws = wb.create_sheet("COMPS")
     ws.append(["#", "ABBREVIATION", "NAME", "INSIDE", "MIRIAM"])
-    comps = sorted(model.compartments) if sort_ids else list(model.compartments)
+    comps = sorted(model.compartments)
     for cid in comps:
         ws.append([None, cid, model.compartments.get(cid, ""), None, None])
 

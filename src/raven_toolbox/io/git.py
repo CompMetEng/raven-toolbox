@@ -18,6 +18,7 @@ import re
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import cobra
 import libsbml
@@ -50,8 +51,21 @@ _SBML_NOTE_LABELS = {
     "confidence_score": "Confidence Level",
 }
 
+# RAVEN's exportModel writes each character of the model id outside [0-9_a-zA-Z] as
+# __<character code>__ and importModel decodes it again. cobra passes the model id to libSBML
+# unchanged, and libSBML writes no id attribute for an id that is not a valid SId.
+_SBML_ID_UNSAFE = re.compile(r"[^0-9_a-zA-Z]")
 
-def _for_sbml(model: cobra.Model) -> cobra.Model:
+# The SBO term RAVEN's exportModel gives every gene product that has no SBO term of its own.
+_SBO_GENE_PRODUCT = "SBO:0000243"
+
+
+def _sbml_id(identifier: str) -> str:
+    """``identifier`` with each character outside [0-9_a-zA-Z] written as ``__<code>__``."""
+    return _SBML_ID_UNSAFE.sub(lambda match: f"__{ord(match.group())}__", identifier)
+
+
+def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
 
     Two kinds of information would be missing from the SBML file otherwise:
@@ -63,9 +77,23 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     * **rxnNotes, rxnReferences and rxnConfidenceScores.** The file contains them under
       cobra's key names, while RAVEN parses other labels.
 
+    The model id is escaped as in RAVEN's exportModel, each gene gets the SBO term
+    ``SBO:0000243`` unless it has one of its own, and the protein of a gene leaves the gene's
+    notes because :func:`_write_sbml` writes it as ``fbc:name``. The model version and date
+    become notes only with ``model_version``, because RAVEN's exportModel writes neither.
+
     The model passed in is not changed.
     """
     out = model.copy()
+
+    if out.id:
+        out.id = _sbml_id(out.id)
+
+    for gene in out.genes:
+        # model.copy() shares each gene's notes and annotation dicts with the original, so the
+        # copy gets new dicts instead of changes in place.
+        gene.annotation = {"sbo": _SBO_GENE_PRODUCT, **gene.annotation}
+        gene.notes = {key: value for key, value in (gene.notes or {}).items() if key != "protein"}
 
     for rxn in out.reactions:
         notes = rxn.notes or {}
@@ -82,18 +110,16 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
         annotation["taxonomy"] = str(taxonomy).replace("taxonomy/", "")
         out.annotation = annotation
 
-    # The model's own note goes in as its own notes entry, so cobra writes it
-    # as "<p>note: ...</p>". RAVEN's exportModel instead puts a bare note
-    # inside a <body> that cobra never emits, which is why importModel has to
-    # look for both shapes.
-    # The note, version and date go in as their own notes entries, so cobra
-    # writes each as "<p>key: value</p>". RAVEN's exportModel instead puts a
-    # bare note inside a <body> that cobra never emits, which is why
-    # importModel has to look for both shapes; the version and date reached
-    # the file only inside the metaData repr dropped below.
+    # The model's own note goes in as the notes entry "note", which _write_model_notes
+    # writes in the body shape that RAVEN's importModel reads. RAVEN's exportModel writes
+    # no version and no date, so they are notes only on request.
     stamped = dict(out.notes or {})
-    for key in ("note", "version", "date"):
-        if meta.get(key) and key not in stamped:
+    if meta.get("note") and "note" not in stamped:
+        stamped["note"] = str(meta["note"])
+    for key in ("version", "date"):
+        if not model_version:
+            stamped.pop(key, None)
+        elif meta.get(key) and key not in stamped:
             stamped[key] = str(meta[key])
     out.notes = stamped
 
@@ -131,20 +157,78 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     return out
 
 
-def _write_sbml(model: cobra.Model, path: Path) -> None:
-    """Write ``model`` as SBML with each gene product's fbc:label set to the gene name.
+def _sort_sbml_compartments(sbml_model: libsbml.Model) -> None:
+    """Order the compartments of ``sbml_model`` by id.
 
-    cobra's writer sets fbc:label to the gene product id (``G_<id>``), while RAVEN's
-    exportModel writes the gene short name there, and RAVEN's importModel reads
-    geneShortNames from fbc:label before fbc:name. cobra writes the gene name as
-    fbc:name, or the id when the gene has no name, so copying fbc:name into fbc:label
-    keeps the id as label for unnamed genes. cobra reads gene ids from fbc:id and
-    names from fbc:name, so the label does not change what cobra reads back.
+    cobra writes them in the order in which the metabolites first mention them.
     """
-    cobra.io.write_sbml_model(_for_sbml(model), str(path))
+    compartments = sorted(
+        (compartment.clone() for compartment in sbml_model.getListOfCompartments()),
+        key=lambda compartment: compartment.getId(),
+    )
+    while sbml_model.getNumCompartments():
+        sbml_model.removeCompartment(0)
+    for compartment in compartments:
+        sbml_model.addCompartment(compartment)
+
+
+def _write_model_notes(sbml_model: libsbml.Model, notes: dict[str, str]) -> None:
+    """Write the model notes the way RAVEN's exportModel and importModel handle them.
+
+    RAVEN's exportModel writes the model note as a bare paragraph in a body element, and
+    importModel reads a model note only from that shape, while cobra wraps its notes in an
+    html element and writes them without escaping. With a model note, the note is the first
+    paragraph in a body element, as RAVEN writes it, and the other notes follow as
+    ``key: value`` paragraphs, which cobra reads and RAVEN adds to its note. Without a model
+    note, the notes stay in cobra's html element, which RAVEN does not read as its note.
+    """
+    if not notes:
+        return
+    note = notes.get("note")
+    paragraphs = [f"{escape(key)}: {escape(value)}" for key, value in notes.items() if key != "note"]
+    if note:
+        paragraphs.insert(0, escape(note))
+        tag = "body"
+    else:
+        tag = "html"
+    xhtml = f'<{tag} xmlns="http://www.w3.org/1999/xhtml">'
+    xhtml += "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs) + f"</{tag}>"
+    if sbml_model.setNotes(xhtml) != libsbml.LIBSBML_OPERATION_SUCCESS:
+        raise RuntimeError("libSBML did not accept the model notes")
+
+
+def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) -> None:
+    """Write ``model`` as SBML in the shape of RAVEN's exportModel.
+
+    Each gene product gets the protein as fbc:name, as RAVEN writes it, and no fbc:name
+    when the gene has no protein; RAVEN's importModel reads proteins from fbc:name. The
+    gene short name, or the gene id when there is none, goes into fbc:label, from which
+    importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
+    does not change what cobra reads back. The compartments are ordered by id, as in
+    RAVEN's sortIdentifiers. The model notes are written by :func:`_write_model_notes`; the
+    model version and date are notes only with ``model_version``.
+    """
+    shaped = _for_sbml(model, model_version=model_version)
+    notes = dict(shaped.notes or {})
+    shaped.notes = {}  # cobra writes notes without escaping them
+    cobra.io.write_sbml_model(shaped, str(path))
     doc = libsbml.readSBMLFromFile(str(path))
-    for gene_product in doc.getModel().getPlugin("fbc").getListOfGeneProducts():
-        gene_product.setLabel(gene_product.getName())
+    sbml_model = doc.getModel()
+    _write_model_notes(sbml_model, notes)
+    products = sbml_model.getPlugin("fbc").getListOfGeneProducts()
+    if len(products) != len(model.genes):
+        raise RuntimeError(
+            f"the SBML has {len(products)} gene products for {len(model.genes)} genes"
+        )
+    # cobra writes the gene products in the order of model.genes.
+    for gene, product in zip(model.genes, products, strict=True):
+        protein = (gene.notes or {}).get("protein")
+        product.setLabel(gene.name or gene.id)
+        if protein:
+            product.setName(str(protein))
+        else:
+            product.unsetName()
+    _sort_sbml_compartments(sbml_model)
     libsbml.writeSBMLToFile(doc, str(path))
 
 
@@ -182,11 +266,12 @@ def _write_txt(model: cobra.Model, path: Path) -> None:
             )
 
 
-def _write_dependencies(path: Path, model: cobra.Model) -> None:
-    """Versions of everything that writes the files, then the model's own version and date.
+def _write_dependencies(path: Path, model: cobra.Model, *, model_version: bool = False) -> None:
+    """Versions of everything that writes the files, then optionally the model's version and date.
 
     The order is fixed and nothing depends on the time of the export, so the same model
-    exported twice gives the same file.
+    exported twice gives the same file. With ``model_version`` false the file lists the
+    toolchain only, as RAVEN's exportForGit does.
     """
     lines = [
         ("python", platform.python_version()),
@@ -197,10 +282,11 @@ def _write_dependencies(path: Path, model: cobra.Model) -> None:
         ("openpyxl", _version("openpyxl")),
         ("raven_toolbox", _version("raven_toolbox")),
     ]
-    meta = get_model_metadata(model)
-    for key in ("version", "date"):
-        if meta.get(key) is not None:
-            lines.append((f"model_{key}", str(meta[key])))
+    if model_version:
+        meta = get_model_metadata(model)
+        for key in ("version", "date"):
+            if meta.get(key) is not None:
+                lines.append((f"model_{key}", str(meta[key])))
     with open(path, "w", encoding="utf-8") as fh:
         for name, value in lines:
             fh.write(f"{name}\t{value}\n")
@@ -249,6 +335,8 @@ def export_for_git(
     varname: str | None = None,
     version: str | None = None,
     date: str | datetime.date | None = None,
+    model_version_in_dependencies: bool = False,
+    model_version_in_sbml: bool = False,
 ) -> Path:
     """Write ``model`` into a Standard-GEM repository layout.
 
@@ -284,6 +372,15 @@ def export_for_git(
     date : str or datetime.date or None
         Date stamped into the exported copy's metadata in the same way. When not given, the
         model's own date is written.
+    model_version_in_dependencies : bool
+        A ``bool``. If True, ``dependencies.txt`` also lists ``model_version`` and
+        ``model_date`` from the model metadata. The default (False) lists the toolchain
+        only, as RAVEN's ``exportForGit`` does.
+    model_version_in_sbml : bool
+        A ``bool``. If True, the SBML file also holds the model version and date as notes
+        (``<p>version: ...</p>``), which cobra reads. The default (False) writes neither, as
+        RAVEN's ``exportModel`` does; RAVEN keeps the version in the model id only. With a
+        model note, RAVEN's ``importModel`` appends the two notes to its model note.
 
     Returns
     -------
@@ -293,9 +390,15 @@ def export_for_git(
     Raises
     ------
     TypeError
-        If ``main_branch_flag`` or ``sub_dirs`` is not a ``bool`` or ``numpy.bool_``.
+        If ``main_branch_flag``, ``sub_dirs``, ``model_version_in_dependencies`` or
+        ``model_version_in_sbml`` is not a ``bool`` or ``numpy.bool_``.
     """
-    for name, flag in (("main_branch_flag", main_branch_flag), ("sub_dirs", sub_dirs)):
+    for name, flag in (
+        ("main_branch_flag", main_branch_flag),
+        ("sub_dirs", sub_dirs),
+        ("model_version_in_dependencies", model_version_in_dependencies),
+        ("model_version_in_sbml", model_version_in_sbml),
+    ):
         if not isinstance(flag, (bool, np.bool_)):
             raise TypeError(
                 f"{name} must be a bool or numpy.bool_, got {type(flag).__module__}.{type(flag).__qualname__}"
@@ -323,7 +426,7 @@ def export_for_git(
     if "yml" in formats:
         write_yaml_model(model, target("yml"))
     if "xml" in formats:
-        _write_sbml(model, target("xml"))
+        _write_sbml(model, target("xml"), model_version=model_version_in_sbml)
     if "mat" in formats:
         write_matlab_model(model, target("mat"), varname=varname)
     if "xlsx" in formats:
@@ -331,6 +434,6 @@ def export_for_git(
     if "txt" in formats:
         _write_txt(model, target("txt"))
 
-    _write_dependencies(root / "dependencies.txt", model)
+    _write_dependencies(root / "dependencies.txt", model, model_version=model_version_in_dependencies)
 
     return root

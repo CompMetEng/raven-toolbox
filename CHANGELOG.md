@@ -7,6 +7,16 @@
 * `get_model_from_homology` with `preferred_order` treats a template gene that maps to a gene an earlier template already maps as a subunit without an ortholog, and `complex_policy` decides what happens to it (was: the gene and every part of the rule that needs it were removed). For the rule `(a and b) or x` with `a` taken by an earlier template, `flag` gives `(OLD_T2_a and nb) or nx`, `keep` gives `nb or nx` and `drop` gives `nx`. A reaction that has genes, none of which keeps a mapping, is not transferred.
 * `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
 * `manipulation.contract_model` is the new name of `remove_duplicate_reactions`, after RAVEN's `contractModel`, and the old name is removed. `contract_model` takes `dist_reverse` (default `True`), the `distReverse` option of `contractModel`: with `False`, reactions with the same metabolites and a different reversibility are duplicates.
+* The SBML file of `export_for_git` writes the protein of a gene as `fbc:name` and the gene short name as `fbc:label`, as RAVEN's `exportModel` does, so cobra reads the protein as the gene name (was: the gene short name as both, and the protein as a note).
+* `export_for_git` lists only the toolchain in `dependencies.txt`, as RAVEN's `exportForGit` does, and lists `model_version` and `model_date` only with `model_version_in_dependencies=True` (was: always).
+* The SBML file of `export_for_git` holds the model version and date as notes only with `model_version_in_sbml=True`, because RAVEN's `exportModel` writes neither (was: always).
+* The SBML file of `export_for_git` writes the model note as the first paragraph of a body element, without the `note:` label, as RAVEN's `exportModel` does, so RAVEN's `importModel` reads it as `annotation.note` and cobra no longer reads it as `notes["note"]` (was: `<p>note: ...</p>` in an html element, which `importModel` does not read).
+
+### Model I/O
+
+* The SBML file of `export_for_git` writes the model id as RAVEN's `exportModel` does, each character outside `[0-9_a-zA-Z]` as `__<code>__`, so an id such as `ecoliGEM_v1.0.7` is written (was: no `id` attribute for an id that is not a valid SBML SId). Each gene product that has no SBO term of its own gets `SBO:0000243`.
+* `export_to_excel`, `write_matlab_model` and the SBML file of `export_for_git` list the compartments sorted by abbreviation (was: in the order in which the metabolites first mention them; `export_to_excel` sorted them only with `sort_ids=True`).
+* The SBML file of `export_for_git` escapes `&`, `<` and `>` in the model notes (was: cobra dropped all model notes from the file when one of them held such a character, and only logged an error).
 
 ### Data
 
