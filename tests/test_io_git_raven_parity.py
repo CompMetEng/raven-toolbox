@@ -3,9 +3,13 @@
 The toy model has a model id that is not a valid SBML SId, three genes (a protein and a short name,
 a short name only, neither) and compartments that cobra lists as c, p, e.
 """
+import re
+
 import cobra
 import libsbml
+import openpyxl
 import pytest
+import scipy.io as sio
 
 from raven_toolbox.io import export_for_git
 
@@ -91,3 +95,38 @@ def test_sbml_reads_back_with_cobra(out):
     back = cobra.io.read_sbml_model(str(out / "toy.xml"))
     assert (len(back.genes), len(back.reactions), len(back.metabolites)) == (3, 2, 3)
     assert set(back.compartments) == {"c", "e", "p"}
+
+
+def _yml_compartments(root):
+    text = (root / "toy.yml").read_text(encoding="utf-8")
+    return re.findall(r"^\s*- ([A-Za-z0-9_]+):", text.split("compartments:", 1)[1], flags=re.MULTILINE)
+
+
+@pytest.mark.parametrize("fmt", ["xml", "xlsx", "mat", "yml"])
+def test_compartments_are_sorted_in_every_format(out, fmt):
+    if fmt == "xml":
+        found = [c.getIdAttribute() for c in _sbml(out).getListOfCompartments()]
+    elif fmt == "xlsx":
+        sheet = openpyxl.load_workbook(out / "toy.xlsx")["COMPS"]
+        found = [row[1] for row in sheet.iter_rows(min_row=2, values_only=True)]
+    elif fmt == "mat":
+        mat = sio.loadmat(out / "toy.mat", simplify_cells=True)
+        found = list(mat[next(k for k in mat if not k.startswith("__"))]["comps"])
+    else:
+        found = _yml_compartments(out)
+    assert found == ["c", "e", "p"]
+
+
+def test_mat_metcomps_follow_the_sorted_compartments(out):
+    mat = sio.loadmat(out / "toy.mat", simplify_cells=True)
+    struct = mat[next(k for k in mat if not k.startswith("__"))]
+    comps = list(struct["comps"])
+    by_met = {met: comps[int(i) - 1] for met, i in zip(struct["mets"], struct["metComps"], strict=True)}
+    assert by_met == {"x_c": "c", "x_p": "p", "y_e": "e"}
+
+
+def test_compartment_order_of_the_caller_is_not_changed(tmp_path):
+    m = _model()
+    before = list(m.compartments)
+    export_for_git(m, tmp_path, prefix="toy", sub_dirs=False)
+    assert list(m.compartments) == before

@@ -157,6 +157,21 @@ def _for_sbml(model: cobra.Model) -> cobra.Model:
     return out
 
 
+def _sort_sbml_compartments(sbml_model: libsbml.Model) -> None:
+    """Order the compartments of ``sbml_model`` by id.
+
+    cobra writes them in the order in which the metabolites first mention them.
+    """
+    compartments = sorted(
+        (compartment.clone() for compartment in sbml_model.getListOfCompartments()),
+        key=lambda compartment: compartment.getId(),
+    )
+    while sbml_model.getNumCompartments():
+        sbml_model.removeCompartment(0)
+    for compartment in compartments:
+        sbml_model.addCompartment(compartment)
+
+
 def _write_sbml(model: cobra.Model, path: Path) -> None:
     """Write ``model`` as SBML in the shape of RAVEN's exportModel.
 
@@ -164,7 +179,8 @@ def _write_sbml(model: cobra.Model, path: Path) -> None:
     when the gene has no protein; RAVEN's importModel reads proteins from fbc:name. The
     gene short name, or the gene id when there is none, goes into fbc:label, from which
     importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
-    does not change what cobra reads back.
+    does not change what cobra reads back. The compartments are ordered by id, as in
+    RAVEN's sortIdentifiers.
     """
     cobra.io.write_sbml_model(_for_sbml(model), str(path))
     doc = libsbml.readSBMLFromFile(str(path))
@@ -182,6 +198,7 @@ def _write_sbml(model: cobra.Model, path: Path) -> None:
             product.setName(str(protein))
         else:
             product.unsetName()
+    _sort_sbml_compartments(sbml_model)
     libsbml.writeSBMLToFile(doc, str(path))
 
 

@@ -12,6 +12,7 @@
 ### Model I/O
 
 * The SBML file of `export_for_git` writes the model id as RAVEN's `exportModel` does, each character outside `[0-9_a-zA-Z]` as `__<code>__`, so an id such as `ecoliGEM_v1.0.7` is written (was: no `id` attribute for an id that is not a valid SBML SId). Each gene product that has no SBO term of its own gets `SBO:0000243`.
+* `export_to_excel`, `write_matlab_model` and the SBML file of `export_for_git` list the compartments sorted by abbreviation (was: in the order in which the metabolites first mention them; `export_to_excel` sorted them only with `sort_ids=True`).
 
 ### Data
 
