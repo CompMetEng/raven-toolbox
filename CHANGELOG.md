@@ -9,6 +9,7 @@
 * `manipulation.contract_model` is the new name of `remove_duplicate_reactions`, after RAVEN's `contractModel`, and the old name is removed. `contract_model` takes `dist_reverse` (default `True`), the `distReverse` option of `contractModel`: with `False`, reactions with the same metabolites and a different reversibility are duplicates.
 * The SBML file of `export_for_git` writes the protein of a gene as `fbc:name` and the gene short name as `fbc:label`, as RAVEN's `exportModel` does, so cobra reads the protein as the gene name (was: the gene short name as both, and the protein as a note).
 * `export_for_git` lists only the toolchain in `dependencies.txt`, as RAVEN's `exportForGit` does, and lists `model_version` and `model_date` only with `model_version_in_dependencies=True` (was: always).
+* The SBML file of `export_for_git` holds the model version and date as notes only with `model_version_in_sbml=True`, because RAVEN's `exportModel` writes neither (was: always).
 
 ### Model I/O
 

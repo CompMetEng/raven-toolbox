@@ -114,7 +114,9 @@ def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     assert "model_version\t1.2.0" in text
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies"])
+@pytest.mark.parametrize(
+    "flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies", "model_version_in_sbml"]
+)
 @pytest.mark.parametrize("value", ["false", "true", "", 0, 1, None])
 def test_export_for_git_refuses_a_flag_that_is_not_a_bool(model, tmp_path, flag, value):
     with pytest.raises(TypeError, match=flag):
@@ -399,7 +401,9 @@ def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
     assert out.returncode != 0 and "feature" in out.stderr
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies"])
+@pytest.mark.parametrize(
+    "flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies", "model_version_in_sbml"]
+)
 def test_export_for_git_accepts_numpy_booleans(model, tmp_path, flag):
     import numpy as np
 

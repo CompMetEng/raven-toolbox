@@ -12,6 +12,7 @@ import pytest
 import scipy.io as sio
 
 from raven_toolbox.io import export_for_git
+from raven_toolbox.io.metadata import set_model_metadata
 
 
 def _model(model_id: str = "toy_v1.0.0") -> cobra.Model:
@@ -130,3 +131,21 @@ def test_compartment_order_of_the_caller_is_not_changed(tmp_path):
     before = list(m.compartments)
     export_for_git(m, tmp_path, prefix="toy", sub_dirs=False)
     assert list(m.compartments) == before
+
+
+def test_model_version_and_date_are_not_notes_by_default(tmp_path):
+    m = _model()
+    set_model_metadata(m, date="2026-11-01")
+    root = export_for_git(m, tmp_path, prefix="toy", sub_dirs=False, formats=("xml",))
+    xml = (root / "toy.xml").read_text(encoding="utf-8")
+    assert "version:" not in xml and "date:" not in xml
+
+
+def test_model_version_and_date_are_notes_on_request(tmp_path):
+    m = _model()
+    set_model_metadata(m, date="2026-11-01")
+    root = export_for_git(
+        m, tmp_path, prefix="toy", sub_dirs=False, formats=("xml",), model_version_in_sbml=True
+    )
+    xml = (root / "toy.xml").read_text(encoding="utf-8")
+    assert "<p>version: 1.0.7</p>" in xml and "<p>date: 2026-11-01</p>" in xml
