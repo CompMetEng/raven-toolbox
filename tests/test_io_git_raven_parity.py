@@ -149,3 +149,52 @@ def test_model_version_and_date_are_notes_on_request(tmp_path):
     )
     xml = (root / "toy.xml").read_text(encoding="utf-8")
     assert "<p>version: 1.0.7</p>" in xml and "<p>date: 2026-11-01</p>" in xml
+
+
+def _ravens_import_of_the_model_note(root):
+    """What importModel.m (lines 620 to 631) makes of the model notes: None when it reads none."""
+    notes = _sbml(root).getNotesString()
+    start, end = notes.find('xhtml">'), notes.find("</body>")
+    if start < 0 or end < 0:
+        return None
+    return re.sub(r"<p.*?>|</p.*?>", "", notes[start + 7 : end]).strip()
+
+
+def _export_with_note(tmp_path, note="a generic test cell", **kwargs):
+    m = _model()
+    set_model_metadata(m, note=note)
+    return export_for_git(m, tmp_path, prefix="toy", sub_dirs=False, formats=("xml",), **kwargs)
+
+
+def test_model_note_is_written_where_ravens_importmodel_reads_it(tmp_path):
+    root = _export_with_note(tmp_path)
+    assert _ravens_import_of_the_model_note(root) == "a generic test cell"
+
+
+def test_model_note_with_markup_characters_is_escaped(tmp_path):
+    root = _export_with_note(tmp_path, note="A & B < C")
+    assert _ravens_import_of_the_model_note(root) == "A &amp; B &lt; C"
+    assert cobra.io.read_sbml_model(str(root / "toy.xml")).id == "toy_v1__46__0__46__0"
+
+
+def test_other_notes_follow_the_model_note_and_cobra_reads_them(tmp_path):
+    root = _export_with_note(tmp_path, model_version_in_sbml=True)
+    assert _ravens_import_of_the_model_note(root).startswith("a generic test cell")
+    assert cobra.io.read_sbml_model(str(root / "toy.xml")).notes["version"] == "1.0.7"
+
+
+def test_cobra_does_not_read_the_bare_model_note_as_a_notes_entry(tmp_path):
+    root = _export_with_note(tmp_path)
+    assert "note" not in cobra.io.read_sbml_model(str(root / "toy.xml")).notes
+
+
+def test_notes_without_a_model_note_stay_out_of_ravens_reach(tmp_path):
+    root = export_for_git(
+        _model(), tmp_path, prefix="toy", sub_dirs=False, formats=("xml",), model_version_in_sbml=True
+    )
+    assert _ravens_import_of_the_model_note(root) is None
+    assert cobra.io.read_sbml_model(str(root / "toy.xml")).notes["version"] == "1.0.7"
+
+
+def test_no_model_note_is_read_by_ravens_importmodel_when_there_is_none(out):
+    assert _ravens_import_of_the_model_note(out) is None

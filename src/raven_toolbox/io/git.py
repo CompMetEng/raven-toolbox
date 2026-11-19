@@ -18,6 +18,7 @@ import re
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import cobra
 import libsbml
@@ -109,11 +110,9 @@ def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model
         annotation["taxonomy"] = str(taxonomy).replace("taxonomy/", "")
         out.annotation = annotation
 
-    # The model's own note goes in as its own notes entry, so cobra writes it
-    # as "<p>note: ...</p>". RAVEN's exportModel instead puts a bare note
-    # inside a <body> that cobra never emits, which is why importModel has to
-    # look for both shapes. RAVEN's exportModel writes no version and no date,
-    # so they are notes only on request.
+    # The model's own note goes in as the notes entry "note", which _write_model_notes
+    # writes in the body shape that RAVEN's importModel reads. RAVEN's exportModel writes
+    # no version and no date, so they are notes only on request.
     stamped = dict(out.notes or {})
     if meta.get("note") and "note" not in stamped:
         stamped["note"] = str(meta["note"])
@@ -173,6 +172,31 @@ def _sort_sbml_compartments(sbml_model: libsbml.Model) -> None:
         sbml_model.addCompartment(compartment)
 
 
+def _write_model_notes(sbml_model: libsbml.Model, notes: dict[str, str]) -> None:
+    """Write the model notes the way RAVEN's exportModel and importModel handle them.
+
+    RAVEN's exportModel writes the model note as a bare paragraph in a body element, and
+    importModel reads a model note only from that shape, while cobra wraps its notes in an
+    html element and writes them without escaping. With a model note, the note is the first
+    paragraph in a body element, as RAVEN writes it, and the other notes follow as
+    ``key: value`` paragraphs, which cobra reads and RAVEN adds to its note. Without a model
+    note, the notes stay in cobra's html element, which RAVEN does not read as its note.
+    """
+    if not notes:
+        return
+    note = notes.get("note")
+    paragraphs = [f"{escape(key)}: {escape(value)}" for key, value in notes.items() if key != "note"]
+    if note:
+        paragraphs.insert(0, escape(note))
+        tag = "body"
+    else:
+        tag = "html"
+    xhtml = f'<{tag} xmlns="http://www.w3.org/1999/xhtml">'
+    xhtml += "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs) + f"</{tag}>"
+    if sbml_model.setNotes(xhtml) != libsbml.LIBSBML_OPERATION_SUCCESS:
+        raise RuntimeError("libSBML did not accept the model notes")
+
+
 def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) -> None:
     """Write ``model`` as SBML in the shape of RAVEN's exportModel.
 
@@ -181,11 +205,16 @@ def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) 
     gene short name, or the gene id when there is none, goes into fbc:label, from which
     importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
     does not change what cobra reads back. The compartments are ordered by id, as in
-    RAVEN's sortIdentifiers. The model version and date are notes only with ``model_version``.
+    RAVEN's sortIdentifiers. The model notes are written by :func:`_write_model_notes`; the
+    model version and date are notes only with ``model_version``.
     """
-    cobra.io.write_sbml_model(_for_sbml(model, model_version=model_version), str(path))
+    shaped = _for_sbml(model, model_version=model_version)
+    notes = dict(shaped.notes or {})
+    shaped.notes = {}  # cobra writes notes without escaping them
+    cobra.io.write_sbml_model(shaped, str(path))
     doc = libsbml.readSBMLFromFile(str(path))
     sbml_model = doc.getModel()
+    _write_model_notes(sbml_model, notes)
     products = sbml_model.getPlugin("fbc").getListOfGeneProducts()
     if len(products) != len(model.genes):
         raise RuntimeError(
@@ -349,8 +378,9 @@ def export_for_git(
         only, as RAVEN's ``exportForGit`` does.
     model_version_in_sbml : bool
         A ``bool``. If True, the SBML file also holds the model version and date as notes
-        (``<p>version: ...</p>``). The default (False) writes neither, as RAVEN's
-        ``exportModel`` does; RAVEN keeps the version in the model id only.
+        (``<p>version: ...</p>``), which cobra reads. The default (False) writes neither, as
+        RAVEN's ``exportModel`` does; RAVEN keeps the version in the model id only. With a
+        model note, RAVEN's ``importModel`` appends the two notes to its model note.
 
     Returns
     -------
