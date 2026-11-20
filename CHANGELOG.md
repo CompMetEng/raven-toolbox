@@ -8,6 +8,10 @@
 * `get_model_from_homology` with `complex_policy="drop"` removes each complex that has a subunit without an ortholog, and removes the reaction only when no complex remains (was: the reaction was removed as soon as one subunit had no ortholog). For the rule `(A and B) or (C and D)` without an ortholog of `B`, the draft has `C and D`.
 * `manipulation.contract_model` is the new name of `remove_duplicate_reactions`, after RAVEN's `contractModel`, and the old name is removed. `contract_model` takes `dist_reverse` (default `True`), the `distReverse` option of `contractModel`: with `False`, reactions with the same metabolites and a different reversibility are duplicates.
 
+### Experiments
+
+* New: the `experiments` package scores a model against measured growth rates and exchange fluxes. `load_experiment_data` reads `fluxData.tsv`, `maxGrowth.tsv` and `zeroFlux.tsv` from a folder, `load_flux_data` parses one flux file into a `FluxData` (with a per-condition `weight`), `simulate_conditions` fixes the uptake of each condition and solves the model, `compute_carbon_weights` gives each exchange the carbon count of its metabolite, `experiment_distance` combines the carbon-weighted RMSE of flux and max-growth conditions into one value, and `apply_flux_data_constraints` sets the exchange bounds of a model from one condition (loose, or a percentage band). The organism-specific steps, an anaerobic switch and a change of the protein content, and the solver call are passed as functions.
+
 ### Data
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
