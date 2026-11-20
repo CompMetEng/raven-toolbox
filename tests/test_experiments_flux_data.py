@@ -57,14 +57,17 @@ def test_no_exchange_columns_raises(tmp_path):
 # Basic happy path
 # --------------------------------------------------------------------------- #
 
-def test_old_weight_column_name_is_rejected(tmp_path):
+def test_an_unknown_column_is_an_exchange_column_with_a_warning(tmp_path, caplog):
     f = tmp_path / "fluxData.tsv"
     _write_tsv(f, [
-        ["Condition", "Ptot", "grRate", "glucose (r_1714)", "evotuneRMSEweight"],
+        ["Condition", "Ptot", "grRate", "glucose (r_1714)", "other"],
         ["c1", "0.5", "0.4", "-10", "1"],
     ])
-    with pytest.raises(ValueError, match="now called 'weight'"):
-        load_flux_data(f)
+    with caplog.at_level("WARNING"):
+        fd = load_flux_data(f)
+    assert fd.weight is None
+    assert fd.exch_rxn_ids == ["r_1714", "other"]
+    assert "lack the" in caplog.text
 
 
 def test_weight_column_is_read_and_removed_from_the_fluxes(tmp_path):

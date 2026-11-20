@@ -261,7 +261,7 @@ def test_dataset_rmse_measured_terms_match_only_byproduct_deviates():
 
     rmse, per_cond = dataset_rmse(
         flux_data, sims,
-        constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        constrain=True, carbon_weights=carbon_weights,
     )
 
     # The byproduct term is nonzero-simulated-vs-zero-measured, so RMSE
@@ -296,7 +296,7 @@ def test_dataset_rmse_growth_mismatch_is_hand_computable():
 
     _, per_cond = dataset_rmse(
         flux_data, sims,
-        constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        constrain=True, carbon_weights=carbon_weights,
     )
 
     growth_diff = (18.0 - 20.0) * BIOMASS_CARBON_EQUIV  # bio_meas - bio_sim
@@ -312,7 +312,7 @@ def test_dataset_rmse_infeasible_condition_gets_penalty():
 
     rmse, per_cond = dataset_rmse(
         flux_data, sims,
-        constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass", penalty=99.0,
+        constrain=True, carbon_weights=carbon_weights, penalty=99.0,
     )
 
     assert list(per_cond) == [99.0, 99.0]
@@ -328,7 +328,7 @@ def test_dataset_rmse_max_growth_scores_growth_only():
 
     rmse, per_cond = dataset_rmse(
         max_growth, sims,
-        constrain=False, carbon_weights={}, bio_rxn_id="biomass",
+        constrain=False, carbon_weights={},
     )
 
     assert per_cond[0] == pytest.approx(0.0)
@@ -358,15 +358,14 @@ def test_experiment_distance_combines_both_datasets():
     rmse, detail = experiment_distance(
         experiment_data,
         flux_sims=flux_sims, max_growth_sims=max_growth_sims,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        carbon_weights=carbon_weights,
     )
 
     expected_flux_rmse, _ = dataset_rmse(
-        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights,
     )
     expected_max_growth_rmse, _ = dataset_rmse(
         max_growth, max_growth_sims, constrain=False, carbon_weights=carbon_weights,
-        bio_rxn_id="biomass",
     )
     assert rmse == pytest.approx(
         np.mean([expected_flux_rmse, expected_max_growth_rmse])
@@ -395,17 +394,16 @@ def test_experiment_distance_max_growth_weight_scales_the_max_growth_term():
     )
 
     expected_flux_rmse, _ = dataset_rmse(
-        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights,
     )
     expected_max_growth_rmse, _ = dataset_rmse(
         max_growth, max_growth_sims, constrain=False, carbon_weights=carbon_weights,
-        bio_rxn_id="biomass",
     )
 
     rmse, _ = experiment_distance(
         experiment_data,
         flux_sims=flux_sims, max_growth_sims=max_growth_sims,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass", max_growth_weight=2.0,
+        carbon_weights=carbon_weights, max_growth_weight=2.0,
     )
     assert rmse == pytest.approx(
         (expected_flux_rmse + 2.0 * expected_max_growth_rmse) / 3.0
@@ -415,7 +413,7 @@ def test_experiment_distance_max_growth_weight_scales_the_max_growth_term():
     rmse_half, _ = experiment_distance(
         experiment_data,
         flux_sims=flux_sims, max_growth_sims=max_growth_sims,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass", max_growth_weight=0.5,
+        carbon_weights=carbon_weights, max_growth_weight=0.5,
     )
     assert rmse_half == pytest.approx(
         (2.0 * expected_flux_rmse + expected_max_growth_rmse) / 3.0
@@ -426,7 +424,7 @@ def test_experiment_distance_max_growth_weight_scales_the_max_growth_term():
     rmse_solo, _ = experiment_distance(
         solo,
         flux_sims=flux_sims, max_growth_sims=None,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass", max_growth_weight=2.0,
+        carbon_weights=carbon_weights, max_growth_weight=2.0,
     )
     assert rmse_solo == pytest.approx(expected_flux_rmse)
 
@@ -447,11 +445,11 @@ def test_experiment_distance_missing_dataset_contributes_nothing():
     rmse, detail = experiment_distance(
         experiment_data,
         flux_sims=flux_sims, max_growth_sims=None,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        carbon_weights=carbon_weights,
     )
 
     expected_flux_rmse, _ = dataset_rmse(
-        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        flux_data, flux_sims, constrain=True, carbon_weights=carbon_weights,
     )
     assert rmse == pytest.approx(expected_flux_rmse)
     assert set(detail) == {"flux_data"}
@@ -555,11 +553,11 @@ def test_a_condition_with_weight_zero_does_not_change_the_distance(constrain):
 
     rmse, per_cond = dataset_rmse(
         with_std, _simulate(model, with_std, constrain=constrain),
-        constrain=constrain, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        constrain=constrain, carbon_weights=carbon_weights,
     )
     expected, expected_per_cond = dataset_rmse(
         flux_data, _simulate(_build_toy(), flux_data, constrain=constrain),
-        constrain=constrain, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        constrain=constrain, carbon_weights=carbon_weights,
     )
 
     assert rmse == expected
@@ -582,11 +580,10 @@ def test_experiment_distance_leaves_out_a_dataset_without_active_conditions():
 
     rmse, detail = experiment_distance(
         experiment_data, flux_sims=flux_sims, max_growth_sims=max_growth_sims,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        carbon_weights=carbon_weights,
     )
     expected, _ = dataset_rmse(
         max_growth, max_growth_sims, constrain=False, carbon_weights=carbon_weights,
-        bio_rxn_id="biomass",
     )
 
     assert rmse == expected
@@ -603,12 +600,89 @@ def test_the_distance_is_nan_when_every_condition_has_weight_zero():
     sims = _simulate(model, flux_data, constrain=True)
 
     rmse, per_cond = dataset_rmse(
-        flux_data, sims, constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        flux_data, sims, constrain=True, carbon_weights=carbon_weights,
     )
     distance, _ = experiment_distance(
         ExperimentData(flux_data=flux_data), flux_sims=sims, max_growth_sims=None,
-        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+        carbon_weights=carbon_weights,
     )
 
     assert np.isnan(rmse) and np.isnan(per_cond).all()
     assert np.isnan(distance)
+
+
+# --------------------------------------------------------------------------- #
+# Missing reactions
+# --------------------------------------------------------------------------- #
+
+def test_simulate_missing_reactions_raise_before_anything_is_solved():
+    model = _build_toy()
+    solved = []
+
+    def optimize(m):
+        solved.append(1)
+        return m.optimize()
+
+    with pytest.raises(ValueError, match="The reactions EX_nope, nobio are not in the model."):
+        simulate_conditions(
+            model, _flux_data(ethanol_grrate=20.0),
+            constrain=True, zero_flux_rxns=["EX_nope"], bio_rxn_id="nobio",
+            optimize=optimize,
+        )
+    assert solved == []
+
+
+def test_simulate_missing_exchange_reaction_raises():
+    model = _build_toy()
+    model.remove_reactions(["EX_eth"])
+    with pytest.raises(ValueError, match="The reactions EX_eth are not in the model."):
+        simulate_conditions(
+            model, _flux_data(ethanol_grrate=20.0),
+            constrain=True, zero_flux_rxns=[], bio_rxn_id="biomass",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Carbon atoms of a formula (the same list is tested for computeCarbonWeights in RAVEN)
+# --------------------------------------------------------------------------- #
+
+CARBON_FORMULAS = [
+    ("C6H12O6", 6.0),
+    ("CO2", 1.0),
+    ("C", 1.0),
+    ("C2.5H5", 2.5),
+    ("C6H12O6(H2O)", 1.0),
+    ("C6H12O6(H2O)2", 1.0),
+    ("CuSO4.5H2O", 1.0),
+    ("C6H12O6*H2O", 6.0),
+    ("(C5H8)n", 1.0),
+    ("C3H5O3-", 3.0),
+    ("C6H12O6R", 6.0),
+    ("H2O", 1.0),
+    ("O2", 1.0),
+    ("Co", 1.0),
+    ("Xx", 1.0),
+    ("c6h12o6", 1.0),
+    ("C0H2", 1.0),
+    ("C6H12O6 ", 6.0),
+    ("", 1.0),
+    (None, 1.0),
+]
+
+
+@pytest.mark.parametrize("formula, expected", CARBON_FORMULAS)
+def test_compute_carbon_weights_of_a_formula(formula, expected):
+    """A formula that is read gives its number of carbon atoms; one that is not read (empty,
+    with parentheses, unknown), and one without carbon, gives 1."""
+    model = cobra.Model("formulas")
+    glc = cobra.Metabolite("m_e", formula="C6H12O6")  # keeps the model from having no formula
+    met = cobra.Metabolite("x_e", formula=formula)
+    model.add_metabolites([glc, met])
+    ex_glc, ex_x = cobra.Reaction("EX_glc"), cobra.Reaction("EX_x")
+    model.add_reactions([ex_glc, ex_x])
+    ex_glc.add_metabolites({glc: -1.0})
+    ex_x.add_metabolites({met: -1.0})
+
+    weights = compute_carbon_weights(model, ["EX_x"], bio_rxn_id="biomass")
+
+    assert weights["EX_x"] == pytest.approx(expected)

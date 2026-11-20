@@ -108,9 +108,8 @@ def load_flux_data(path: str | Path) -> FluxData:
     FileNotFoundError
         If ``path`` does not exist.
     ValueError
-        If the file is empty, has fewer than three header columns, has no exchange columns, has a
-        row with another number of cells than the header, or has the column ``evotuneRMSEweight``
-        (the column is called ``weight``).
+        If the file is empty, has fewer than three header columns, has no exchange columns, or has a
+        row with another number of cells than the header.
 
     See Also
     --------
@@ -159,10 +158,6 @@ def load_flux_data(path: str | Path) -> FluxData:
 
     # Pull out optional columns first; collect indices to drop.
     optional_indices: list[int] = []
-    if _index_of(header, "evotuneRMSEweight") is not None:
-        raise ValueError(
-            f"{path}: the column 'evotuneRMSEweight' is now called 'weight'."
-        )
     weight_idx = _index_of(header, "weight")
     source_idx = _index_of(header, "source")
 

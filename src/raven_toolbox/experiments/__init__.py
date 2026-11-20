@@ -18,6 +18,14 @@ Two kinds of conditions are scored:
 Both files have the layout described in :func:`load_flux_data`. A third file, ``zeroFlux.tsv``,
 lists reactions that carry no flux in any condition.
 
+.. important::
+   The model objective must be the maximisation of the growth. The functions do not set the
+   objective: :func:`simulate_conditions` solves each condition with the objective that the model
+   has, and the growth rate is the flux of the biomass reaction in that solution. In a
+   maximum-growth condition the number that is compared with the measurement is therefore the
+   maximum of the model objective, which is the maximal growth rate only if the objective is the
+   biomass reaction. Set ``model.objective`` to the biomass reaction first.
+
 Workflow:
 
 1. :func:`load_experiment_data` reads the three files of a folder into an
@@ -60,7 +68,7 @@ organism grew at 0.9 1/h, while the model grows at 1.0 1/h:
 >>> weights = compute_carbon_weights(model, ["EX_glc", "growth"], "growth")
 >>> distance, _ = experiment_distance(
 ...     ExperimentData(flux_data=data), flux_sims=sims, max_growth_sims=None,
-...     carbon_weights=weights, bio_rxn_id="growth")
+...     carbon_weights=weights)
 >>> round(distance, 3)
 2.899
 """

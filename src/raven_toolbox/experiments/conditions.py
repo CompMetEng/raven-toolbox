@@ -64,10 +64,18 @@ def simulate_conditions(
 ) -> list[ConditionSimResult]:
     """Simulate every condition of a data set in a model.
 
-    For each condition the model is set to the uptake of the condition's carbon source, solved with
-    its current objective (normally maximisation of the biomass reaction), and the growth rate and
-    the fluxes that the measurements cover are recorded. The model is not changed: every change is
-    undone with ``with model:``. A data set is either the flux conditions of
+    For each condition the model is set to the uptake of the condition's carbon source, solved, and
+    the growth rate and the fluxes that the measurements cover are recorded. The model is not
+    changed: every change is undone with ``with model:``.
+
+    .. important::
+       The model objective must be the maximisation of the growth. The functions do not set the
+       objective: each condition is solved with the objective that the model has (in its direction,
+       normally maximisation), and the growth rate is the flux of the biomass reaction ``bio_rxn_id``
+       in that solution. Set ``model.objective = bio_rxn_id`` before the simulation. With another
+       objective the biomass flux is the value in one of the optimal solutions of that objective,
+       not the maximal growth rate, and in a maximum-growth condition the distance then compares
+       a number that is not the maximal growth rate with the measurement. A data set is either the flux conditions of
     ``ExperimentData.flux_data`` (``constrain=True``) or the maximum-growth conditions of
     ``ExperimentData.max_growth`` (``constrain=False``); see the package documentation.
 
@@ -109,7 +117,8 @@ def simulate_conditions(
         Ids of reactions that carry no flux in any condition (``ExperimentData.zero_flux``). A flux
         through them is counted as an error in the distance.
     bio_rxn_id : str
-        Id of the biomass reaction, whose flux is the growth rate.
+        Id of the biomass reaction, whose flux in the solution is the growth rate. It should be the
+        objective of the model (see above).
     make_anaerobic : callable, optional
         Function ``f(model)`` that changes the model in place to anaerobic growth. How a model is
         made anaerobic depends on the organism, so there is no default; without the function the
@@ -131,10 +140,9 @@ def simulate_conditions(
     ------
     ValueError
         If the name of a condition with a weight other than 0 matches no exchange metabolite of
-        ``flux_data.exch_mets``.
-    KeyError
-        If an exchange reaction of ``flux_data`` is not in the model. A biomass or zero-flux
-        reaction that is not in the model is read as flux 0.
+        ``flux_data.exch_mets``, or if an exchange reaction of ``flux_data``, a reaction of
+        ``zero_flux_rxns`` or the biomass reaction is not in the model. The message names the
+        reactions that are missing, and nothing is solved.
 
     See Also
     --------
@@ -168,6 +176,7 @@ def simulate_conditions(
         optimize = _default_optimize
     active = _active_conditions(flux_data)
     cond_to_exch_idx = _match_conditions_to_exch(flux_data, active)
+    _check_reactions(model, flux_data, zero_flux_rxns, bio_rxn_id)
     all_condition_rxn_ids = sorted(
         {flux_data.exch_rxn_ids[j] for j in set(cond_to_exch_idx.values())}
     )
@@ -237,6 +246,17 @@ def simulate_conditions(
 
 def _default_optimize(model: "cobra.Model") -> "cobra.Solution":
     return model.optimize()
+
+
+def _check_reactions(
+    model: "cobra.Model", flux_data: "FluxData", zero_flux_rxns: list[str], bio_rxn_id: str,
+) -> None:
+    """Raise ``ValueError`` naming the reactions that the simulation needs and the model lacks."""
+    needed = {*flux_data.exch_rxn_ids, *zero_flux_rxns, bio_rxn_id}
+    in_model = {rxn.id for rxn in model.reactions}
+    missing = sorted(needed - in_model)
+    if missing:
+        raise ValueError(f"The reactions {', '.join(missing)} are not in the model.")
 
 
 def _active_conditions(flux_data: "FluxData") -> list[int]:

@@ -15,7 +15,8 @@ Two kinds of conditions are scored, which differ in what is compared:
   the growth rate and the measured exchange fluxes are compared. Reactions that should carry no
   flux (the ``zero_flux`` list) are compared with 0.
 * In a **maximum-growth condition** the uptake of the carbon source is unlimited, and only the
-  growth rate is compared.
+  growth rate is compared. This is the maximal growth rate if the objective of the simulated model
+  is the growth (see :func:`~raven_toolbox.experiments.simulate_conditions`).
 
 :func:`dataset_rmse` scores the conditions of one file, and :func:`experiment_distance`
 combines the two files into one value. A condition that the model cannot solve gets a fixed
@@ -31,13 +32,12 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Iterable
 
+import cobra
 import numpy as np
 
 from .conditions import ConditionSimResult
 
 if TYPE_CHECKING:
-    import cobra
-
     from .data import ExperimentData
     from .flux_data import FluxData
 
@@ -77,8 +77,15 @@ def compute_carbon_weights(
     dict of str to float
         Weight per reaction id. The biomass reaction gets 41. Every other reaction gets the number
         of carbon atoms in the formula of its single exchanged metabolite. A reaction with more
-        than one metabolite, a metabolite without a formula and a metabolite with no carbon atoms
-        (O2, water) get the weight 1, so that their flux mismatches still count in the distance.
+        than one metabolite, a metabolite without a formula, a formula that cannot be read and a
+        metabolite with no carbon atoms (O2, water) get the weight 1, so that their flux
+        mismatches still count in the distance.
+
+        The formula is read as cobra reads it: element symbols with an optional integer or decimal
+        count (``C6H12O6``, ``C2.5H5``), and a trailing charge sign or ``*`` between parts of the
+        formula (``C6H12O6*H2O``) is ignored. A formula with parentheses (``C6H12O6(H2O)2``,
+        the polymer ``(C5H8)n``) cannot be read, and neither can an empty one. The MATLAB function
+        ``computeCarbonWeights`` gives the same weights.
 
     Warns
     -----
@@ -123,10 +130,23 @@ def compute_carbon_weights(
             continue
         rxn = model.reactions.get_by_id(rxn_id)
         mets = list(rxn.metabolites)
-        carbon = mets[0].elements.get("C") if len(mets) == 1 else None
+        carbon = _carbon_atoms(mets[0].formula) if len(mets) == 1 else None
         value = float(carbon) if carbon is not None else 1.0
         carbon_weights[rxn_id] = value if value != 0.0 else 1.0
     return carbon_weights
+
+
+def _carbon_atoms(formula: str | None) -> float | None:
+    """Number of carbon atoms in ``formula``, or None if it has no formula, cannot be read, or has
+    no carbon. cobra warns about a formula it cannot read; here that is an expected case."""
+    if not formula:
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        elements = cobra.Metabolite("formula", formula=formula).elements
+    if not elements:
+        return None
+    return elements.get("C")
 
 
 def dataset_rmse(
@@ -135,7 +155,6 @@ def dataset_rmse(
     *,
     constrain: bool,
     carbon_weights: dict[str, float],
-    bio_rxn_id: str,
     penalty: float = INFEASIBLE_PENALTY,
 ) -> tuple[float, np.ndarray]:
     """Distance between the simulation of one data set and its measurements.
@@ -165,8 +184,6 @@ def dataset_rmse(
     carbon_weights : dict of str to float
         Weights from :func:`compute_carbon_weights`. A reaction that is not in the dictionary gets
         the weight 1.
-    bio_rxn_id : str
-        Id of the biomass reaction. It is not read; the growth rate comes from ``sims``.
     penalty : float, optional
         Error of a condition that could not be solved. Default 99
         (:data:`INFEASIBLE_PENALTY`).
@@ -202,8 +219,7 @@ def dataset_rmse(
     ...                 exch_fluxes=np.array([[-1000.0]]), exch_mets=["glc"],
     ...                 exch_rxn_ids=["EX_glc"])
     >>> sims = [ConditionSimResult(feasible=True, growth=0.5)]
-    >>> rmse, per_condition = dataset_rmse(data, sims, constrain=False, carbon_weights={},
-    ...                                    bio_rxn_id="growth")
+    >>> rmse, per_condition = dataset_rmse(data, sims, constrain=False, carbon_weights={})
     >>> round(rmse, 3), per_condition.round(3).tolist()
     (4.1, [4.1])
     """
@@ -268,7 +284,6 @@ def experiment_distance(
     flux_sims: list[ConditionSimResult] | None,
     max_growth_sims: list[ConditionSimResult] | None,
     carbon_weights: dict[str, float],
-    bio_rxn_id: str,
     penalty: float = INFEASIBLE_PENALTY,
     max_growth_weight: float = 1.0,
 ) -> tuple[float, dict[str, np.ndarray]]:
@@ -297,8 +312,6 @@ def experiment_distance(
         ``experiment_data.max_growth`` is ``None``.
     carbon_weights : dict of str to float
         Weights from :func:`compute_carbon_weights`.
-    bio_rxn_id : str
-        Id of the biomass reaction (not read, see :func:`dataset_rmse`).
     penalty : float, optional
         Error of a condition that could not be solved. Default 99.
     max_growth_weight : float, optional
@@ -341,7 +354,7 @@ def experiment_distance(
     >>> distance, detail = experiment_distance(
     ...     ExperimentData(max_growth=data), flux_sims=None,
     ...     max_growth_sims=[ConditionSimResult(feasible=True, growth=0.5)],
-    ...     carbon_weights={}, bio_rxn_id="growth")
+    ...     carbon_weights={})
     >>> round(distance, 3)
     4.1
     """
@@ -354,8 +367,7 @@ def experiment_distance(
             raise ValueError("experiment_data.flux_data is set but flux_sims is None.")
         rmse, per_cond = dataset_rmse(
             experiment_data.flux_data, flux_sims,
-            constrain=True, carbon_weights=carbon_weights, bio_rxn_id=bio_rxn_id,
-            penalty=penalty,
+            constrain=True, carbon_weights=carbon_weights, penalty=penalty,
         )
         if not np.isnan(rmse):
             parts.append(rmse)
@@ -367,8 +379,7 @@ def experiment_distance(
             raise ValueError("experiment_data.max_growth is set but max_growth_sims is None.")
         rmse, per_cond = dataset_rmse(
             experiment_data.max_growth, max_growth_sims,
-            constrain=False, carbon_weights=carbon_weights, bio_rxn_id=bio_rxn_id,
-            penalty=penalty,
+            constrain=False, carbon_weights=carbon_weights, penalty=penalty,
         )
         if not np.isnan(rmse):
             parts.append(rmse)
