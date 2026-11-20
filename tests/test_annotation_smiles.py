@@ -2,6 +2,7 @@
 import logging
 
 import cobra
+import requests
 
 from raven_toolbox.annotation import find_met_smiles
 
@@ -128,16 +129,51 @@ def test_404_means_no_smiles(monkeypatch, tmp_path):
     assert _smiles(model, "x_c") == ""
 
 
-def test_500_treated_as_no_smiles(monkeypatch, tmp_path):
-    """A 500 (often returned for slashes etc. in names) is treated
-    as 'no match' rather than a crash."""
+def test_400_is_a_final_no_match_and_is_cached(monkeypatch, tmp_path):
+    """PubChem answers 400 for a name it cannot parse; asking again gives the same answer."""
     cache_path = tmp_path / "smilesDB.tsv"
-    _install_fake_session(monkeypatch, {
-        "weird/name": (500, ""),
-    })
-    model = _build_model([("w_c", "weird/name")])
+    _install_fake_session(monkeypatch, {"bad%20name": (400, "")})
+    model = _build_model([("w_c", "bad name")])
     find_met_smiles(model, cache_path=cache_path)
     assert _smiles(model, "w_c") == ""
+    assert "bad name\t\n" in cache_path.read_text()
+
+
+def test_a_server_error_is_not_cached(monkeypatch, tmp_path, caplog):
+    """A 500 is not an answer about the name: no crash, no SMILES, nothing cached."""
+    cache_path = tmp_path / "smilesDB.tsv"
+    _install_fake_session(monkeypatch, {"weird": (500, "")})
+    model = _build_model([("w_c", "weird")])
+    with caplog.at_level(logging.WARNING):
+        find_met_smiles(model, cache_path=cache_path)
+    assert _smiles(model, "w_c") == ""
+    assert not cache_path.exists() or cache_path.read_text() == ""
+    assert "not cached" in caplog.text
+
+
+def test_a_network_error_is_not_cached_and_the_next_name_is_still_asked(monkeypatch, tmp_path):
+    cache_path = tmp_path / "smilesDB.tsv"
+    from raven_toolbox.annotation import smiles as mod
+
+    class _Session:
+        def get(self, url, timeout=None):
+            if "ethanol" in url:
+                raise requests.ConnectionError("no network")
+            return _FakeResponse(200, "OC1OC(CO)C(O)C(O)C1O\n")
+
+    monkeypatch.setattr(mod, "_make_session", lambda: _Session())
+    monkeypatch.setattr(mod, "_INTER_REQUEST_SLEEP", 0.0)
+    model = _build_model([("etoh_c", "ethanol"), ("glc_c", "glucose")])
+    find_met_smiles(model, cache_path=cache_path)
+
+    assert _smiles(model, "etoh_c") == ""
+    assert _smiles(model, "glc_c") == "OC1OC(CO)C(O)C(O)C1O"
+    assert cache_path.read_text() == "glucose\tOC1OC(CO)C(O)C(O)C1O\n"
+
+
+def test_the_pause_between_requests_keeps_to_five_requests_per_second():
+    from raven_toolbox.annotation import smiles as mod
+    assert mod._INTER_REQUEST_SLEEP >= 0.2
 
 
 # --------------------------------------------------------------------------- #
@@ -192,8 +228,8 @@ def test_existing_cache_preserved_when_appending(monkeypatch, tmp_path):
 # Filters and skip conditions
 # --------------------------------------------------------------------------- #
 
-def test_skips_prot_metabolites(monkeypatch, tmp_path):
-    """Metabolite names starting with 'prot_' must not be looked up."""
+def test_skips_the_prefixes_that_are_given(monkeypatch, tmp_path):
+    """Metabolite names that start with one of skip_prefixes must not be looked up."""
     cache_path = tmp_path / "smilesDB.tsv"
 
     requested_urls: list[str] = []
@@ -210,10 +246,19 @@ def test_skips_prot_metabolites(monkeypatch, tmp_path):
     model = _build_model([
         ("prot_P1_c", "prot_P1"),
         ("prot_pool_c", "prot_pool"),
+        ("pseudo_c", "pseudo_x"),
     ])
-    find_met_smiles(model, cache_path=cache_path)
+    find_met_smiles(model, cache_path=cache_path, skip_prefixes=("prot_", "pseudo_"))
 
     assert requested_urls == []
+
+
+def test_no_prefix_is_skipped_by_default(monkeypatch, tmp_path):
+    cache_path = tmp_path / "smilesDB.tsv"
+    _install_fake_session(monkeypatch, {"prot_P1": (200, "CCO\n")})
+    model = _build_model([("prot_P1_c", "prot_P1")])
+    find_met_smiles(model, cache_path=cache_path)
+    assert _smiles(model, "prot_P1_c") == "CCO"
 
 
 def test_skips_metabolites_with_existing_smiles(monkeypatch, tmp_path):

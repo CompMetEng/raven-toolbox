@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable, Optional
 from urllib.parse import quote
 
 import requests
@@ -38,8 +38,7 @@ _PUBCHEM_URL = (
 )
 _TIMEOUT_SECONDS = 30
 _NUM_RETRIES = 10
-_INTER_REQUEST_SLEEP = 0.05  # seconds; PubChem allows ~5 req/s
-_PROT_PATTERN = re.compile(r"^prot_")
+_INTER_REQUEST_SLEEP = 0.2  # seconds; PubChem allows at most 5 requests per second
 _FIRST_LINE_PATTERN = re.compile(r"^(\S*)\n")
 
 
@@ -80,6 +79,7 @@ def find_met_smiles(
     model: "cobra.Model",
     *,
     cache_path: str | Path,
+    skip_prefixes: Iterable[str] = (),
 ) -> None:
     r"""Write the SMILES of the metabolites of a model to their annotation, from PubChem.
 
@@ -88,19 +88,22 @@ def find_met_smiles(
     metabolite with that name, for example the same metabolite in several compartments. For each
     metabolite:
 
-    1. Metabolites whose name starts with ``prot_`` are skipped.
+    1. Metabolites whose name starts with one of ``skip_prefixes`` are skipped.
     2. Metabolites without a name are skipped, with one warning that lists them.
     3. Metabolites that already have a SMILES are skipped.
     4. The name is looked up in the cache file. If the cache holds a name more than once, the last
        row is used.
     5. If the name is not in the cache, PubChem is asked, one request after the other with a pause
-       of 0.05 s, and failed requests with a status such as 429 or 503 are retried up to 10 times.
-       The first SMILES that PubChem returns is used. The result is appended to the cache.
+       of 0.2 s (PubChem allows at most 5 requests per second), and failed requests with a status
+       such as 429 or 503 are retried up to 10 times. The first SMILES that PubChem returns is
+       used. The result is appended to the cache.
 
-    A name for which PubChem returns no SMILES gets a cache row with an empty SMILES, so that it is
-    not asked for again; the same happens when the request fails because the network is not
-    available. Delete such rows from the cache to look them up again. A metabolite without a SMILES
-    gets no annotation.
+    A name for which PubChem answers that it has no compound with that name (HTTP status 404, or
+    400 for a name that PubChem cannot parse) gets a cache row with an empty SMILES, so that it is
+    not asked for again. Delete such rows from the cache to look them up again. A request that
+    fails for another reason, such as no network, a timeout or a server error that persists after
+    the retries, is logged as a warning and is not written to the cache, so that a later call asks
+    again. A metabolite without a SMILES gets no annotation.
 
     Network access to ``pubchem.ncbi.nlm.nih.gov`` is needed only for names that are not in the
     cache.
@@ -111,6 +114,10 @@ def find_met_smiles(
         The model, changed in place.
     cache_path : str or pathlib.Path
         The cache file. It is created, with its folder, if it does not exist.
+    skip_prefixes : iterable of str, optional
+        Metabolites whose name starts with one of these prefixes are skipped. Use it for
+        pseudo-metabolites that are not compounds, for example ``("prot_",)`` for the enzymes of an
+        enzyme-constrained model. Default: none.
 
     See Also
     --------
@@ -130,6 +137,7 @@ def find_met_smiles(
     """
     cache_path = Path(cache_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    skip_prefixes = tuple(skip_prefixes)
 
     # Build map: metabolite name -> list of metabolite objects sharing it.
     name_to_mets: dict[str, list] = {}
@@ -139,7 +147,7 @@ def find_met_smiles(
         if not name:
             unnamed.append(met.id)
             continue
-        if _PROT_PATTERN.match(name):
+        if skip_prefixes and name.startswith(skip_prefixes):
             continue
         if met.annotation.get("smiles"):
             continue
@@ -181,11 +189,17 @@ def find_met_smiles(
     session = _make_session()
     n_found = 0
     n_missing = 0
+    n_failed = 0
 
     for name in sorted(name_to_mets):
         smiles = _fetch_one_smiles(session, name)
-        # Append to cache immediately, including empty results so we
-        # do not retry next time.
+        if smiles is None:
+            # The request failed: nothing is cached, so a later call asks again.
+            n_failed += 1
+            time.sleep(_INTER_REQUEST_SLEEP)
+            continue
+        # Append to cache immediately, including a clean "no match" (empty
+        # SMILES) so that it is not asked for again.
         _append_cache(cache_path, name, smiles)
 
         if smiles:
@@ -198,6 +212,11 @@ def find_met_smiles(
 
         time.sleep(_INTER_REQUEST_SLEEP)
 
+    if n_failed:
+        logger.warning(
+            "find_met_smiles: %d request(s) failed and are not cached; call again to retry.",
+            n_failed,
+        )
     total = n_found + n_missing
     if total > 0:
         pct = 100.0 * n_found / total
@@ -245,24 +264,25 @@ def _make_session() -> requests.Session:
     return session
 
 
-def _fetch_one_smiles(session: requests.Session, name: str) -> str:
-    """Fetch SMILES from PubChem for one metabolite name. Returns
-    empty string if unfound or unrecoverable error."""
+def _fetch_one_smiles(session: requests.Session, name: str) -> Optional[str]:
+    """Fetch the SMILES from PubChem for one metabolite name.
+
+    Returns the SMILES, an empty string if PubChem has no match (a final answer), or ``None`` if
+    the request failed (no network, a timeout, or an HTTP status that is not an answer)."""
     url = _PUBCHEM_URL.format(name=quote(name, safe=""))
     try:
         response = session.get(url, timeout=_TIMEOUT_SECONDS)
     except requests.RequestException as e:
         logger.warning("PubChem request failed for %r: %s", name, e)
-        return ""
+        return None
 
-    if response.status_code in (400, 404, 500):
+    if response.status_code in (400, 404):
         return ""
     if response.status_code != 200:
         logger.warning(
-            "PubChem returned HTTP %d for %r; treating as no match.",
-            response.status_code, name,
+            "PubChem returned HTTP %d for %r; not cached.", response.status_code, name,
         )
-        return ""
+        return None
 
     text = response.text
     if not text:

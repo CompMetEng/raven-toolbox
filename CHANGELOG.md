@@ -24,7 +24,7 @@
 ### Proteins and annotation
 
 * New: `utils.protein.calculate_mw` computes the molecular weight of a protein from its amino acid sequence (average residue masses plus one water; the codes B, J, O, U, X and Z are recognised; an empty sequence gives NaN).
-* New: `annotation.find_met_smiles` fills `annotation["smiles"]` of the metabolites from PubChem, with a local TSV cache (`cache_path`) that is appended to after each lookup, and `annotation.met_smiles` reads the SMILES of a metabolite whether the annotation is a string or a list.
+* New: `annotation.find_met_smiles` fills `annotation["smiles"]` of the metabolites from PubChem, with a local TSV cache (`cache_path`) that is appended to after each lookup, and `annotation.met_smiles` reads the SMILES of a metabolite whether the annotation is a string or a list. `skip_prefixes` leaves out the metabolites whose name starts with one of the prefixes (for the enzyme pseudo-metabolites of enzyme-constrained models). A request that fails (no network, a timeout, a server error) is not written to the cache; only a final answer of PubChem (a match, or no compound of that name) is, and the requests are paused for 0.2 s to keep to the limit of 5 per second.
 
 ### Data
 
