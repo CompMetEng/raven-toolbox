@@ -104,6 +104,24 @@ def test_keep_offsets_reverts_in_a_context():
     assert model.reactions.NGAM.bounds == (1.0, 1.0)
 
 
+def test_keep_offsets_of_needs_one_metabolite_of_that_name_in_the_reaction():
+    with pytest.raises(ValueError, match="needs exactly one"):
+        set_gam(_toy(), 45.0, biomass_rxn="BIO", cofactor_met_names=("nothing", "ATP"),
+                keep_offsets_of="nothing")
+
+
+def test_get_gam_needs_the_biomass_reaction():
+    with pytest.raises(KeyError):
+        get_gam(_toy(), biomass_rxn="NOPE")
+
+
+def test_keep_offsets_sets_ngam_too():
+    model = _toy(gam=30.0)
+    set_gam(model, 45.0, biomass_rxn="BIO", cofactor_met_names=NAMES,
+            ngam_rxn="NGAM", ngam_value=2.0, keep_offsets_of="ATP")
+    assert model.reactions.NGAM.bounds == (2.0, 2.0)
+
+
 def test_keep_offsets_of_must_be_a_cofactor():
     with pytest.raises(ValueError, match="not one of the cofactor names"):
         set_gam(_toy(), 45.0, biomass_rxn="BIO", cofactor_met_names=("ADP",), keep_offsets_of="ATP")
