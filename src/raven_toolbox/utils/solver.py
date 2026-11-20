@@ -3,6 +3,21 @@
 :data:`RAVEN_TOLERANCE` and :func:`set_raven_tolerance` give a model the tolerance that
 RAVEN gives every LP it solves.
 
+Which function to call:
+
+* :func:`set_raven_tolerance` on a model before it is solved, to give it the solver tolerance
+  that RAVEN uses.
+* :func:`optimize_model` instead of ``model.optimize()`` when a model may be infeasible and the
+  caller wants a solution with that status, not an exception.
+* :func:`repair_scipy_problem` once on a plain ``cobra.Model`` that is on the scipy solver,
+  before reactions are removed from it, and :func:`switch_to_scipy` to move a model that was
+  built on another solver to the scipy solver.
+* :func:`fast_solver_while_building` around the creation of a large model, and
+  :func:`edit_on_fast_solver` around structural edits of a large model (removing reactions,
+  rewriting many coefficients), when the default solver is scipy.
+* :func:`constraint_shadow_prices` to read the shadow prices of constraints on any solver,
+  including scipy.
+
 The scipy interface of optlang differs from the other interfaces in ways that matter for a
 large model, and the rest of this module works around them.
 
@@ -23,8 +38,8 @@ Index map after a removal
     user code that calls ``model.remove_reactions``, ``reaction.delete`` or
     ``model.remove_cons_vars``. A model that is built on a different interface and converted
     afterwards with :func:`switch_to_scipy` has no removal on an unrepaired scipy problem.
-    For a plain ``cobra.Model`` on the scipy solver that you edit yourself, call ``repair_scipy_problem(model)`` before the first removal; a
-    call after the removals still restores the map and the matrix, but anything read in
+    For a plain ``cobra.Model`` on the scipy solver that you edit yourself, call
+    ``repair_scipy_problem(model)`` before the first removal; a call after the removals still restores the map and the matrix, but anything read in
     between was wrong.
 
 Coefficient matrix
@@ -90,23 +105,67 @@ RAVEN_TOLERANCE = 1e-9
 
 
 def set_raven_tolerance(model: cobra.Model, tolerance: float = RAVEN_TOLERANCE) -> cobra.Model:
-    """Set the solver tolerance of ``model`` to RAVEN's value.
+    """Give a model the solver tolerance that RAVEN uses.
 
-    ``cobra.Model.tolerance`` stays on the model when its solver is replaced
-    and when it is copied. The model is changed in place and returned.
+    The model is changed in place and returned. ``cobra.Model.tolerance`` stays on the model when its
+    solver is replaced and when it is copied.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model.
+    tolerance : float, optional
+        Feasibility and optimality tolerance. Default :data:`RAVEN_TOLERANCE` (1e-9).
+
+    Returns
+    -------
+    cobra.Model
+        The model that was given.
+
+    Examples
+    --------
+    >>> import cobra
+    >>> from raven_toolbox.utils.solver import set_raven_tolerance
+    >>> model = set_raven_tolerance(cobra.Model("toy"))
+    >>> model.tolerance
+    1e-09
     """
     model.tolerance = tolerance
     return model
 
 
 def optimize_model(model, **kwargs):
-    """``model.optimize()`` that returns the solution of an infeasible LP on every solver.
+    """Solve a model and return its solution, also when the LP is infeasible.
 
-    Gurobi holds no primal values for an LP that it presolved as infeasible and optlang's
-    scipy interface returns ``None`` for them, and cobra reads them while it builds the
-    solution, so ``model.optimize()`` raises ``GurobiError`` or ``TypeError`` there. When
-    the solver status is not optimal this function returns a ``Solution`` with that status,
-    a NaN objective and NaN fluxes instead; with an optimal status every error is raised.
+    ``model.optimize()`` raises on some solvers when the LP is infeasible: Gurobi holds no primal
+    values for an LP that it presolved as infeasible, and optlang's scipy interface returns ``None``
+    for them, and cobra reads them while it builds the solution, so the call raises ``GurobiError``
+    or ``TypeError``. When the solver status is not optimal, this function returns a ``Solution`` with
+    that status, a NaN objective and NaN fluxes instead. With an optimal status every error is raised.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model.
+    **kwargs
+        Passed to ``model.optimize()``.
+
+    Returns
+    -------
+    cobra.Solution
+        The solution. Check its ``status`` before using the fluxes.
+
+    Examples
+    --------
+    >>> import cobra
+    >>> from raven_toolbox.utils.solver import optimize_model
+    >>> model = cobra.Model("toy")
+    >>> model.add_metabolites([cobra.Metabolite("a_c")])
+    >>> model.add_reactions([cobra.Reaction("r")])
+    >>> model.reactions.r.reaction = "a_c --> "
+    >>> model.reactions.r.lower_bound = 1  # a_c is consumed and nothing produces it
+    >>> optimize_model(model).status
+    'infeasible'
     """
     try:
         return model.optimize(**kwargs)
@@ -351,8 +410,19 @@ if _scipy_interface is not None:
 
 
 def is_scipy_interface(interface) -> bool:
-    """True if ``interface`` (a solver name, an optlang interface module or a model's
-    ``problem`` attribute) is optlang's scipy interface."""
+    """Whether something is optlang's scipy interface.
+
+    Parameters
+    ----------
+    interface : str or module or object
+        A solver name, an optlang interface module, or the ``problem`` attribute of a model's
+        solver.
+
+    Returns
+    -------
+    bool
+        True for the name ``"scipy"`` (any case) and for the scipy interface module.
+    """
     if _scipy_interface is None:
         return False
     if isinstance(interface, str):
@@ -407,21 +477,31 @@ def _rebuild_from_expressions(problem, solver) -> None:
 
 
 def repair_scipy_problem(model) -> bool:
-    """Make the scipy problem of ``model`` correct and fast to edit.
+    """Make the scipy problem of a model correct and fast to edit.
 
-    Does nothing and returns False when the solver of ``model`` is not optlang's scipy
-    interface. Otherwise it moves the problem to a class that renumbers the variable columns
-    correctly after a removal and stores the coefficients sparsely (see the module docstring),
-    applies the pending changes, restores the column map and the coefficient matrix if a
-    removal had already left the map stale, and returns True. Once the problem is switched, a
-    call is a type check.
+    Does nothing and returns False when the solver of the model is not optlang's scipy interface.
+    Otherwise it moves the problem to a class that renumbers the variable columns correctly after a
+    removal and stores the coefficients sparsely (see the module documentation), applies the pending
+    changes, restores the column map and the coefficient matrix if a removal had already left the map
+    stale, and returns True. Once the problem is switched, a call only checks the type.
+
+    Call it on a plain ``cobra.Model`` that is on the scipy solver, before you remove variables
+    (``remove_reactions``, ``Reaction.delete``, ``remove_cons_vars``). A model class that calls it
+    whenever ``model.solver`` is read is covered without that.
 
     Parameters
     ----------
-    model
-        A ``cobra.Model``. A model class can call this
-        function already; call it yourself for a plain ``cobra.Model`` before you remove
-        variables (``remove_reactions``, ``Reaction.delete``, ``remove_cons_vars``).
+    model : cobra.Model
+        The model.
+
+    Returns
+    -------
+    bool
+        True if the model is on the scipy solver and its problem is repaired.
+
+    See Also
+    --------
+    switch_to_scipy : Moves a model to the scipy solver.
     """
     solver = getattr(model, "_solver", None)
     problem = getattr(solver, "problem", None)
@@ -445,14 +525,24 @@ def repair_scipy_problem(model) -> bool:
 
 
 def switch_to_scipy(model) -> None:
-    """Move ``model`` to the scipy solver, fast, with the sparse problem of this module.
+    """Move a model to the scipy solver, fast, with the sparse problem of this module.
 
-    ``model.solver = "scipy"`` clones the problem through optlang, which grows a dense matrix
-    row by row. This builds the problem the way ``cobra.Model`` does when it is created, on
-    the sparse class, so a genome-scale model switches in seconds. The objective and its
-    direction are kept. A model whose solver holds anything besides one forward and one
-    reverse variable per reaction and one constraint per metabolite (an extra constraint or
-    variable of your own) is switched with optlang's clone instead and then repaired.
+    ``model.solver = "scipy"`` clones the problem through optlang, which grows a dense matrix row by
+    row. This builds the problem the way ``cobra.Model`` does when it is created, on the sparse class,
+    so a genome-scale model switches in seconds. The objective and its direction are kept. A model
+    whose solver holds anything besides one forward and one reverse variable per reaction and one
+    constraint per metabolite (an extra constraint or variable of your own) is switched with optlang's
+    clone instead and then repaired.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model, changed in place.
+
+    See Also
+    --------
+    repair_scipy_problem : Repairs a model that is already on the scipy solver.
+    fast_solver_while_building : Builds a model on a fast solver before it is switched.
     """
     if repair_scipy_problem(model):
         return
@@ -518,15 +608,31 @@ def _populate_sparse(model, solver) -> None:
 
 @contextlib.contextmanager
 def edit_on_fast_solver(model):
-    """Run structural edits of ``model`` on glpk when it is on the scipy solver.
+    """Run structural edits of a model on glpk when the model is on the scipy solver.
 
-    Removing reactions and metabolites, or rewriting the coefficients of thousands of
-    reactions, is quick on glpk and slow on the scipy interface, where optlang rewrites the
-    constraint expressions (and the rows) for each edit. Inside the block a scipy model is on
-    glpk; on exit it is converted back with :func:`switch_to_scipy`. The block changes nothing
-    for a model on another solver, for a model inside a ``with model:`` context (its
-    rollbacks hold the solver objects) and when glpk is unavailable. The optlang solver of
-    the model is a different object inside the block and after it.
+    Removing reactions and metabolites, or rewriting the coefficients of thousands of reactions, is
+    quick on glpk and slow on the scipy interface, where optlang rewrites the constraint expressions
+    (and the rows) for each edit. Inside the block a scipy model is on glpk; on exit it is converted
+    back with :func:`switch_to_scipy`. The block changes nothing for a model on another solver, for a
+    model inside a ``with model:`` context (its rollbacks hold the solver objects) and when glpk is
+    unavailable. The optlang solver of the model is a different object inside the block and after it.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The model.
+
+    Yields
+    ------
+    bool
+        True if the model is on glpk inside the block, False if the block changes nothing.
+
+    Examples
+    --------
+    ::
+
+        with edit_on_fast_solver(model):
+            model.remove_reactions(reactions_to_remove)
     """
     from cobra import Model
 
@@ -547,12 +653,25 @@ def edit_on_fast_solver(model):
 
 @contextlib.contextmanager
 def fast_solver_while_building():
-    """Make models created inside the block on a solver that builds large models quickly.
+    """Create models inside the block on a solver that builds large models quickly.
 
-    When cobra's default solver is scipy the block runs with glpk as the default, which
-    builds a genome-scale model in seconds; the default is restored on exit. Models created
-    inside are on glpk; convert them with :func:`switch_to_scipy`. With any other default
-    solver, or when glpk is unavailable, the block changes nothing.
+    When cobra's default solver is scipy, the block runs with glpk as the default, which builds a
+    genome-scale model in seconds; the default is restored on exit. Models created inside are on glpk;
+    convert them with :func:`switch_to_scipy`. With any other default solver, or when glpk is
+    unavailable, the block changes nothing.
+
+    Yields
+    ------
+    bool
+        True if the default solver was changed inside the block.
+
+    Examples
+    --------
+    ::
+
+        with fast_solver_while_building():
+            model = cobra.io.read_sbml_model("model.xml")
+        switch_to_scipy(model)
     """
     import cobra
 
@@ -630,37 +749,53 @@ def _certified_result(problem):
 
 
 def constraint_shadow_prices(model, constraint_ids: Iterable[str]) -> np.ndarray:
-    """Shadow prices of the named constraints, on every solver, as one array.
+    """Shadow prices of named constraints on every solver, as one array.
 
-    The shadow price of a constraint is the change of the optimum, in the direction of the
-    model objective, per unit rise of its right-hand side: for a metabolite balance
-    ``S v = 0`` it is the optimum gained per unit of the metabolite supplied. It is the value
-    of ``cobra.Metabolite.shadow_price`` for the glpk, gurobi and cplex interfaces, and for the
-    scipy interface (which raises) it is computed from the HiGHS row marginals of the last
-    solve.
+    The shadow price of a constraint is the change of the optimum, in the direction of the model
+    objective, per unit rise of its right-hand side. For a metabolite balance ``S v = 0`` it is the
+    optimum gained per unit of the metabolite supplied. It is the value of
+    ``cobra.Metabolite.shadow_price`` for the glpk, gurobi and cplex interfaces, and for the scipy
+    interface (which raises) it is computed from the HiGHS row marginals of the last solve.
 
-    The model must have been solved. On the scipy interface the stored result is used only if
-    it is an optimum of the problem as it is now; otherwise the model is solved once more. If
-    that solve is not optimal, the function raises.
+    The model must have been solved. On the scipy interface the stored result is used only if it is
+    an optimum of the problem as it is now; otherwise the model is solved once more. If that solve is
+    not optimal, the function raises.
 
     Parameters
     ----------
-    model
-        A ``cobra.Model`` that has been optimized.
-    constraint_ids
-        IDs of constraints of the model, for example the metabolite ids of a pool constraint.
+    model : cobra.Model
+        A model that has been optimized.
+    constraint_ids : iterable of str
+        Ids of constraints of the model, for example metabolite ids.
 
     Returns
     -------
     numpy.ndarray
-        One shadow price per ID, in the order given.
+        One shadow price per id, in the order given.
 
     Raises
     ------
     RuntimeError
         If the scipy problem has no optimal solution to read the marginals from.
     KeyError
-        If an ID is not a constraint of the model.
+        If an id is not a constraint of the model.
+
+    Examples
+    --------
+    Growth uses 10 mmol glucose per unit, so one more mmol of glucose supplied gives 0.1 more growth:
+
+    >>> import cobra
+    >>> from raven_toolbox.utils.solver import constraint_shadow_prices
+    >>> model = cobra.Model("toy")
+    >>> model.add_metabolites([cobra.Metabolite("glc_e")])
+    >>> model.add_reactions([cobra.Reaction("EX_glc"), cobra.Reaction("growth")])
+    >>> model.reactions.EX_glc.reaction = "glc_e <=> "
+    >>> model.reactions.growth.reaction = "10 glc_e --> "
+    >>> model.reactions.EX_glc.lower_bound = -10
+    >>> model.objective = "growth"
+    >>> _ = model.optimize()
+    >>> abs(round(float(constraint_shadow_prices(model, ["glc_e"])[0]), 3))
+    0.1
     """
     ids = list(constraint_ids)
     constraints = model.constraints

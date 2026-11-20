@@ -1,8 +1,12 @@
-"""SMILES lookup via PubChem with a local TSV cache.
+"""SMILES of metabolites from PubChem, with a local cache.
 
-The cache file is a two-column TSV with no header: ``name<TAB>smiles``.
-Each successful lookup is appended immediately so interrupted runs
-resume gracefully.
+:func:`find_met_smiles` looks up the SMILES of the metabolites of a model by name and writes it
+to the annotation of each metabolite; :func:`met_smiles` reads it back. Looking up a name needs
+network access to PubChem, so every result is stored in a cache file that later calls read first.
+
+The cache file is a tab-delimited file without header, with the columns ``name`` and ``smiles``.
+Each result is appended as soon as it is known, so an interrupted run continues where it
+stopped.
 """
 from __future__ import annotations
 
@@ -40,16 +44,31 @@ _FIRST_LINE_PATTERN = re.compile(r"^(\S*)\n")
 
 
 def met_smiles(metabolite) -> str:
-    """The metabolite's SMILES, whatever shape its annotation is in.
+    """The SMILES of a metabolite, whatever form its annotation has.
 
-    cobra stores an annotation value as the object it was assigned, and
-    returns a *list* for a model read back from a file: a metabolite
-    annotated in memory by :func:`find_met_smiles` has ``"CCO"``,
-    and the same metabolite after it is saved and loaded has
-    ``["CCO"]``. Readers that assume a string get a list that compares
-    equal to nothing and is not hashable.
+    cobra keeps an annotation value as it was assigned, but returns a list for a model that was
+    read from a file: a metabolite annotated in memory by :func:`find_met_smiles` has ``"CCO"``, and
+    the same metabolite after it is saved and loaded has ``["CCO"]``. This function returns a string
+    in both cases.
 
-    Returns the first non-empty entry, or ``""`` when there is none.
+    Parameters
+    ----------
+    metabolite : cobra.Metabolite
+        The metabolite.
+
+    Returns
+    -------
+    str
+        The first non-empty SMILES in ``metabolite.annotation["smiles"]``, or ``""`` if there is none.
+
+    Examples
+    --------
+    >>> import cobra
+    >>> from raven_toolbox.annotation import met_smiles
+    >>> met = cobra.Metabolite("etoh")
+    >>> met.annotation["smiles"] = ["CCO"]
+    >>> met_smiles(met)
+    'CCO'
     """
     value = metabolite.annotation.get("smiles", "")
     if isinstance(value, (list, tuple, set)):
@@ -62,29 +81,52 @@ def find_met_smiles(
     *,
     cache_path: str | Path,
 ) -> None:
-    """Populate ``metabolite.annotation['smiles']`` from PubChem.
+    r"""Write the SMILES of the metabolites of a model to their annotation, from PubChem.
 
-    For every metabolite in the model:
+    The SMILES of a metabolite is found by its name (``Metabolite.name``) and written to
+    ``metabolite.annotation["smiles"]``. A lookup is done once per distinct name and applies to every
+    metabolite with that name, for example the same metabolite in several compartments. For each
+    metabolite:
 
-    1. Skip if the name starts with ``prot_`` (enzyme pseudometabolite).
-    2. Skip, with a warning, if the metabolite has no name.
-    3. Skip if ``annotation['smiles']`` is already set.
-    4. Look up the metabolite name in the local TSV cache. When the cache
-       holds a name more than once, the last row is used.
-    5. If still not found, query PubChem; cache the result.
+    1. Metabolites whose name starts with ``prot_`` are skipped.
+    2. Metabolites without a name are skipped, with one warning that lists them.
+    3. Metabolites that already have a SMILES are skipped.
+    4. The name is looked up in the cache file. If the cache holds a name more than once, the last
+       row is used.
+    5. If the name is not in the cache, PubChem is asked, one request after the other with a pause
+       of 0.05 s, and failed requests with a status such as 429 or 503 are retried up to 10 times.
+       The first SMILES that PubChem returns is used. The result is appended to the cache.
 
-    The same metabolite name may appear on many ``cobra.Metabolite``
-    instances (different compartments). Lookup is done once per unique
-    name and the SMILES is applied to every metabolite sharing that name.
+    A name for which PubChem returns no SMILES gets a cache row with an empty SMILES, so that it is
+    not asked for again; the same happens when the request fails because the network is not
+    available. Delete such rows from the cache to look them up again. A metabolite without a SMILES
+    gets no annotation.
+
+    Network access to ``pubchem.ncbi.nlm.nih.gov`` is needed only for names that are not in the
+    cache.
 
     Parameters
     ----------
-    model
-        A cobra.Model. Mutated in place: each metabolite gains
-        ``annotation['smiles']`` when a SMILES is found.
-    cache_path
-        Path to the SMILES cache TSV. The file is created if missing and
-        appended to as new SMILES are downloaded.
+    model : cobra.Model
+        The model, changed in place.
+    cache_path : str or pathlib.Path
+        The cache file. It is created, with its folder, if it does not exist.
+
+    See Also
+    --------
+    met_smiles : Reads the SMILES of a metabolite.
+
+    Examples
+    --------
+    >>> import cobra, pathlib, tempfile
+    >>> from raven_toolbox.annotation import find_met_smiles, met_smiles
+    >>> cache = pathlib.Path(tempfile.mkdtemp()) / "smiles.tsv"
+    >>> _ = cache.write_text("ethanol\tCCO\n")
+    >>> model = cobra.Model("toy")
+    >>> model.add_metabolites([cobra.Metabolite("etoh_c", name="ethanol")])
+    >>> find_met_smiles(model, cache_path=cache)
+    >>> met_smiles(model.metabolites.etoh_c)
+    'CCO'
     """
     cache_path = Path(cache_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)

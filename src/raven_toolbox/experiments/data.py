@@ -1,14 +1,19 @@
-"""Load the measured growth rates and fluxes of the conditions.
+"""Read the measured conditions of a model from a folder.
 
-The flux and max-growth files, ``fluxData.tsv`` and ``maxGrowth.tsv``,
-share the column layout
-``Condition Ptot grRate <met> (<rxn>) ... weight source``, so both use
-:func:`~raven_toolbox.experiments.flux_data.load_flux_data`; only ``zeroFlux.tsv``
-(a single ``Rxns`` id column) needs a loader of its own. A ``weight`` of 0 leaves a
-condition out of the simulation and of the distance to the measurements.
+A folder with measurements can hold three files, and each of them is optional:
 
-All three files are optional: a missing file yields ``None`` (or an empty
-list for ``zero_flux``), never an exception.
+* ``fluxData.tsv``: flux conditions. The uptake of the carbon source of a condition is limited
+  to the measured rate, and the growth rate and the measured exchange fluxes of the model are
+  compared with the measurements.
+* ``maxGrowth.tsv``: maximum-growth conditions. The uptake of the carbon source is unlimited,
+  and only the maximal growth rate of the model is compared with the measured growth rate.
+* ``zeroFlux.tsv``: reactions that carry no flux in any condition, one reaction id per line
+  below the header ``Rxns``. A model that carries flux in them is penalised in the flux
+  conditions.
+
+``fluxData.tsv`` and ``maxGrowth.tsv`` have the layout described in
+:func:`~raven_toolbox.experiments.flux_data.load_flux_data`. A missing file gives ``None`` (or
+an empty list for ``zeroFlux.tsv``), not an error.
 """
 from __future__ import annotations
 
@@ -25,21 +30,19 @@ _ZERO_EXCH_FILENAME = "zeroFlux.tsv"
 
 @dataclass
 class ExperimentData:
-    """Measured conditions.
+    """The measured conditions of a model, as read from a folder by :func:`load_experiment_data`.
 
     Attributes
     ----------
-    flux_data
-        Per-condition growth/exchange-flux measurements, from
-        ``fluxData.tsv``. ``None`` if that file isn't present.
-    max_growth
-        Per-condition maximum-growth-rate measurements (one active
-        carbon source per condition, at ``-1000`` i.e. unconstrained),
-        from ``maxGrowth.tsv``. ``None`` if that file isn't
-        present.
-    zero_flux
-        Reaction IDs assumed to carry zero flux, from
-        ``zeroFlux.tsv``. Empty if that file isn't present.
+    flux_data : FluxData or None
+        Flux conditions, from ``fluxData.tsv``: growth rate and exchange fluxes that the model is
+        compared with, at a limited uptake of the carbon source. ``None`` if the file is missing.
+    max_growth : FluxData or None
+        Maximum-growth conditions, from ``maxGrowth.tsv``: the growth rate that the model reaches
+        when the uptake of the carbon source is unlimited. ``None`` if the file is missing.
+    zero_flux : list of str
+        Ids of reactions that carry no flux in any condition, from ``zeroFlux.tsv``. Empty if the
+        file is missing.
     """
 
     flux_data: Optional[FluxData] = None
@@ -48,21 +51,35 @@ class ExperimentData:
 
 
 def load_experiment_data(data_dir: str | Path) -> ExperimentData:
-    """Load the three experimental data files.
+    r"""Read ``fluxData.tsv``, ``maxGrowth.tsv`` and ``zeroFlux.tsv`` from a folder.
 
-    Each file is optional and resolved as
-    ``<data_dir>/<filename>``; a missing file yields
-    ``None`` (``flux_data``/``max_growth``) or an empty list
-    (``zero_flux``) rather than raising.
+    Each file is optional; a missing file gives ``None`` (``flux_data`` and ``max_growth``) or an
+    empty list (``zero_flux``) and no error. See the module documentation for what the files hold.
 
     Parameters
     ----------
-    data_dir
-        The folder that holds the files.
+    data_dir : str or pathlib.Path
+        Folder that holds the files.
 
     Returns
     -------
     ExperimentData
+        The measured conditions.
+
+    See Also
+    --------
+    load_flux_data : Reads one flux file.
+    simulate_conditions : Simulates the conditions that were read.
+
+    Examples
+    --------
+    >>> import tempfile, pathlib
+    >>> from raven_toolbox.experiments import load_experiment_data
+    >>> folder = pathlib.Path(tempfile.mkdtemp())
+    >>> _ = (folder / "zeroFlux.tsv").write_text("Rxns\nEX_byproduct\n")
+    >>> experiment_data = load_experiment_data(folder)
+    >>> experiment_data.flux_data is None, experiment_data.zero_flux
+    (True, ['EX_byproduct'])
     """
     data_dir = Path(data_dir)
     return ExperimentData(

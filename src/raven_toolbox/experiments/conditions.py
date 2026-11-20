@@ -1,12 +1,11 @@
-"""Simulate the measured conditions in a model.
+"""Simulate measured growth conditions in a model.
 
-This module only does the FBA half of the distance: given a model and one
-:class:`~raven_toolbox.experiments.flux_data.FluxData` dataset (either
-``experiment_data.flux_data`` or ``experiment_data.max_growth``), simulate every
-condition and report growth and exchange fluxes.
-:mod:`.distance` turns those raw numbers into an RMSE against the
-matching experimental values -- kept separate so the RMSE math is
-testable with hand-built inputs and no model or FBA at all.
+:func:`simulate_conditions` is the simulation half of the distance between a model and
+measurements: it sets up each condition of a data set in the model, solves it and records the
+growth rate and the fluxes that are compared with the measurements. The comparison itself is
+done by :func:`~raven_toolbox.experiments.dataset_rmse` and
+:func:`~raven_toolbox.experiments.experiment_distance`. The two steps are separate so that the
+distance can be computed from stored simulations.
 """
 from __future__ import annotations
 
@@ -23,16 +22,26 @@ if TYPE_CHECKING:
 
 @dataclass
 class ConditionSimResult:
-    """One condition's simulated outcome.
+    """The simulated outcome of one condition, as returned by :func:`simulate_conditions`.
 
-    ``feasible=False`` (LP infeasible/unbounded, or no biomass flux)
-    means ``growth``/``exch_fluxes``/``block_fluxes`` are meaningless;
-    :mod:`.distance` applies the fixed infeasibility penalty for that
-    row instead of reading them.
-
-    ``skipped=True`` marks a condition with weight 0, which is not
-    simulated; it is also ``feasible=False``, and :mod:`.distance` leaves
-    it out of the distance.
+    Attributes
+    ----------
+    feasible : bool
+        False if the model could not be solved to optimality in the condition (infeasible or
+        unbounded), or if the condition was skipped. The other fields have no meaning then, and
+        :func:`~raven_toolbox.experiments.dataset_rmse` gives the condition a fixed penalty instead
+        of reading them.
+    growth : float
+        Flux of the biomass reaction (1/h). NaN if not feasible.
+    exch_fluxes : dict of str to float
+        Simulated flux (mmol/gDW/h) of every exchange reaction that was measured in the condition,
+        by reaction id. Empty for maximum-growth conditions.
+    block_fluxes : dict of str to float
+        Simulated flux of every reaction of the ``zero_flux_rxns`` list, except the carbon source
+        of the condition, by reaction id. Empty for maximum-growth conditions.
+    skipped : bool
+        True for a condition with weight 0, which is not simulated. ``feasible`` is False then, and
+        the condition does not enter the distance.
     """
 
     feasible: bool
@@ -53,76 +62,107 @@ def simulate_conditions(
     change_protein_biomass: Optional[Callable[["cobra.Model", float], None]] = None,
     optimize: Optional[Callable[["cobra.Model"], "cobra.Solution"]] = None,
 ) -> list[ConditionSimResult]:
-    """Simulate every condition in one dataset.
+    """Simulate every condition of a data set in a model.
 
-    The steps are:
+    For each condition the model is set to the uptake of the condition's carbon source, solved with
+    its current objective (normally maximisation of the biomass reaction), and the growth rate and
+    the fluxes that the measurements cover are recorded. The model is not changed: every change is
+    undone with ``with model:``. A data set is either the flux conditions of
+    ``ExperimentData.flux_data`` (``constrain=True``) or the maximum-growth conditions of
+    ``ExperimentData.max_growth`` (``constrain=False``); see the package documentation.
 
-    0. A condition with ``flux_data.weight`` exactly 0 is left out: it is
-       not matched to an exchange, not simulated, and its result is
-       ``ConditionSimResult(feasible=False, skipped=True)``. Its name need
-       not match any exchange metabolite.
-    1. Every exchange reaction that appears as a *condition name*
-       of a condition with a weight other than 0 (matched by name against
-       ``flux_data.exch_mets``) is blocked (``lower_bound = 0``) up
-       front, across the board -- not just the reaction for the row
-       being solved -- so one row's carbon source can't leak flux into
-       another row's simulation.
-    2. For row ``i``, that row's own carbon-source reaction is
-       unblocked: fixed at the measured uptake rate if ``constrain``
-       is True (``experiment_data.flux_data``), or fully opened to ``-1000``
-       if ``constrain`` is False (``experiment_data.max_growth`` -- "what's
-       the *best possible* growth on this carbon source", not "growth
-       at this measured rate").
-    3. Optional per-condition adjustments run if the corresponding
-       callable is supplied: anaerobic switch when the oxygen exchange
-       column reads exactly 0, protein-content rescaling when
-       ``Ptot`` is given and nonzero.
-    4. Solve; record growth, plus (``constrain`` datasets only, since
-       ``max_growth`` has no exchange measurements to compare against)
-       every non-NaN measured exchange's simulated flux and every
-       ``zero_flux_rxns`` entry's simulated flux.
+    The carbon source of a condition is the exchange reaction whose metabolite name
+    (``flux_data.exch_mets``) is the name of the condition.
 
-    All mutation happens inside ``with model:``, which cobra reverts
-    on exit -- only bounds are touched here, so this is safe to call
-    repeatedly against one persistent (per-worker) model instance; a
-    copying the model per call is avoided (prohibitively
-    expensive on a real-scale model).
+    For each condition:
+
+    1. The lower bound of every exchange reaction that is the carbon source of some condition with a
+       weight other than 0 is set to 0, so that the carbon source of one condition cannot take up
+       substrate in another.
+    2. The lower bound of the carbon source of this condition is set to the measured flux if
+       ``constrain`` is True, so that the model can take up at most the measured rate, and to
+       ``-1000`` if it is False (unlimited uptake, which gives the best possible growth on the
+       carbon source).
+    3. If the measured flux of the exchange metabolite named ``oxygen`` is exactly 0 and
+       ``make_anaerobic`` is given, the model is made anaerobic. If the protein content
+       ``p_tot`` of the condition is given and not 0 and ``change_protein_biomass`` is given,
+       the protein content of the model is changed.
+    4. The model is solved. If ``constrain`` is True, the simulated flux of every measured
+       exchange and of every reaction in ``zero_flux_rxns`` (except the carbon source of the
+       condition) is recorded.
+
+    A condition with weight 0 (``flux_data.weight``) is left out: it is not matched to an exchange
+    reaction, not simulated, and its result has ``skipped=True`` and ``feasible=False``. Its name
+    need not match an exchange metabolite.
 
     Parameters
     ----------
-    model
+    model : cobra.Model
         The model, with every other constraint already applied.
-    flux_data
-        The dataset to simulate.
-    constrain
-        True for flux data (fix uptake at the measured rate), False
-        for max-growth data (open uptake fully).
-    zero_flux_rxns
-        Reaction IDs assumed zero-flux in every condition
-        (``experiment_data.zero_flux``); the row's own carbon source is
-        skipped even if it's also listed here.
-    bio_rxn_id
-        The biomass reaction ID.
-    make_anaerobic, change_protein_biomass
-        Optional organism-specific hooks, with no organism-agnostic default.
-        Data with no anaerobic or ``Ptot`` rows never needs them, and
-        passing ``None`` for either skips that adjustment instead of
-        raising.
-    optimize
-        Function that solves the model and returns a solution with
-        ``status``, ``objective_value`` and ``fluxes``. ``None`` calls
-        ``model.optimize()``.
+    flux_data : FluxData
+        The data set to simulate.
+    constrain : bool
+        True for flux conditions, which limit the uptake to the measured rate and record the
+        fluxes; False for maximum-growth conditions, which leave the uptake unlimited and record
+        only the growth rate.
+    zero_flux_rxns : list of str
+        Ids of reactions that carry no flux in any condition (``ExperimentData.zero_flux``). A flux
+        through them is counted as an error in the distance.
+    bio_rxn_id : str
+        Id of the biomass reaction, whose flux is the growth rate.
+    make_anaerobic : callable, optional
+        Function ``f(model)`` that changes the model in place to anaerobic growth. How a model is
+        made anaerobic depends on the organism, so there is no default; without the function the
+        oxygen flux of the data is ignored.
+    change_protein_biomass : callable, optional
+        Function ``f(model, p_tot)`` that changes the model in place to a protein content of
+        ``p_tot`` g/gDW. Without the function ``p_tot`` is ignored.
+    optimize : callable, optional
+        Function ``f(model)`` that solves the model and returns a solution with ``status``,
+        ``objective_value`` and ``fluxes``, for example
+        :func:`~raven_toolbox.utils.solver.optimize_model`. Default ``model.optimize()``.
 
     Returns
     -------
-    list[ConditionSimResult]
-        One entry per row of ``flux_data.conds``, in order.
+    list of ConditionSimResult
+        One result per condition of ``flux_data``, in order.
 
     Raises
     ------
     ValueError
-        If the name of a condition with a weight other than 0 can't be
-        matched to an exchange metabolite in ``flux_data.exch_mets``.
+        If the name of a condition with a weight other than 0 matches no exchange metabolite of
+        ``flux_data.exch_mets``.
+    KeyError
+        If an exchange reaction of ``flux_data`` is not in the model. A biomass or zero-flux
+        reaction that is not in the model is read as flux 0.
+
+    See Also
+    --------
+    load_experiment_data : Reads the data sets.
+    dataset_rmse : Compares the simulations of one data set with the measurements.
+    experiment_distance : Combines the flux and maximum-growth conditions into one distance.
+
+    Examples
+    --------
+    Growth is 1.0 1/h when 10 mmol/gDW/h glucose can be taken up and 10 mmol glucose give one unit
+    of growth:
+
+    >>> import cobra
+    >>> import numpy as np
+    >>> from raven_toolbox.experiments import FluxData, simulate_conditions
+    >>> model = cobra.Model("toy")
+    >>> model.add_metabolites([cobra.Metabolite("glc_e")])
+    >>> model.add_reactions([cobra.Reaction("EX_glc"), cobra.Reaction("growth")])
+    >>> model.reactions.EX_glc.reaction = "glc_e <=> "
+    >>> model.reactions.growth.reaction = "10 glc_e --> "
+    >>> model.objective = "growth"
+    >>> data = FluxData(conds=["glc"], p_tot=np.array([np.nan]), gr_rate=np.array([0.9]),
+    ...                 exch_fluxes=np.array([[-10.0]]), exch_mets=["glc"],
+    ...                 exch_rxn_ids=["EX_glc"])
+    >>> sim = simulate_conditions(model, data, constrain=True, zero_flux_rxns=[],
+    ...                           bio_rxn_id="growth")[0]
+    >>> sim.feasible, round(sim.growth, 6), round(sim.exch_fluxes["EX_glc"], 6)
+    (True, 1.0, -10.0)
     """
     if optimize is None:
         optimize = _default_optimize

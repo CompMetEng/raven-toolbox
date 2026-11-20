@@ -1,4 +1,8 @@
-"""Compute the molecular weight of a protein from its amino acid sequence."""
+"""Molecular weight of a protein from its amino acid sequence.
+
+The molecular weight converts the amount of a protein in mol (for example from a model) to a mass
+in g, or the reverse.
+"""
 from __future__ import annotations
 
 import logging
@@ -60,34 +64,37 @@ _RESIDUE_MASSES: dict[str, float] = {
 
 
 def calculate_mw(sequence: str) -> float:
-    """Compute the molecular weight of a protein from its sequence.
+    """Molecular weight of a protein from its amino acid sequence.
 
-    Each residue contributes its average mass; one water mass is added
-    once (representing the H + OH at the peptide termini, equivalent to
-    one un-eliminated water relative to N residues + N water masses).
+    The weight is the sum of the average masses of the residues plus one water, which stands for the
+    hydrogen of the amino terminus and the hydroxyl of the carboxyl terminus. The residue masses
+    of the 20 standard amino acids agree with widely cited references such as ExPASy ProtParam. Other codes are
+    averages of the residues they stand for: ``B`` (D or N), ``J`` (L or I), ``Z`` (E or Q) and ``X``
+    (any amino acid, the mean of the 20 standard residues, 118.885), and ``O`` (pyrrolysine, 255.31)
+    and ``U`` (selenocysteine, 150.04). The sequence is converted to upper case first.
 
-    Recognized amino acid codes (the sequence is uppercased first, so
-    matching is case-insensitive):
-
-        ACDEFGHIKLMNPQRSTVWY  - the 20 standard residues
-        BJOZUX                - non-standard / ambiguous codes
-
-    Whitespace and digits are skipped silently. Any other unrecognized
-    character is also skipped, but triggers one warning per call
-    listing every distinct offending character.
+    Whitespace and digits are skipped silently. Any other character is skipped too, with one warning
+    per call that lists the distinct characters.
 
     Parameters
     ----------
-    sequence
-        Protein sequence as a string. May contain whitespace, digits,
-        and other non-letter characters; those are ignored.
+    sequence : str
+        Amino acid sequence in one-letter codes.
 
     Returns
     -------
     float
-        Molecular weight in g/mol (Da). Returns ``nan`` for an
-        empty/all-skipped sequence (no residues), so a missing sequence
-        is not mistaken for an 18 Da "protein".
+        Molecular weight in g/mol (Da). NaN for a sequence without residues, so that a missing
+        sequence is not mistaken for a protein of 18 Da.
+
+    Examples
+    --------
+    >>> import math
+    >>> from raven_toolbox.utils.protein import calculate_mw
+    >>> round(calculate_mw("MKV"), 2)
+    376.52
+    >>> math.isnan(calculate_mw(""))
+    True
     """
     upper = sequence.upper() if sequence else ""
     mw = _WATER_MASS
