@@ -5,7 +5,7 @@ share the column layout
 ``Condition Ptot grRate <met> (<rxn>) ... weight source``, so both use
 :func:`~raven_toolbox.experiments.flux_data.load_flux_data`; only ``zeroFlux.tsv``
 (a single ``Rxns`` id column) needs a loader of its own. A ``weight`` of 0 leaves a
-condition out of the distance to the measurements.
+condition out of the simulation and of the distance to the measurements.
 
 All three files are optional: a missing file yields ``None`` (or an empty
 list for ``zero_flux``), never an exception.

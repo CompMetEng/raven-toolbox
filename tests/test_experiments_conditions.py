@@ -474,3 +474,141 @@ def test_simulate_uses_the_given_optimize_function():
 
     assert len(calls) == 2
     assert all(s.feasible for s in sims)
+
+
+# --------------------------------------------------------------------------- #
+# Conditions with weight 0 are left out
+# --------------------------------------------------------------------------- #
+
+def _with_std_row(flux_data: FluxData) -> FluxData:
+    """The data with a first condition named ``Std`` that matches no exchange and has
+    weight 0, as the condition of a protein measurement in a tutorial file."""
+    n_rxns = len(flux_data.exch_rxn_ids)
+    weight = np.ones(len(flux_data.conds)) if flux_data.weight is None else flux_data.weight
+    return FluxData(
+        conds=["Std"] + list(flux_data.conds),
+        p_tot=np.concatenate([[0.5], flux_data.p_tot]),
+        gr_rate=np.concatenate([[0.1], flux_data.gr_rate]),
+        exch_fluxes=np.vstack([np.full((1, n_rxns), np.nan), flux_data.exch_fluxes]),
+        exch_mets=list(flux_data.exch_mets),
+        exch_rxn_ids=list(flux_data.exch_rxn_ids),
+        weight=np.concatenate([[0.0], weight]),
+    )
+
+
+def _simulate(model, flux_data, *, constrain):
+    return simulate_conditions(
+        model, flux_data,
+        constrain=constrain, zero_flux_rxns=["EX_byp"] if constrain else [],
+        bio_rxn_id="biomass",
+    )
+
+
+def test_a_condition_with_weight_zero_is_not_simulated_or_matched():
+    model = _build_toy()
+    flux_data = _flux_data(ethanol_grrate=20.0)
+    with_std = _with_std_row(flux_data)
+
+    sims = _simulate(model, with_std, constrain=True)
+    reference = _simulate(_build_toy(), flux_data, constrain=True)
+
+    assert len(sims) == 3
+    assert sims[0].skipped and not sims[0].feasible
+    assert [s.skipped for s in sims[1:]] == [False, False]
+    assert [s.growth for s in sims[1:]] == [s.growth for s in reference]
+
+
+def test_a_condition_with_weight_zero_does_not_block_its_exchange():
+    model = _build_toy()
+    flux_data = _flux_data(ethanol_grrate=20.0)
+    seen = []
+
+    def optimize(m):
+        seen.append(m.reactions.get_by_id("EX_eth").lower_bound)
+        return m.optimize()
+
+    flux_data.weight = np.array([1.0, 0.0])
+    _simulate_with(model, flux_data, optimize)
+    assert seen == [-1000.0]
+
+    seen.clear()
+    flux_data.weight = np.array([1.0, 1.0])
+    _simulate_with(model, flux_data, optimize)
+    assert seen == [0.0, -20.0]
+
+
+def _simulate_with(model, flux_data, optimize):
+    return simulate_conditions(
+        model, flux_data, constrain=True, zero_flux_rxns=[], bio_rxn_id="biomass",
+        optimize=optimize,
+    )
+
+
+@pytest.mark.parametrize("constrain", [True, False])
+def test_a_condition_with_weight_zero_does_not_change_the_distance(constrain):
+    model = _build_toy()
+    flux_data = _flux_data(ethanol_grrate=20.0) if constrain else _max_growth_data()
+    with_std = _with_std_row(flux_data)
+    carbon_weights = compute_carbon_weights(
+        model, ["EX_glc", "EX_eth", "EX_byp", "biomass"], bio_rxn_id="biomass",
+    )
+
+    rmse, per_cond = dataset_rmse(
+        with_std, _simulate(model, with_std, constrain=constrain),
+        constrain=constrain, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+    )
+    expected, expected_per_cond = dataset_rmse(
+        flux_data, _simulate(_build_toy(), flux_data, constrain=constrain),
+        constrain=constrain, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+    )
+
+    assert rmse == expected
+    assert np.isnan(per_cond[0])
+    assert list(per_cond[1:]) == list(expected_per_cond)
+
+
+def test_experiment_distance_leaves_out_a_dataset_without_active_conditions():
+    model = _build_toy()
+    flux_data = _flux_data(ethanol_grrate=20.0)
+    flux_data.weight = np.array([0.0, 0.0])
+    max_growth = _max_growth_data()
+    experiment_data = ExperimentData(flux_data=flux_data, max_growth=max_growth)
+    carbon_weights = compute_carbon_weights(
+        model, ["EX_glc", "EX_eth", "biomass"], bio_rxn_id="biomass",
+    )
+    flux_sims = _simulate(model, flux_data, constrain=True)
+    max_growth_sims = _simulate(model, max_growth, constrain=False)
+    assert all(s.skipped for s in flux_sims)
+
+    rmse, detail = experiment_distance(
+        experiment_data, flux_sims=flux_sims, max_growth_sims=max_growth_sims,
+        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+    )
+    expected, _ = dataset_rmse(
+        max_growth, max_growth_sims, constrain=False, carbon_weights=carbon_weights,
+        bio_rxn_id="biomass",
+    )
+
+    assert rmse == expected
+    assert np.isnan(detail["flux_data"]).all()
+
+
+def test_the_distance_is_nan_when_every_condition_has_weight_zero():
+    model = _build_toy()
+    flux_data = _flux_data(ethanol_grrate=20.0)
+    flux_data.weight = np.array([0.0, 0.0])
+    carbon_weights = compute_carbon_weights(
+        model, ["EX_glc", "EX_eth", "biomass"], bio_rxn_id="biomass",
+    )
+    sims = _simulate(model, flux_data, constrain=True)
+
+    rmse, per_cond = dataset_rmse(
+        flux_data, sims, constrain=True, carbon_weights=carbon_weights, bio_rxn_id="biomass",
+    )
+    distance, _ = experiment_distance(
+        ExperimentData(flux_data=flux_data), flux_sims=sims, max_growth_sims=None,
+        carbon_weights=carbon_weights, bio_rxn_id="biomass",
+    )
+
+    assert np.isnan(rmse) and np.isnan(per_cond).all()
+    assert np.isnan(distance)

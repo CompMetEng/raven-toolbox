@@ -40,9 +40,10 @@ class FluxData:
         Exchange reaction IDs in the model, matching the columns of
         ``exch_fluxes`` and ``exch_mets``.
     weight
-        Optional per-condition weights of the
-        distance to the measurements (0 leaves the condition out). ``None`` if the source file did not have the
-        ``weight`` column.
+        Optional per-condition weights of the distance to the
+        measurements. A weight of 0 leaves the condition out of the
+        simulation and of the distance. ``None`` if the source file did not
+        have the ``weight`` column.
     source
         Optional per-condition free-text describing where the data
         came from. ``None`` if the source file did not have a
@@ -76,7 +77,8 @@ def load_flux_data(path: str | Path) -> FluxData:
 
     Optional extra columns (in any position):
 
-    * ``weight`` (float): weight of the condition in the distance to the measurements.
+    * ``weight`` (float): weight of the condition in the distance to the measurements; 0
+      leaves the condition out of the simulation and of the distance.
     * ``source`` (str): free-text describing the data origin.
 
     An exchange column header has the form ``<met> (<rxn>)``, split at

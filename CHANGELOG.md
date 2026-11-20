@@ -10,7 +10,7 @@
 
 ### Experiments
 
-* New: the `experiments` package scores a model against measured growth rates and exchange fluxes. `load_experiment_data` reads `fluxData.tsv`, `maxGrowth.tsv` and `zeroFlux.tsv` from a folder, `load_flux_data` parses one flux file into a `FluxData` (with a per-condition `weight`), `simulate_conditions` fixes the uptake of each condition and solves the model, `compute_carbon_weights` gives each exchange the carbon count of its metabolite, `experiment_distance` combines the carbon-weighted RMSE of flux and max-growth conditions into one value, and `apply_flux_data_constraints` sets the exchange bounds of a model from one condition (loose, or a percentage band). The organism-specific steps, an anaerobic switch and a change of the protein content, and the solver call are passed as functions.
+* New: the `experiments` package scores a model against measured growth rates and exchange fluxes. `load_experiment_data` reads `fluxData.tsv`, `maxGrowth.tsv` and `zeroFlux.tsv` from a folder, `load_flux_data` parses one flux file into a `FluxData` (with a per-condition `weight`), `simulate_conditions` fixes the uptake of each condition and solves the model, `compute_carbon_weights` gives each exchange the carbon count of its metabolite, `experiment_distance` combines the carbon-weighted RMSE of flux and max-growth conditions into one value, and `apply_flux_data_constraints` sets the exchange bounds of a model from one condition (loose, or a percentage band). The organism-specific steps, an anaerobic switch and a change of the protein content, and the solver call are passed as functions. A condition with weight 0 is left out of the simulation and the distance.
 
 ### Solver
 

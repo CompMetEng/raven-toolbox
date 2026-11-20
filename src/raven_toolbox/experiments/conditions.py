@@ -29,12 +29,17 @@ class ConditionSimResult:
     means ``growth``/``exch_fluxes``/``block_fluxes`` are meaningless;
     :mod:`.distance` applies the fixed infeasibility penalty for that
     row instead of reading them.
+
+    ``skipped=True`` marks a condition with weight 0, which is not
+    simulated; it is also ``feasible=False``, and :mod:`.distance` leaves
+    it out of the distance.
     """
 
     feasible: bool
     growth: float = float("nan")
     exch_fluxes: dict[str, float] = field(default_factory=dict)
     block_fluxes: dict[str, float] = field(default_factory=dict)
+    skipped: bool = False
 
 
 def simulate_conditions(
@@ -52,8 +57,12 @@ def simulate_conditions(
 
     The steps are:
 
+    0. A condition with ``flux_data.weight`` exactly 0 is left out: it is
+       not matched to an exchange, not simulated, and its result is
+       ``ConditionSimResult(feasible=False, skipped=True)``. Its name need
+       not match any exchange metabolite.
     1. Every exchange reaction that appears as a *condition name*
-       anywhere in ``flux_data.conds`` (matched by name against
+       of a condition with a weight other than 0 (matched by name against
        ``flux_data.exch_mets``) is blocked (``lower_bound = 0``) up
        front, across the board -- not just the reaction for the row
        being solved -- so one row's carbon source can't leak flux into
@@ -112,14 +121,15 @@ def simulate_conditions(
     Raises
     ------
     ValueError
-        If any ``flux_data.conds`` entry can't be matched by name to
-        an exchange metabolite in ``flux_data.exch_mets``.
+        If the name of a condition with a weight other than 0 can't be
+        matched to an exchange metabolite in ``flux_data.exch_mets``.
     """
     if optimize is None:
         optimize = _default_optimize
-    cond_to_exch_idx = _match_conditions_to_exch(flux_data)
+    active = _active_conditions(flux_data)
+    cond_to_exch_idx = _match_conditions_to_exch(flux_data, active)
     all_condition_rxn_ids = sorted(
-        {flux_data.exch_rxn_ids[j] for j in set(cond_to_exch_idx)}
+        {flux_data.exch_rxn_ids[j] for j in set(cond_to_exch_idx.values())}
     )
     o2_col = _find_col(flux_data.exch_mets, "oxygen")
     measured_cols = [
@@ -127,7 +137,11 @@ def simulate_conditions(
     ] if constrain else []
 
     results: list[ConditionSimResult] = []
-    for i, exch_idx in enumerate(cond_to_exch_idx):
+    for i in range(len(flux_data.conds)):
+        if i not in cond_to_exch_idx:
+            results.append(ConditionSimResult(feasible=False, skipped=True))
+            continue
+        exch_idx = cond_to_exch_idx[i]
         carbon_rxn_id = flux_data.exch_rxn_ids[exch_idx]
         with model:
             for rxn_id in all_condition_rxn_ids:
@@ -185,14 +199,24 @@ def _default_optimize(model: "cobra.Model") -> "cobra.Solution":
     return model.optimize()
 
 
-def _match_conditions_to_exch(flux_data: "FluxData") -> list[int]:
-    """Column index into ``exch_mets``/``exch_rxn_ids`` for each
+def _active_conditions(flux_data: "FluxData") -> list[int]:
+    """Indices of the conditions with a weight other than 0."""
+    if flux_data.weight is None:
+        return list(range(len(flux_data.conds)))
+    return [i for i in range(len(flux_data.conds)) if flux_data.weight[i] != 0]
+
+
+def _match_conditions_to_exch(
+    flux_data: "FluxData", active: list[int],
+) -> dict[int, int]:
+    """Column index into ``exch_mets``/``exch_rxn_ids`` for each active
     condition, matched by name. Raises ``ValueError`` when a condition
     cannot be matched."""
     met_to_idx: dict[str, int] = {}
     for j, met in enumerate(flux_data.exch_mets):
         met_to_idx.setdefault(met, j)
-    missing = sorted({c for c in flux_data.conds if c not in met_to_idx})
+    missing = sorted({flux_data.conds[i] for i in active
+                      if flux_data.conds[i] not in met_to_idx})
     if missing:
         raise ValueError(
             'Carbon source(s) "'
@@ -200,7 +224,7 @@ def _match_conditions_to_exch(flux_data: "FluxData") -> list[int]:
             + '" in the provided fluxData or maxGrowth cannot be matched '
             "by name with an exchange reaction."
         )
-    return [met_to_idx[c] for c in flux_data.conds]
+    return {i: met_to_idx[flux_data.conds[i]] for i in active}
 
 
 def _find_col(exch_mets: list[str], name: str) -> Optional[int]:

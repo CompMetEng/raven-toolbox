@@ -97,6 +97,9 @@ def dataset_rmse(
 ) -> tuple[float, np.ndarray]:
     """RMSE (mean, per-condition array) for one dataset.
 
+    A condition with ``flux_data.weight`` exactly 0 is left out: its entry in
+    the per-condition array is ``NaN`` and it is not part of the mean.
+
     Parameters
     ----------
     flux_data
@@ -105,7 +108,8 @@ def dataset_rmse(
     sims
         One :class:`~.conditions.ConditionSimResult` per
         ``flux_data.conds`` row, e.g. from
-        :func:`~.conditions.simulate_conditions`.
+        :func:`~.conditions.simulate_conditions`. The entries of the
+        conditions with weight 0 are not read.
     constrain
         Must match the value passed to
         :func:`~.conditions.simulate_conditions` for these
@@ -126,10 +130,11 @@ def dataset_rmse(
     -------
     rmse : float
         Weighted (by ``flux_data.weight``, if present)
-        mean of the per-condition RMSEs.
+        mean of the per-condition RMSEs of the conditions with a weight
+        other than 0. ``NaN`` if every condition has weight 0.
     rmse_list : numpy.ndarray
         The per-condition RMSEs (post-penalty, pre-weighting), shape
-        ``(len(flux_data.conds),)``.
+        ``(len(flux_data.conds),)``; ``NaN`` for a condition with weight 0.
     """
     n = len(flux_data.conds)
     if len(sims) != n:
@@ -139,8 +144,16 @@ def dataset_rmse(
         )
     rxn_to_col = {r: j for j, r in enumerate(flux_data.exch_rxn_ids)}
 
+    if flux_data.weight is None:
+        active = np.ones(n, dtype=bool)
+    else:
+        active = np.asarray(flux_data.weight) != 0
+
     rmse_list = np.empty(n, dtype=float)
     for i, sim in enumerate(sims):
+        if not active[i]:
+            rmse_list[i] = np.nan
+            continue
         if not sim.feasible:
             rmse_list[i] = penalty
             continue
@@ -170,10 +183,12 @@ def dataset_rmse(
         diff = np.asarray(measured, dtype=float) - np.asarray(simulated, dtype=float)
         rmse_list[i] = float(np.sqrt(np.mean(diff ** 2)))
 
+    if not active.any():
+        return float("nan"), rmse_list
     weighted = rmse_list
     if flux_data.weight is not None:
         weighted = rmse_list * flux_data.weight
-    return float(np.mean(weighted)), rmse_list
+    return float(np.mean(weighted[active])), rmse_list
 
 
 def experiment_distance(
@@ -191,24 +206,23 @@ def experiment_distance(
     ``flux_sims`` must be given (non-``None``) iff ``experiment_data.flux_data``
     is not ``None``, and likewise for ``max_growth_sims`` /
     ``experiment_data.max_growth``. A dataset absent from ``experiment_data`` doesn't
-    contribute to the combined RMSE.
+    contribute to the combined RMSE, and neither does a dataset in which
+    every condition has weight 0.
 
     Parameters
     ----------
     max_growth_weight
         Relative weight of the max-growth dataset against the flux
         dataset, giving ``(rmse_flux + w * rmse_max_growth) / (w + 1)``.
-        At 2 the eight max-growth conditions have twice the weight of
-        the 33 flux conditions, which is the intended emphasis here:
-        the max-growth set is where the carbon-source diversity lives,
-        while 30 of the 33 flux conditions are glucose.
-
+        At 2 the max-growth dataset counts twice as much as the flux
+        dataset in the combination.
 
     Returns
     -------
     rmse : float
         Weighted mean of whichever dataset RMSEs are present. ``NaN``
-        if neither dataset is present.
+        if neither dataset is present or no condition of the present
+        datasets has a weight other than 0.
     detail : dict[str, numpy.ndarray]
         Per-condition RMSE arrays, keyed ``"flux_data"`` /
         ``"max_growth"`` for whichever datasets were scored.
@@ -225,8 +239,9 @@ def experiment_distance(
             constrain=True, carbon_weights=carbon_weights, bio_rxn_id=bio_rxn_id,
             penalty=penalty,
         )
-        parts.append(rmse)
-        weights.append(1.0)
+        if not np.isnan(rmse):
+            parts.append(rmse)
+            weights.append(1.0)
         detail["flux_data"] = per_cond
 
     if experiment_data.max_growth is not None:
@@ -237,8 +252,9 @@ def experiment_distance(
             constrain=False, carbon_weights=carbon_weights, bio_rxn_id=bio_rxn_id,
             penalty=penalty,
         )
-        parts.append(rmse)
-        weights.append(float(max_growth_weight))
+        if not np.isnan(rmse):
+            parts.append(rmse)
+            weights.append(float(max_growth_weight))
         detail["max_growth"] = per_cond
 
     if parts:
