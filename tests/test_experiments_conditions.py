@@ -4,6 +4,8 @@ A tiny two-carbon-source toy model with a known enzyme cap, so every
 simulated growth/exchange-flux value used below is hand-predictable
 from the model's stoichiometry rather than treated as a black box.
 """
+import warnings
+
 import cobra
 import numpy as np
 import pytest
@@ -203,6 +205,88 @@ def test_simulate_unmatched_condition_name_raises():
             model, flux_data,
             constrain=True, zero_flux_rxns=[], bio_rxn_id="biomass",
         )
+
+
+def _objective_warnings(model, **kwargs):
+    """The warnings about the objective that one call of simulate_conditions issues."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        simulate_conditions(
+            model, _flux_data(ethanol_grrate=20.0),
+            constrain=True, zero_flux_rxns=[], bio_rxn_id="biomass", **kwargs,
+        )
+    return [w for w in caught if "objective of the model" in str(w.message)]
+
+
+def _clear_objective(model):
+    for rxn in model.reactions:
+        rxn.objective_coefficient = 0.0
+
+
+def test_no_warning_when_growth_is_the_objective():
+    assert _objective_warnings(_build_toy()) == []
+
+
+def _another_reaction(model):
+    model.objective = "EX_byp"
+
+
+def _minimised_growth(model):
+    model.objective_direction = "min"
+
+
+def _two_reactions(model):
+    model.objective = {model.reactions.get_by_id("biomass"): 1.0,
+                       model.reactions.get_by_id("R"): 1.0}
+
+
+def _no_objective(model):
+    _clear_objective(model)
+
+
+def _negative_growth(model):
+    _clear_objective(model)
+    model.objective = {model.reactions.get_by_id("biomass"): -1.0}
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [_another_reaction, _minimised_growth, _two_reactions, _no_objective, _negative_growth],
+)
+def test_warning_once_when_growth_is_not_the_maximised_objective(spoil):
+    model = _build_toy()
+    spoil(model)
+
+    caught = _objective_warnings(model)
+
+    # One warning for the call, although two conditions are simulated.
+    assert len(caught) == 1
+    assert issubclass(caught[0].category, UserWarning)
+    assert 'model.objective = "biomass"' in str(caught[0].message)
+    assert caught[0].filename == __file__
+
+
+def test_warning_is_issued_with_an_optimize_function_too():
+    model = _build_toy()
+    _another_reaction(model)
+
+    caught = _objective_warnings(model, optimize=lambda m: m.optimize())
+
+    assert len(caught) == 1
+
+
+def test_the_simulation_goes_on_after_the_warning():
+    model = _build_toy()
+    _another_reaction(model)
+
+    with pytest.warns(UserWarning, match="objective of the model"):
+        results = simulate_conditions(
+            model, _flux_data(ethanol_grrate=20.0),
+            constrain=True, zero_flux_rxns=[], bio_rxn_id="biomass",
+        )
+
+    assert len(results) == 2
+    assert all(r.feasible for r in results)
 
 
 # --------------------------------------------------------------------------- #

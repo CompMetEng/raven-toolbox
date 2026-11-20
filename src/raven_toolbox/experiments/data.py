@@ -7,7 +7,8 @@ A folder with measurements can hold three files, and each of them is optional:
   compared with the measurements.
 * ``maxGrowth.tsv``: maximum-growth conditions. The uptake of the carbon source is unlimited,
   and only the maximal growth rate of the model is compared with the measured growth rate. The
-  model objective has to be the growth for the simulation to give the maximal growth rate (see
+  model objective has to be the growth for the simulation to give the maximal growth rate, and
+  the simulation warns if it is not (see
   :func:`~raven_toolbox.experiments.simulate_conditions`).
 * ``zeroFlux.tsv``: reactions that carry no flux in any condition, one reaction id per line
   below the header ``Rxns``. A model that carries flux in them is penalised in the flux

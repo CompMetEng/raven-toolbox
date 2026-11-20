@@ -16,7 +16,7 @@ Two kinds of conditions are scored, which differ in what is compared:
   flux (the ``zero_flux`` list) are compared with 0.
 * In a **maximum-growth condition** the uptake of the carbon source is unlimited, and only the
   growth rate is compared. This is the maximal growth rate if the objective of the simulated model
-  is the growth (see :func:`~raven_toolbox.experiments.simulate_conditions`).
+  is the growth; :func:`~raven_toolbox.experiments.simulate_conditions` warns if it is not.
 
 :func:`dataset_rmse` scores the conditions of one file, and :func:`experiment_distance`
 combines the two files into one value. A condition that the model cannot solve gets a fixed

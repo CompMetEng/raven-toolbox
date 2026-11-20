@@ -24,7 +24,8 @@ lists reactions that carry no flux in any condition.
    has, and the growth rate is the flux of the biomass reaction in that solution. In a
    maximum-growth condition the number that is compared with the measurement is therefore the
    maximum of the model objective, which is the maximal growth rate only if the objective is the
-   biomass reaction. Set ``model.objective`` to the biomass reaction first.
+   biomass reaction. Set ``model.objective`` to the biomass reaction first; :func:`simulate_conditions`
+   warns once per call if the objective is not the maximisation of the biomass reaction.
 
 Workflow:
 

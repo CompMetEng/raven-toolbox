@@ -9,6 +9,7 @@ distance can be computed from stored simulations.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -69,15 +70,22 @@ def simulate_conditions(
     changed: every change is undone with ``with model:``.
 
     .. important::
-       The model objective must be the maximisation of the growth. The functions do not set the
-       objective: each condition is solved with the objective that the model has (in its direction,
-       normally maximisation), and the growth rate is the flux of the biomass reaction ``bio_rxn_id``
-       in that solution. Set ``model.objective = bio_rxn_id`` before the simulation. With another
-       objective the biomass flux is the value in one of the optimal solutions of that objective,
-       not the maximal growth rate, and in a maximum-growth condition the distance then compares
-       a number that is not the maximal growth rate with the measurement. A data set is either the flux conditions of
-    ``ExperimentData.flux_data`` (``constrain=True``) or the maximum-growth conditions of
-    ``ExperimentData.max_growth`` (``constrain=False``); see the package documentation.
+       The model objective must be the maximisation of the growth. The function does not set the
+       objective: each condition is solved with the objective that the model has (in its
+       direction, normally maximisation), and the growth rate is the flux of the biomass reaction
+       ``bio_rxn_id`` in that solution. Set ``model.objective = bio_rxn_id`` before the
+       simulation. With another objective the biomass flux is the value in one of the optimal
+       solutions of that objective, not the maximal growth rate, and in a maximum-growth
+       condition the distance then compares a number that is not the maximal growth rate with the
+       measurement. A warning is issued once per call if the objective of the model is not the
+       maximisation of ``bio_rxn_id`` alone (a minimised objective, another reaction, several
+       reactions or no objective). The warning reads the model, so it is also issued when a
+       function is given as ``optimize``, which decides what is optimised: it solves the objective
+       of the model unless it sets its own.
+
+    A data set is either the flux conditions of ``ExperimentData.flux_data``
+    (``constrain=True``) or the maximum-growth conditions of ``ExperimentData.max_growth``
+    (``constrain=False``); see the package documentation.
 
     The carbon source of a condition is the exchange reaction whose metabolite name
     (``flux_data.exch_mets``) is the name of the condition.
@@ -177,6 +185,7 @@ def simulate_conditions(
     active = _active_conditions(flux_data)
     cond_to_exch_idx = _match_conditions_to_exch(flux_data, active)
     _check_reactions(model, flux_data, zero_flux_rxns, bio_rxn_id)
+    _warn_unless_growth_is_the_objective(model, bio_rxn_id)
     all_condition_rxn_ids = sorted(
         {flux_data.exch_rxn_ids[j] for j in set(cond_to_exch_idx.values())}
     )
@@ -257,6 +266,25 @@ def _check_reactions(
     missing = sorted(needed - in_model)
     if missing:
         raise ValueError(f"The reactions {', '.join(missing)} are not in the model.")
+
+
+def _warn_unless_growth_is_the_objective(model: "cobra.Model", bio_rxn_id: str) -> None:
+    """Warn once if the objective of the model is not the maximisation of ``bio_rxn_id`` alone."""
+    from cobra.util.solver import linear_reaction_coefficients
+
+    coefficients = linear_reaction_coefficients(model)
+    ids = {rxn.id for rxn in coefficients}
+    growth_only = ids == {bio_rxn_id} and coefficients[model.reactions.get_by_id(bio_rxn_id)] > 0
+    if model.objective_direction == "max" and growth_only:
+        return
+    warnings.warn(
+        f"The objective of the model is not the maximisation of the growth reaction "
+        f"{bio_rxn_id}. The growth rate of a condition is the flux of {bio_rxn_id} in a "
+        f"solution of the objective that the model has, and that is not the maximal growth "
+        f"rate. Set the objective with model.objective = \"{bio_rxn_id}\".",
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _active_conditions(flux_data: "FluxData") -> list[int]:
