@@ -16,6 +16,11 @@
 
 * New: `utils.solver` holds the support for optlang's scipy (HiGHS) interface, next to `set_raven_tolerance`. `repair_scipy_problem` renumbers the variable columns after a removal and rebuilds a stale coefficient matrix. `switch_to_scipy` and `edit_on_fast_solver` avoid the dense-matrix cost of building or editing a large model. `optimize_model` returns a solution with its status for an infeasible or unbounded LP instead of raising, and `constraint_shadow_prices` reads the row marginals on the scipy interface.
 
+### Biomass
+
+* New: `biomass.fit_maintenance` fits NGAM from a maintenance coefficient and GAM from chemostat substrate uptake, with a study-weighted Huber loss and a bootstrap over studies. The steps are also available separately (`fit_gam`, `bootstrap_gam`, `uptake_grid`, `min_uptake`, `ngam_from_maintenance_coefficient`, `study_weights`, `huber_loss`, `log_ratio`), and `MaintenanceConfig` holds the reaction ids and metabolite names.
+* New: `get_gam`, and `set_gam` takes `keep_offsets_of`: the coefficient of that metabolite becomes the value and the other GAM terms shift by the same amount, so a charge-balancing proton offset stays.
+
 ### Proteins and annotation
 
 * New: `utils.protein.calculate_mw` computes the molecular weight of a protein from its amino acid sequence (average residue masses plus one water; the codes B, J, O, U, X and Z are recognised; an empty sequence gives NaN).
