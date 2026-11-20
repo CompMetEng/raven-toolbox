@@ -16,6 +16,11 @@
 
 * New: `utils.solver` holds the support for optlang's scipy (HiGHS) interface, next to `set_raven_tolerance`. `repair_scipy_problem` renumbers the variable columns after a removal and rebuilds a stale coefficient matrix. `switch_to_scipy` and `edit_on_fast_solver` avoid the dense-matrix cost of building or editing a large model. `optimize_model` returns a solution with its status for an infeasible or unbounded LP instead of raising, and `constraint_shadow_prices` reads the row marginals on the scipy interface.
 
+### Proteins and annotation
+
+* New: `utils.protein.calculate_mw` computes the molecular weight of a protein from its amino acid sequence (average residue masses plus one water; the codes B, J, O, U, X and Z are recognised; an empty sequence gives NaN).
+* New: `annotation.find_met_smiles` fills `annotation["smiles"]` of the metabolites from PubChem, with a local TSV cache (`cache_path`) that is appended to after each lookup, and `annotation.met_smiles` reads the SMILES of a metabolite whether the annotation is a string or a list.
+
 ### Data
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
