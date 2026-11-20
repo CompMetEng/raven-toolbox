@@ -12,6 +12,10 @@
 
 * New: the `experiments` package scores a model against measured growth rates and exchange fluxes. `load_experiment_data` reads `fluxData.tsv`, `maxGrowth.tsv` and `zeroFlux.tsv` from a folder, `load_flux_data` parses one flux file into a `FluxData` (with a per-condition `weight`), `simulate_conditions` fixes the uptake of each condition and solves the model, `compute_carbon_weights` gives each exchange the carbon count of its metabolite, `experiment_distance` combines the carbon-weighted RMSE of flux and max-growth conditions into one value, and `apply_flux_data_constraints` sets the exchange bounds of a model from one condition (loose, or a percentage band). The organism-specific steps, an anaerobic switch and a change of the protein content, and the solver call are passed as functions.
 
+### Solver
+
+* New: `utils.solver` holds the support for optlang's scipy (HiGHS) interface, next to `set_raven_tolerance`. `repair_scipy_problem` renumbers the variable columns after a removal and rebuilds a stale coefficient matrix. `switch_to_scipy` and `edit_on_fast_solver` avoid the dense-matrix cost of building or editing a large model. `optimize_model` returns a solution with its status for an infeasible or unbounded LP instead of raising, and `constraint_shadow_prices` reads the row marginals on the scipy interface.
+
 ### Data
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
