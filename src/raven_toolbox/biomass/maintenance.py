@@ -536,17 +536,16 @@ def fit_maintenance(
 
     Examples
     --------
-    The reaction ids below are those of yeast-GEM; ``chemostats`` is a table with the columns
-    ``study``, ``growth_rate`` and ``uptake``::
-
-        config = MaintenanceConfig(
-            biomass_rxn="r_4041", ngam_rxn="r_4046", growth_rxn="r_2111",
-            substrate_exchange="r_1714",
-            cofactor_met_names=("ATP", "ADP", "H2O", "H+", "phosphate"))
-        fit = fit_maintenance(model, chemostats, ms_substrate=0.039, config=config)
-        set_gam(model, fit.gam, biomass_rxn=config.biomass_rxn,
-                cofactor_met_names=config.cofactor_met_names, ngam_rxn=config.ngam_rxn,
-                ngam_value=fit.ngam, keep_offsets_of=config.atp_met_name)
+    # The reaction ids are those of yeast-GEM; "chemostats" is a table with the columns
+    # study, growth_rate and uptake.
+    config = MaintenanceConfig(
+        biomass_rxn="r_4041", ngam_rxn="r_4046", growth_rxn="r_2111",
+        substrate_exchange="r_1714",
+        cofactor_met_names=("ATP", "ADP", "H2O", "H+", "phosphate"))
+    fit = fit_maintenance(model, chemostats, ms_substrate=0.039, config=config)
+    set_gam(model, fit.gam, biomass_rxn=config.biomass_rxn,
+            cofactor_met_names=config.cofactor_met_names, ngam_rxn=config.ngam_rxn,
+            ngam_value=fit.ngam, keep_offsets_of=config.atp_met_name)
     """
     data = data.reset_index(drop=True)
     ngam = ngam_from_maintenance_coefficient(model, ms_substrate, config)

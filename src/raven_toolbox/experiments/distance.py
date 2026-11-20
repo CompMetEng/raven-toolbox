@@ -328,9 +328,22 @@ def experiment_distance(
 
     Examples
     --------
-    See the package documentation of :mod:`raven_toolbox.experiments` for a complete example, from
-    a model to a distance. With a flux distance of 2.9 and a maximum-growth distance of 4.1 and
-    ``max_growth_weight=2`` the combined distance is ``(2.9 + 2 * 4.1) / 3 = 3.7``.
+    Data with maximum-growth conditions only: the distance is that of the maximum-growth
+    conditions, here a growth rate of 0.5 1/h against a measured 0.4 1/h. The package documentation
+    of :mod:`raven_toolbox.experiments` has a complete example, from a model to a distance.
+
+    >>> import numpy as np
+    >>> from raven_toolbox.experiments import (
+    ...     ConditionSimResult, ExperimentData, FluxData, experiment_distance)
+    >>> data = FluxData(conds=["glc"], p_tot=np.array([np.nan]), gr_rate=np.array([0.4]),
+    ...                 exch_fluxes=np.array([[-1000.0]]), exch_mets=["glc"],
+    ...                 exch_rxn_ids=["EX_glc"])
+    >>> distance, detail = experiment_distance(
+    ...     ExperimentData(max_growth=data), flux_sims=None,
+    ...     max_growth_sims=[ConditionSimResult(feasible=True, growth=0.5)],
+    ...     carbon_weights={}, bio_rxn_id="growth")
+    >>> round(distance, 3)
+    4.1
     """
     parts: list[float] = []
     weights: list[float] = []
