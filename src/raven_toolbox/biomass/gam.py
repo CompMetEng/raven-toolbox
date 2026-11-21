@@ -1,14 +1,7 @@
 """Growth-associated (GAM) and non-growth-associated (NGAM) ATP maintenance of a model.
 
-A cell spends ATP on maintenance in two ways:
-
-* GAM is the ATP hydrolysed per gram of biomass formed (mmol/gDW). It scales with growth and
-  sits in the coefficients of the ATP hydrolysis terms of the biomass pseudoreaction: ATP and
-  water are consumed, and ADP, phosphate and a proton are produced.
-* NGAM is the ATP hydrolysed per hour and gram of biomass (mmol/gDW/h) at any growth rate. It
-  is the fixed flux of a maintenance reaction.
-
-:func:`set_gam` sets them, :func:`get_gam` reads GAM, and
+GAM is held in the coefficients of the ATP-hydrolysis cofactors of the biomass reaction; NGAM is
+the fixed flux of a maintenance reaction. :func:`set_gam` sets them, :func:`get_gam` reads GAM, and
 :func:`~raven_toolbox.biomass.maintenance.fit_maintenance` derives them from measurements.
 """
 from __future__ import annotations
@@ -30,18 +23,14 @@ def set_gam(
 ) -> cobra.Model:
     """Set GAM, and optionally NGAM, in a model.
 
-    GAM is held in the coefficients of the cofactors of the ATP hydrolysis (ATP, ADP, water,
-    phosphate, proton) in the biomass pseudoreaction. Each metabolite of the pseudoreaction whose
-    name is in ``cofactor_met_names`` is set to ``value`` with the sign of its current coefficient.
+    For every metabolite of the biomass reaction whose name is in ``cofactor_met_names``, the
+    coefficient becomes ``value``, keeping its sign. With ``keep_offsets_of``, the coefficient of the
+    metabolite with that name (for example ATP) becomes ``value`` and every other cofactor shifts by
+    the same amount in the direction of its sign, so that offsets such as a proton coefficient that
+    balances charge are kept. For ATP, water, ADP and phosphate at 60 and a proton at 57, setting GAM
+    to 45 gives 45 and a proton at 42, whereas without ``keep_offsets_of`` the proton becomes 45.
 
-    With ``keep_offsets_of`` the coefficients keep their differences instead. The coefficient of
-    the metabolite of that name (ATP) becomes ``value``, and every other cofactor changes by the
-    same amount in the direction of its sign. A proton coefficient that balances the charge of the
-    other biomass terms then keeps its offset from the ATP coefficient: for ATP, water, ADP and
-    phosphate at 60 and a proton at 57, setting GAM to 45 gives 45 and a proton at 42, whereas
-    without ``keep_offsets_of`` the proton becomes 45.
-
-    If both ``ngam_rxn`` and ``ngam_value`` are given, the bounds of the NGAM reaction are both set to
+    If both ``ngam_rxn`` and ``ngam_value`` are given, both bounds of the NGAM reaction are set to
     ``ngam_value``. An empty ``ngam_rxn`` counts as not given.
 
     Parameters
@@ -49,21 +38,19 @@ def set_gam(
     model : cobra.Model
         Model to change in place.
     value : float
-        New GAM, mmol ATP per gDW of biomass formed.
+        New GAM (mmol ATP/gDW).
     biomass_rxn : str
-        Id of the biomass pseudoreaction whose coefficients hold GAM.
+        Id of the biomass reaction.
     cofactor_met_names : iterable of str
-        Names (not ids) of the metabolites of the GAM term, for example
-        ``["ATP", "ADP", "H2O", "H+", "phosphate"]``.
+        Names (not ids) of the GAM cofactors, for example ``["ATP", "ADP", "H2O", "H+", "phosphate"]``.
     ngam_rxn : str, optional
         Id of the NGAM reaction.
     ngam_value : float, optional
-        NGAM, mmol ATP per gDW and hour, the flux at which the NGAM reaction is fixed. Needs
-        ``ngam_rxn``.
+        NGAM flux (mmol ATP/gDW/h). Needs ``ngam_rxn``.
     keep_offsets_of : str, optional
-        Name of the metabolite whose coefficient becomes ``value`` while the other cofactors shift by
-        the same amount (see above). It must be one of ``cofactor_met_names`` and occur once in the
-        biomass pseudoreaction. Default ``None`` sets every cofactor to ``value``.
+        Name of the metabolite that gets ``value`` while the other cofactors shift with it. Must be one
+        of ``cofactor_met_names`` and occur once in the biomass reaction. Default ``None`` sets every
+        cofactor to ``value``.
 
     Returns
     -------
@@ -73,16 +60,15 @@ def set_gam(
     Raises
     ------
     KeyError
-        If ``biomass_rxn`` or a given ``ngam_rxn`` is not in the model. Both are looked up before the
+        If ``biomass_rxn`` or a given ``ngam_rxn`` is not in the model. Both are checked before the
         model is changed.
     ValueError
         If ``ngam_value`` is given without ``ngam_rxn``, or if ``keep_offsets_of`` is not one of the
-        cofactor names or does not name exactly one metabolite of the biomass pseudoreaction.
+        cofactor names or does not name exactly one metabolite of the biomass reaction.
 
     See Also
     --------
-    get_gam : Reads GAM.
-    raven_toolbox.biomass.maintenance.fit_maintenance : Fits GAM and NGAM to measurements.
+    get_gam, raven_toolbox.biomass.maintenance.fit_maintenance
 
     Examples
     --------
@@ -129,35 +115,32 @@ def set_gam(
 
 
 def get_gam(model: cobra.Model, *, biomass_rxn: str, atp_met_name: str = "ATP") -> float:
-    """Get GAM of a model: the size of the ATP coefficient of the biomass pseudoreaction.
-
-    GAM is the ATP hydrolysed per gram of biomass formed (mmol/gDW), the value that
-    :func:`set_gam` sets.
+    """Get GAM of a model: the coefficient of ATP in the biomass reaction, the value that :func:`set_gam` sets.
 
     Parameters
     ----------
     model : cobra.Model
         The model.
     biomass_rxn : str
-        Id of the biomass pseudoreaction.
+        Id of the biomass reaction.
     atp_met_name : str, optional
-        Name (not id) of the ATP metabolite. Default ``"ATP"``.
+        Name (not id) of ATP. Default ``"ATP"``.
 
     Returns
     -------
     float
-        The size of the ATP coefficient, mmol/gDW.
+        Size of the ATP coefficient (mmol/gDW).
 
     Raises
     ------
     KeyError
         If ``biomass_rxn`` is not in the model.
     ValueError
-        If the pseudoreaction does not have exactly one metabolite with the name ``atp_met_name``.
+        If the biomass reaction does not have exactly one metabolite with the name ``atp_met_name``.
 
     See Also
     --------
-    set_gam : Sets GAM.
+    set_gam
     """
     rxn = model.reactions.get_by_id(biomass_rxn)
     return _gam_coefficient(rxn, atp_met_name, {atp_met_name})

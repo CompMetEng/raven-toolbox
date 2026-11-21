@@ -1,22 +1,17 @@
 """Read the measured conditions of a model from a folder.
 
-A folder with measurements can hold three files, and each of them is optional:
+The folder holds up to three files, each optional:
 
-* ``fluxData.tsv``: flux conditions. The uptake of the carbon source of a condition is limited
-  to the measured rate, and the growth rate and the measured exchange fluxes of the model are
-  compared with the measurements.
-* ``maxGrowth.tsv``: maximum-growth conditions. The uptake of the carbon source is unlimited,
-  and only the maximal growth rate of the model is compared with the measured growth rate. The
-  model objective has to be the growth for the simulation to give the maximal growth rate, and
-  the simulation warns if it is not (see
-  :func:`~raven_toolbox.experiments.simulate_conditions`).
-* ``zeroFlux.tsv``: reactions that carry no flux in any condition, one reaction id per line
-  below the header ``Rxns``. A model that carries flux in them is penalised in the flux
-  conditions.
+* ``fluxData.tsv``: flux conditions (carbon-source uptake limited to the measured rate; growth
+  rate and measured exchange fluxes compared).
+* ``maxGrowth.tsv``: maximum-growth conditions (uptake unlimited; only the maximal growth rate
+  compared). The model objective must be growth, see
+  :func:`~raven_toolbox.experiments.simulate_conditions`.
+* ``zeroFlux.tsv``: the header ``Rxns`` and one reaction id per line, for reactions that carry no
+  flux in any condition. Flux through them is penalised in the flux conditions.
 
-``fluxData.tsv`` and ``maxGrowth.tsv`` have the layout described in
-:func:`~raven_toolbox.experiments.flux_data.load_flux_data`. A missing file gives ``None`` (or
-an empty list for ``zeroFlux.tsv``), not an error.
+The first two have the layout of :func:`~raven_toolbox.experiments.flux_data.load_flux_data`. A
+missing file gives ``None`` (an empty list for ``zeroFlux.tsv``), not an error.
 """
 from __future__ import annotations
 
@@ -32,19 +27,17 @@ _ZERO_EXCH_FILENAME = "zeroFlux.tsv"
 
 @dataclass
 class ExperimentData:
-    """The measured conditions of a model, as read from a folder by :func:`load_experiment_data`.
+    """The measured conditions of a model, as read by :func:`load_experiment_data`.
 
     Attributes
     ----------
     flux_data : FluxData or None
-        Flux conditions, from ``fluxData.tsv``: growth rate and exchange fluxes that the model is
-        compared with, at a limited uptake of the carbon source. ``None`` if the file is missing.
+        Flux conditions from ``fluxData.tsv``; ``None`` if the file is missing.
     max_growth : FluxData or None
-        Maximum-growth conditions, from ``maxGrowth.tsv``: the growth rate that the model reaches
-        when the uptake of the carbon source is unlimited. ``None`` if the file is missing.
+        Maximum-growth conditions from ``maxGrowth.tsv``; ``None`` if the file is missing.
     zero_flux : list of str
-        Ids of reactions that carry no flux in any condition, from ``zeroFlux.tsv``. Empty if the
-        file is missing.
+        Ids of reactions that carry no flux in any condition, from ``zeroFlux.tsv``. Empty if the file
+        is missing.
     """
 
     flux_data: FluxData | None = None
@@ -55,13 +48,10 @@ class ExperimentData:
 def load_experiment_data(data_dir: str | Path) -> ExperimentData:
     r"""Read ``fluxData.tsv``, ``maxGrowth.tsv`` and ``zeroFlux.tsv`` from a folder.
 
-    Each file is optional; a missing file gives ``None`` (``flux_data`` and ``max_growth``) or an
-    empty list (``zero_flux``) and no error. See the module documentation for what the files hold.
-
     Parameters
     ----------
     data_dir : str or pathlib.Path
-        Folder that holds the files.
+        Folder that holds the files. Each is optional.
 
     Returns
     -------

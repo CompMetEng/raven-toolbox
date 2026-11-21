@@ -1,8 +1,4 @@
-"""Molecular weight of a protein from its amino acid sequence.
-
-The molecular weight converts the amount of a protein in mol (for example from a model) to a mass
-in g, or the reverse.
-"""
+"""Molecular weight of a protein from its amino acid sequence."""
 from __future__ import annotations
 
 import logging
@@ -66,14 +62,11 @@ _RESIDUE_MASSES: dict[str, float] = {
 def calculate_mw(sequence: str) -> float:
     """Molecular weight of a protein from its amino acid sequence.
 
-    The weight is the sum of the average masses of the residues plus one water, which stands for the
-    hydrogen of the amino terminus and the hydroxyl of the carboxyl terminus. The residue masses
-    of the 20 standard amino acids agree with widely cited references such as ExPASy ProtParam. Other codes are
-    averages of the residues they stand for: ``B`` (D or N), ``J`` (L or I), ``Z`` (E or Q) and ``X``
-    (any amino acid, the mean of the 20 standard residues, 118.885), and ``O`` (pyrrolysine, 255.31)
-    and ``U`` (selenocysteine, 150.04). The sequence is converted to upper case first.
-
-    Whitespace and digits are skipped silently. Any other character is skipped too, with one warning
+    The weight is the sum of the average residue masses plus one water. Residue masses of the 20
+    standard amino acids agree with ExPASy ProtParam. Ambiguous and rare codes use averages: ``B``
+    (D or N), ``J`` (L or I), ``Z`` (E or Q), ``X`` (mean of the 20 standard residues, 118.885),
+    ``O`` (pyrrolysine, 255.31) and ``U`` (selenocysteine, 150.04). The sequence is converted to upper
+    case. Whitespace and digits are skipped silently; any other character is skipped with one warning
     per call that lists the distinct characters.
 
     Parameters
@@ -84,8 +77,8 @@ def calculate_mw(sequence: str) -> float:
     Returns
     -------
     float
-        Molecular weight in g/mol (Da). NaN for a sequence without residues, so that a missing
-        sequence is not mistaken for a protein of 18 Da.
+        Molecular weight (g/mol). NaN for a sequence without residues, so that a missing sequence is
+        not mistaken for a protein of 18 Da.
 
     Examples
     --------

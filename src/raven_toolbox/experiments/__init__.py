@@ -1,53 +1,38 @@
 """Score a model against measured growth rates and exchange fluxes.
 
-Suppose you measured the growth rate and some exchange fluxes (uptake of substrates, secretion
-of by-products) of an organism in one or more growth conditions, and want to know how well a
-model reproduces them: to compare model versions, or as the objective when parameters of a
-model are adjusted to the data. This package simulates each condition in the model and
-condenses the mismatch into a single number, the distance.
+The package simulates each measured growth condition in a model and condenses the mismatch with
+the measurements into one number, the distance. Use it to compare model versions or as the
+objective when fitting model parameters to data.
 
 Two kinds of conditions are scored:
 
-* A **flux condition** limits the uptake of the carbon source to its measured rate. The growth
-  rate and the measured exchange fluxes of the model are compared with the measurements. The
-  conditions are stored in ``fluxData.tsv``.
-* A **maximum-growth condition** leaves the uptake of the carbon source unlimited. Only the
-  maximal growth rate of the model is compared with the measured growth rate. The conditions
-  are stored in ``maxGrowth.tsv``.
+* A **flux condition** (``fluxData.tsv``) limits the carbon-source uptake to its measured rate
+  and compares the growth rate and the measured exchange fluxes.
+* A **maximum-growth condition** (``maxGrowth.tsv``) leaves the uptake unlimited and compares
+  only the maximal growth rate.
 
-Both files have the layout described in :func:`load_flux_data`. A third file, ``zeroFlux.tsv``,
-lists reactions that carry no flux in any condition.
+Both files have the layout of :func:`load_flux_data`. ``zeroFlux.tsv`` lists reactions that carry
+no flux in any condition.
 
 .. important::
-   The model objective must be the maximisation of the growth. The functions do not set the
-   objective: :func:`simulate_conditions` solves each condition with the objective that the model
-   has, and the growth rate is the flux of the biomass reaction in that solution. In a
-   maximum-growth condition the number that is compared with the measurement is therefore the
-   maximum of the model objective, which is the maximal growth rate only if the objective is the
-   biomass reaction. Set ``model.objective`` to the biomass reaction first; :func:`simulate_conditions`
-   warns once per call if the objective is not the maximisation of the biomass reaction.
+   The model objective must be the maximisation of growth. The functions do not set it:
+   :func:`simulate_conditions` solves each condition with the model objective and reads the
+   growth rate as the flux of the biomass reaction, so in a maximum-growth condition the compared
+   value is the maximum of the model objective. :func:`simulate_conditions` warns once per call
+   if the objective is not the maximisation of the biomass reaction.
 
-Workflow:
+Workflow: :func:`load_experiment_data` reads a folder, :func:`compute_carbon_weights` puts fluxes
+on a common carbon scale, :func:`simulate_conditions` simulates one data set, and
+:func:`experiment_distance` (or :func:`dataset_rmse` for one data set) returns the distance.
+:func:`apply_flux_data_constraints` is independent of the distance: it constrains a model to one
+measured condition, for example before flux variability analysis.
 
-1. :func:`load_experiment_data` reads the three files of a folder into an
-   :class:`ExperimentData`.
-2. :func:`compute_carbon_weights` gives each reaction the weight that puts all fluxes on the
-   same carbon scale.
-3. :func:`simulate_conditions` simulates the conditions of one file in the model.
-4. :func:`experiment_distance` compares the simulations of both kinds of conditions with the
-   measurements and returns the distance. :func:`dataset_rmse` does the same for one file.
-
-:func:`apply_flux_data_constraints` is independent of the distance: it constrains a model to
-one measured condition, for example before a flux variability analysis.
-
-Fluxes are in mmol/gDW/h, growth rates in 1/h. A negative exchange flux is an uptake and a
-positive one a secretion.
+Fluxes are in mmol/gDW/h and growth rates in 1/h; negative exchange fluxes are uptake.
 
 Examples
 --------
-A model with one substrate and one growth reaction that consumes 10 mmol glucose per unit of
-growth, and one measured flux condition in which glucose is taken up at 10 mmol/gDW/h and the
-organism grew at 0.9 1/h, while the model grows at 1.0 1/h:
+A toy model with one flux condition (glucose uptake 10 mmol/gDW/h, measured growth 0.9 1/h)
+while the model grows at 1.0 1/h:
 
 >>> import cobra
 >>> import numpy as np

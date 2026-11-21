@@ -1,10 +1,8 @@
 """Constrain a model to the measurements of one growth condition.
 
-:func:`apply_flux_data_constraints` takes one condition of a flux data set (growth rate and
-exchange fluxes, as read by :func:`~raven_toolbox.experiments.load_flux_data`) and sets them as
-bounds on the biomass reaction and the exchange reactions of a model. The constrained model
-can then be used for flux variability analysis, sampling or other analyses of that condition.
-It is independent of the distance functions of this package.
+:func:`apply_flux_data_constraints` sets one condition of a flux data set as bounds on the
+biomass and exchange reactions of a model, for example before flux variability analysis or
+sampling. It is independent of the distance functions of this package.
 """
 from __future__ import annotations
 
@@ -33,12 +31,12 @@ def apply_flux_data_constraints(
 ) -> None:
     """Constrain the growth rate and exchange fluxes of a model to one measured condition.
 
-    The bounds of the biomass reaction are set to the measured growth rate, and the bounds of every
-    exchange reaction of ``flux_data`` that was measured in the condition are set to the measured
-    flux. An exchange that was not measured (NaN) is left as it is. The model is changed in place.
+    Sets the bounds of the biomass reaction to the measured growth rate and the bounds of each
+    exchange reaction measured in the condition to the measured flux; unmeasured exchanges (NaN) are
+    left unchanged. The model is changed in place.
 
-    How tightly an exchange is constrained is set by ``loose_strict_flux``. For a measured uptake of
-    -10 and a measured secretion of 5:
+    ``loose_strict_flux`` sets how tightly an exchange is constrained. For a measured uptake of -10
+    and secretion of 5:
 
     =======================  ===============  ===============
     ``loose_strict_flux``    uptake -10       secretion 5
@@ -47,41 +45,36 @@ def apply_flux_data_constraints(
     ``10`` (percent)         (-10.5, -9.5)    (4.75, 5.25)
     =======================  ===============  ===============
 
-    A measured flux of ``-1000`` or ``1000`` means unconstrained, whatever ``loose_strict_flux`` is:
-    ``-1000`` gives the bounds (-1000, 0), free uptake, and ``1000`` gives (0, 1000), free
-    secretion.
+    A measured flux of ``-1000`` or ``1000`` means unconstrained whatever ``loose_strict_flux`` is:
+    bounds (-1000, 0) (free uptake) or (0, 1000) (free secretion).
 
     Parameters
     ----------
     model : cobra.Model
-        Model that has the exchange reactions of ``flux_data``. Changed in place.
+        Model with the exchange reactions of ``flux_data``. Changed in place.
     flux_data : FluxData
         Measurements, for example from :func:`~raven_toolbox.experiments.load_flux_data`.
     bio_rxn_id : str
         Id of the biomass reaction.
     condition : int or str, optional
-        The condition to apply, as its index (counted from 0) or its name in ``flux_data.conds``.
-        Default 0.
+        Index (from 0) or name of the condition in ``flux_data.conds``. Default 0.
     max_min_growth : {"max", "min"}, optional
-        ``"max"`` sets the bounds of the biomass reaction to (0, growth rate), so that the model
-        grows at most as fast as measured. ``"min"`` sets them to (growth rate, 1000), so that the
-        model grows at least that fast, which suits the minimisation of a resource such as the
-        protein pool. Default ``"max"``.
+        ``"max"`` bounds the biomass reaction to (0, growth rate); ``"min"`` to (growth rate, 1000),
+        which suits minimising a resource such as the protein pool. Default ``"max"``.
     loose_strict_flux : "loose" or float, optional
-        ``"loose"`` gives one bound at 0 and the other at the measured flux, which allows a flux of
-        zero. A number ``p`` between 0 and 100 gives the bounds ``flux * (1 -/+ p / 200)``, a band
-        of ``p`` percent in total, which forces a flux through the reaction. Default ``"loose"``.
+        ``"loose"`` sets one bound to 0 and the other to the measured flux, which allows zero flux. A
+        number ``p`` between 0 and 100 sets the bounds to ``flux * (1 -/+ p / 200)``, a band of ``p``
+        percent in total, which forces flux through the reaction. Default ``"loose"``.
     c_source : str, optional
-        Id of the preferred carbon source uptake reaction. Its bounds are set to (0, 0) before the
-        flux data is applied, so that the data alone determines the carbon source. ``None`` or
-        ``""`` blocks no reaction, and a reaction that is not in the model is ignored.
+        Id of a carbon-source uptake reaction to close (bounds (0, 0)) before the data is applied, so
+        that the data alone determines the carbon source. ``None`` or ``""`` closes none; a reaction
+        that is not in the model is ignored.
 
     Raises
     ------
     ValueError
-        If ``max_min_growth`` or ``loose_strict_flux`` is invalid, if ``condition`` is a name that
-        is not in ``flux_data.conds``, or if an exchange reaction of ``flux_data`` is not in the
-        model.
+        If ``max_min_growth`` or ``loose_strict_flux`` is invalid, if ``condition`` is a name that is
+        not in ``flux_data.conds``, or if an exchange reaction of ``flux_data`` is not in the model.
     IndexError
         If ``condition`` is an index that is out of range.
     KeyError
@@ -89,8 +82,7 @@ def apply_flux_data_constraints(
 
     See Also
     --------
-    load_flux_data : Reads the measurements.
-    simulate_conditions : Simulates all conditions of a data set, without changing the model.
+    load_flux_data, simulate_conditions
 
     Examples
     --------

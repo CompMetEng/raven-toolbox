@@ -1,12 +1,9 @@
 """SMILES of metabolites from PubChem, with a local cache.
 
-:func:`find_met_smiles` looks up the SMILES of the metabolites of a model by name and writes it
-to the annotation of each metabolite; :func:`met_smiles` reads it back. Looking up a name needs
-network access to PubChem, so every result is stored in a cache file that later calls read first.
-
-The cache file is a tab-delimited file without header, with the columns ``name`` and ``smiles``.
-Each result is appended as soon as it is known, so an interrupted run continues where it
-stopped.
+:func:`find_met_smiles` looks up the SMILES of the metabolites of a model by name and writes it to
+their annotation; :func:`met_smiles` reads it back. Results are stored in a tab-delimited cache
+file without header (columns ``name`` and ``smiles``), appended as soon as they are known, so an
+interrupted run continues where it stopped.
 """
 from __future__ import annotations
 
@@ -46,10 +43,8 @@ _FIRST_LINE_PATTERN = re.compile(r"^(\S*)\n")
 def met_smiles(metabolite) -> str:
     """The SMILES of a metabolite, whatever form its annotation has.
 
-    cobra keeps an annotation value as it was assigned, but returns a list for a model that was
-    read from a file: a metabolite annotated in memory by :func:`find_met_smiles` has ``"CCO"``, and
-    the same metabolite after it is saved and loaded has ``["CCO"]``. This function returns a string
-    in both cases.
+    cobra keeps an annotation as assigned but returns a list for a model read from a file (``"CCO"``
+    in memory, ``["CCO"]`` after saving and loading). This function returns a string in both cases.
 
     Parameters
     ----------
@@ -59,7 +54,7 @@ def met_smiles(metabolite) -> str:
     Returns
     -------
     str
-        The first non-empty SMILES in ``metabolite.annotation["smiles"]``, or ``""`` if there is none.
+        The first non-empty SMILES in ``metabolite.annotation["smiles"]``, or ``""``.
 
     Examples
     --------
@@ -84,45 +79,34 @@ def find_met_smiles(
 ) -> None:
     r"""Write the SMILES of the metabolites of a model to their annotation, from PubChem.
 
-    The SMILES of a metabolite is found by its name (``Metabolite.name``) and written to
-    ``metabolite.annotation["smiles"]``. A lookup is done once per distinct name and applies to every
-    metabolite with that name, for example the same metabolite in several compartments. For each
-    metabolite:
+    The SMILES is found by metabolite name (once per distinct name, applied to every metabolite with
+    that name) and written to ``metabolite.annotation["smiles"]``. Skipped are metabolites whose name
+    starts with one of ``skip_prefixes``, metabolites without a name (one warning lists them) and
+    metabolites that already have a SMILES. Other names are looked up in the cache (the last row wins
+    if a name occurs more than once) and, if absent, in PubChem: one request at a time with a pause of
+    0.2 s, retrying failed requests such as status 429 or 503 up to 10 times, using the first SMILES
+    returned and appending it to the cache.
 
-    1. Metabolites whose name starts with one of ``skip_prefixes`` are skipped.
-    2. Metabolites without a name are skipped, with one warning that lists them.
-    3. Metabolites that already have a SMILES are skipped.
-    4. The name is looked up in the cache file. If the cache holds a name more than once, the last
-       row is used.
-    5. If the name is not in the cache, PubChem is asked, one request after the other with a pause
-       of 0.2 s (PubChem allows at most 5 requests per second), and failed requests with a status
-       such as 429 or 503 are retried up to 10 times. The first SMILES that PubChem returns is
-       used. The result is appended to the cache.
-
-    A name for which PubChem answers that it has no compound with that name (HTTP status 404, or
-    400 for a name that PubChem cannot parse) gets a cache row with an empty SMILES, so that it is
-    not asked for again. Delete such rows from the cache to look them up again. A request that
-    fails for another reason, such as no network, a timeout or a server error that persists after
-    the retries, is logged as a warning and is not written to the cache, so that a later call asks
-    again. A metabolite without a SMILES gets no annotation.
-
-    Network access to ``pubchem.ncbi.nlm.nih.gov`` is needed only for names that are not in the
-    cache.
+    A name for which PubChem answers that no compound exists (status 404, or 400 for an unparsable
+    name) is cached with an empty SMILES and not asked again; delete the row to look it up again. Any
+    other failure (no network, timeout, a persistent server error) is logged as a warning and not
+    cached, so a later call asks again. A metabolite without a SMILES gets no annotation. Network
+    access to ``pubchem.ncbi.nlm.nih.gov`` is needed only for names that are not in the cache.
 
     Parameters
     ----------
     model : cobra.Model
         The model, changed in place.
     cache_path : str or pathlib.Path
-        The cache file. It is created, with its folder, if it does not exist.
+        The cache file. It is created, with its folder, if missing.
     skip_prefixes : iterable of str, optional
-        Metabolites whose name starts with one of these prefixes are skipped. Use it for
-        pseudo-metabolites that are not compounds, for example ``("prot_",)`` for the enzymes of an
-        enzyme-constrained model. Default: none.
+        Skip metabolites whose name starts with one of these prefixes, for pseudo-metabolites that are
+        not compounds, for example ``("prot_",)`` for the enzymes of an enzyme-constrained model.
+        Default none.
 
     See Also
     --------
-    met_smiles : Reads the SMILES of a metabolite.
+    met_smiles
 
     Examples
     --------

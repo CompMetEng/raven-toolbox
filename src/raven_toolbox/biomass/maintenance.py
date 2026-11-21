@@ -1,40 +1,28 @@
 """Fit GAM and NGAM to measured substrate uptake and maintenance coefficients.
 
-GAM is the ATP hydrolysed per gram of biomass formed (mmol/gDW), and NGAM the ATP hydrolysed per
-hour and gram of biomass (mmol/gDW/h); see :mod:`raven_toolbox.biomass.gam`. Different data fix
-them, so they are fitted one after the other:
+NGAM and GAM (see :mod:`raven_toolbox.biomass.gam`) are fitted one after the other:
 
-* NGAM from the maintenance coefficient measured in retentostats, or in chemostats at very low
-  growth rates: the substrate that the cell takes up per gram of biomass and hour when it does
-  not grow. The substrate uptake that a model needs at zero growth is proportional to NGAM, so
+* NGAM from a measured maintenance coefficient (substrate uptake at zero growth, from retentostats
+  or very slow chemostats). The uptake a model needs at zero growth is proportional to NGAM, so
   :func:`ngam_from_maintenance_coefficient` needs one solve.
-* GAM from the substrate uptake of chemostats at the measured growth rates, with NGAM held at its
-  value (:func:`fit_gam`). The model uptake is computed once on a grid of GAM values
+* GAM from the substrate uptake of chemostats at measured growth rates, with NGAM held fixed
+  (:func:`fit_gam`). The model uptake is computed once on a grid of GAM values
   (:func:`uptake_grid`); the loss, the best GAM and the resampling of studies
-  (:func:`bootstrap_gam`) then work on that grid and need no further solves.
+  (:func:`bootstrap_gam`) then need no further solves.
 
-The chemostat data come from many studies. The loss weights every study equally
-(:func:`study_weights`: a row counts ``1 / sqrt`` of the number of rows of its study, and rows
-from a less reliable origin, such as values read from a figure, count less) and is the Huber loss
-of the log ratio of model to measured uptake (:func:`huber_loss`, :func:`log_ratio`), so that one
-study that disagrees with the others does not move the result. The spread of the result is
-estimated by resampling the studies.
+The loss is the Huber loss of the log ratio of model to measured uptake (:func:`huber_loss`,
+:func:`log_ratio`), so that one disagreeing study does not move the result. Studies are weighted
+equally (:func:`study_weights`: a row counts ``1 / sqrt`` of the number of rows of its study, less
+for rows flagged as less reliable, such as values read from a figure), and the spread of the result
+is estimated by resampling the studies.
 
-Data needed:
-
-* The model, with a biomass pseudoreaction that has the GAM term, an NGAM reaction, a reaction
-  whose flux is the growth rate, and the exchange reaction of the limiting substrate.
-* The maintenance coefficient of the substrate, mmol/gDW/h.
-* A table with one row per chemostat: the growth rate (1/h, the dilution rate), the measured
-  substrate uptake (mmol/gDW/h, as a positive number) and a label of the study.
-
-:func:`fit_maintenance` runs the steps for one data set. A model with several regimes, for
-example aerobic and anaerobic growth, is fitted once per regime, with the model as it is used in
-that regime.
-
-The ids of the reactions and the names of the metabolites are given in a
-:class:`MaintenanceConfig`. A step that depends on the data, such as setting the protein content
-of the biomass of a chemostat, is a function that is passed as ``condition_setup``.
+Needed: a model with the GAM term in a biomass reaction, an NGAM reaction, a growth reaction and the
+exchange reaction of the limiting substrate (given in a :class:`MaintenanceConfig`); the
+maintenance coefficient (mmol/gDW/h); and a table with one row per chemostat holding the growth rate
+(1/h), the measured substrate uptake (mmol/gDW/h, positive) and a study label.
+:func:`fit_maintenance` runs all steps for one data set; fit each growth regime (for example
+aerobic and anaerobic) separately with the model as used in that regime. A data-dependent step such
+as setting the protein content of a chemostat is passed as ``condition_setup``.
 """
 from __future__ import annotations
 
@@ -80,19 +68,18 @@ class MaintenanceConfig:
     Attributes
     ----------
     biomass_rxn : str
-        Biomass pseudoreaction that holds the GAM coefficients.
+        Biomass reaction that holds the GAM coefficients.
     ngam_rxn : str
         Maintenance reaction whose fixed flux is NGAM.
     growth_rxn : str
-        Reaction whose flux is the growth rate, which is fixed to the dilution rate of a chemostat.
-        Often the same as ``biomass_rxn``, or a reaction that drains the biomass.
+        Reaction whose flux is the growth rate, fixed to the dilution rate of a chemostat. Often the
+        same as ``biomass_rxn``.
     substrate_exchange : str
-        Exchange reaction of the limiting substrate. Its uptake is a negative flux.
+        Exchange reaction of the limiting substrate (uptake is a negative flux).
     cofactor_met_names : tuple of str
-        Names of the metabolites of the GAM term in the biomass pseudoreaction, such as ATP, ADP,
-        H2O, H+ and phosphate.
+        Names of the GAM cofactors in the biomass reaction, such as ATP, ADP, H2O, H+ and phosphate.
     atp_met_name : str
-        Name of the ATP metabolite, whose coefficient is GAM. Default ``"ATP"``.
+        Name of ATP, whose coefficient is GAM. Default ``"ATP"``.
     """
 
     biomass_rxn: str
@@ -136,8 +123,7 @@ class MaintenanceFit:
 def huber_loss(residual: np.ndarray, delta: float = HUBER_DELTA) -> np.ndarray:
     """Huber loss of a residual: quadratic for small residuals, linear for large ones.
 
-    Equal to ``r**2 / 2`` for ``|r| <= delta`` and ``delta * (|r| - delta / 2)`` above, so that a
-    single large residual counts less than with a squared loss.
+    Equal to ``r**2 / 2`` for ``|r| <= delta`` and ``delta * (|r| - delta / 2)`` above.
 
     Parameters
     ----------
@@ -168,9 +154,9 @@ def log_ratio(
 ) -> np.ndarray:
     """Natural logarithm of ``simulated / measured``, the residual of the fit.
 
-    A ratio of 2 gives 0.69 and a ratio of 0.5 gives -0.69, so over- and underestimates count the
-    same. A value that is not finite, such as the NaN of a growth rate that the model cannot
-    sustain, gives ``infeasible``.
+    Over- and underestimates by the same factor count the same (ratio 2 gives 0.69, ratio 0.5 gives
+    -0.69). A value that is not finite, such as the NaN of a growth rate the model cannot sustain,
+    gives ``infeasible``.
 
     Parameters
     ----------
@@ -204,9 +190,8 @@ def study_weights(
 ) -> np.ndarray:
     """Weight of every data row, so that every study counts equally.
 
-    A row gets ``1 / sqrt(n)``, where ``n`` is the number of rows of its study, so a study with many
-    rows does not outweigh one with few. Rows that are flagged in ``discounted`` count ``discount``
-    times as much, for example values that were read from a figure.
+    A row gets ``1 / sqrt(n)``, with ``n`` the number of rows of its study. Rows flagged in
+    ``discounted`` count ``discount`` times as much, for example values read from a figure.
 
     Parameters
     ----------
@@ -246,25 +231,24 @@ def min_uptake(
 ) -> float:
     """Smallest substrate uptake at which the model can grow at a given rate.
 
-    The growth rate is fixed, and the uptake of the substrate is minimised. The model is changed only
-    inside ``with model:``, so it is as before after the call.
+    Fixes the growth rate and minimises the substrate uptake. The model is changed only inside
+    ``with model:``.
 
     Parameters
     ----------
     model : cobra.Model
         The model, with GAM and NGAM set.
     growth : float
-        Growth rate to fix, 1/h. 0 gives the maintenance uptake.
+        Growth rate to fix (1/h). 0 gives the maintenance uptake.
     config : MaintenanceConfig
         The growth reaction and the substrate exchange reaction.
     setup : callable, optional
-        Function ``f(model)`` that is called on the model before the solve, for example to set the
-        protein content of a chemostat.
+        ``f(model)`` called on the model before the solve, for example to set the protein content.
 
     Returns
     -------
     float
-        The uptake as a positive number, mmol/gDW/h. NaN if the growth rate cannot be reached.
+        The uptake as a positive number (mmol/gDW/h). NaN if the growth rate cannot be reached.
     """
     with model:
         if setup is not None:
@@ -289,31 +273,30 @@ def uptake_grid(
 ) -> np.ndarray:
     """Model uptake for every value of GAM of a grid and every data row.
 
-    Used by :func:`fit_gam`. Computing the uptake once for the whole grid lets the loss, the best
-    GAM and the resampling of studies work without further solves.
+    Used by :func:`fit_gam`. Computing the uptake once for the whole grid lets the loss, the best GAM
+    and the resampling of studies work without further solves.
 
     Parameters
     ----------
     model : cobra.Model
-        The model. It is as before after the call.
+        The model. Unchanged after the call.
     data : pandas.DataFrame
         One row per chemostat.
     gams : sequence of float
-        GAM values of the grid, mmol/gDW.
+        GAM values of the grid (mmol/gDW).
     ngam : float
-        NGAM to hold, mmol/gDW/h.
+        NGAM to hold (mmol/gDW/h).
     config : MaintenanceConfig
         The reactions and metabolites of GAM and NGAM.
     growth_col : str, optional
-        Column of ``data`` with the growth rate, 1/h. Default ``"growth_rate"``.
+        Column of ``data`` with the growth rate (1/h). Default ``"growth_rate"``.
     condition_setup : callable, optional
-        Function ``f(model, row)`` that sets the model for one chemostat, for example the protein
-        content that was measured in it.
+        ``f(model, row)`` that sets the model for one chemostat, for example its protein content.
 
     Returns
     -------
     numpy.ndarray
-        Uptake in mmol/gDW/h, shape ``(len(gams), len(data))``; NaN where the growth rate cannot be
+        Uptake (mmol/gDW/h), shape ``(len(gams), len(data))``; NaN where the growth rate cannot be
         reached.
     """
     out = np.full((len(gams), len(data)), np.nan)
@@ -337,25 +320,24 @@ def ngam_from_maintenance_coefficient(
 ) -> float:
     """NGAM at which the model needs a measured substrate uptake at zero growth.
 
-    At zero growth the substrate is spent on maintenance only, so the uptake that the model needs is
-    proportional to NGAM and one solve gives the proportionality. The ATP that the substrate yields
-    comes from the model.
+    At zero growth the uptake the model needs is proportional to NGAM, so one solve gives the
+    proportionality.
 
     Parameters
     ----------
     model : cobra.Model
-        The model. It is as before after the call.
+        The model. Unchanged after the call.
     ms_substrate : float
-        Measured maintenance coefficient of the substrate, mmol/gDW/h.
+        Measured maintenance coefficient of the substrate (mmol/gDW/h).
     config : MaintenanceConfig
         The reactions and metabolites of GAM and NGAM.
     gam : float, optional
-        GAM to set first, mmol/gDW. Default: the GAM of the model.
+        GAM to set first (mmol/gDW). Default: the GAM of the model.
 
     Returns
     -------
     float
-        NGAM, mmol ATP/gDW/h.
+        NGAM (mmol ATP/gDW/h).
     """
     with model:
         _set_maintenance(model, gam, 1.0, config)
@@ -377,33 +359,33 @@ def fit_gam(
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Best GAM for the chemostats of a data set, at a given NGAM.
 
-    The model uptake is computed on a grid of GAM values, compared with the measured uptake through
-    the Huber loss of the log ratio, and the GAM with the smallest weighted loss is returned.
+    Computes the model uptake on a grid of GAM values, compares it with the measured uptake through
+    the Huber loss of the log ratio and returns the GAM with the smallest weighted loss.
 
     Parameters
     ----------
     model : cobra.Model
-        The model. It is as before after the call.
+        The model. Unchanged after the call.
     data : pandas.DataFrame
         One row per chemostat, with the growth rate and the measured uptake.
     ngam : float
-        NGAM to hold, mmol/gDW/h.
+        NGAM to hold (mmol/gDW/h).
     config : MaintenanceConfig
         The reactions and metabolites of GAM and NGAM.
     gams : sequence of float, optional
-        GAM values of the grid, mmol/gDW. Default :data:`DEFAULT_GAMS` (25 to 70 in steps of 1.25).
+        GAM grid (mmol/gDW). Default :data:`DEFAULT_GAMS` (25 to 70 in steps of 1.25).
     growth_col, uptake_col : str, optional
-        Columns of ``data`` with the growth rate (1/h) and the measured uptake (mmol/gDW/h, a
-        positive number). Defaults ``"growth_rate"`` and ``"uptake"``.
+        Columns of ``data`` with the growth rate (1/h) and the measured uptake (mmol/gDW/h, positive).
+        Defaults ``"growth_rate"`` and ``"uptake"``.
     weights : numpy.ndarray, optional
-        Weight of every row, for example from :func:`study_weights`. Default: all 1.
+        Weight of every row, for example from :func:`study_weights`. Default all 1.
     condition_setup : callable, optional
-        Function ``f(model, row)`` that sets the model for one chemostat.
+        ``f(model, row)`` that sets the model for one chemostat.
 
     Returns
     -------
     gam : float
-        The best GAM, mmol/gDW.
+        The best GAM (mmol/gDW).
     gams : numpy.ndarray
         The grid.
     ratios : numpy.ndarray
@@ -433,9 +415,9 @@ def bootstrap_gam(
 ) -> tuple[float, float]:
     """Spread of the best GAM when the studies are resampled.
 
-    Studies are drawn with replacement, as many as there are, a row counts as often as its study
-    was drawn, and the best GAM is found for each resample from the grid of log ratios of
-    :func:`fit_gam`. No further solves are needed. A narrow interval means that the data fix GAM.
+    Draws studies with replacement (as many as there are); a row counts as often as its study was
+    drawn, and the best GAM of each resample is found from the log-ratio grid of :func:`fit_gam`
+    without further solves. A narrow interval means that the data fix GAM.
 
     Parameters
     ----------
@@ -496,43 +478,43 @@ def fit_maintenance(
     """Fit NGAM from a maintenance coefficient and GAM from the chemostats of one data set.
 
     Runs :func:`ngam_from_maintenance_coefficient`, :func:`study_weights`, :func:`fit_gam` and
-    :func:`bootstrap_gam` in turn; see the module documentation for the method and the data.
+    :func:`bootstrap_gam` in turn; see the module documentation.
 
     Parameters
     ----------
     model : cobra.Model
-        The model as it is used for the growth regime of ``data``. It is not changed.
+        The model as used for the growth regime of ``data``. Not changed.
     data : pandas.DataFrame
-        One row per chemostat, with the growth rate (``growth_col``, 1/h), the measured substrate
-        uptake (``uptake_col``, mmol/gDW/h, a positive number) and the study (``study_col``).
+        One row per chemostat, with the growth rate (``growth_col``, 1/h), the measured substrate uptake
+        (``uptake_col``, mmol/gDW/h, positive) and the study (``study_col``).
     ms_substrate : float
-        Maintenance coefficient of the substrate, mmol/gDW/h, from retentostats.
+        Maintenance coefficient of the substrate (mmol/gDW/h).
     config : MaintenanceConfig
         The reactions and metabolites of GAM and NGAM.
     study_col, growth_col, uptake_col : str, optional
-        Names of the columns of ``data``. Defaults ``"study"``, ``"growth_rate"``, ``"uptake"``.
+        Columns of ``data``. Defaults ``"study"``, ``"growth_rate"``, ``"uptake"``.
     discounted : iterable of bool, optional
-        True for the rows that count ``discount`` times as much in the weights, for example values
-        that were read from figures.
+        True for rows that count ``discount`` times as much in the weights, for example values read from
+        figures.
     discount : float, optional
         Default 0.5.
     gams : sequence of float, optional
-        GAM values of the grid. Default :data:`DEFAULT_GAMS`.
+        GAM grid. Default :data:`DEFAULT_GAMS`.
     bootstrap : int, optional
         Number of resamples of the studies. Default 400.
     seed : int, optional
         Seed of the resampling. Default 0.
     condition_setup : callable, optional
-        Function ``f(model, row)`` that sets the model for the conditions of one chemostat.
+        ``f(model, row)`` that sets the model for the conditions of one chemostat.
 
     Returns
     -------
     MaintenanceFit
-        NGAM, GAM, the spread of GAM, and the sizes of the data.
+        NGAM, GAM, the spread of GAM and the sizes of the data.
 
     See Also
     --------
-    set_gam : Applies the result to a model.
+    set_gam
 
     Examples
     --------

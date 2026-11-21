@@ -1,31 +1,21 @@
 """The distance between a model and measured growth conditions.
 
-The distance is the root mean square of the differences between simulated and measured values
-of a condition, averaged over the conditions. The measured values are the growth rate and the
-exchange fluxes of the condition, and the differences are put on a common carbon scale so that
-a flux of a metabolite with many carbon atoms counts more than one with few: every flux is
-multiplied by the number of carbon atoms of the metabolite it exchanges
-(:func:`compute_carbon_weights`), which gives Cmmol/gDW/h, and the growth rate is multiplied by
-the assumed carbon content of biomass (:data:`BIOMASS_CARBON_EQUIV`). The distance therefore has
-the unit Cmmol/gDW/h.
+The distance of a condition is the root mean square of the differences between simulated and
+measured values (growth rate and exchange fluxes), averaged over the conditions. Fluxes are
+multiplied by the number of carbon atoms of the exchanged metabolite
+(:func:`compute_carbon_weights`) and the growth rate by the carbon content of biomass
+(:data:`BIOMASS_CARBON_EQUIV`), so the distance is in Cmmol/gDW/h.
 
-Two kinds of conditions are scored, which differ in what is compared:
+* In a **flux condition** the growth rate, the measured exchange fluxes and the ``zero_flux``
+  reactions (compared with 0) are compared.
+* In a **maximum-growth condition** only the growth rate is compared. It is the maximal growth
+  rate only if the simulated model has growth as objective;
+  :func:`~raven_toolbox.experiments.simulate_conditions` warns if it does not.
 
-* In a **flux condition** the uptake of the carbon source is limited to the measured rate, and
-  the growth rate and the measured exchange fluxes are compared. Reactions that should carry no
-  flux (the ``zero_flux`` list) are compared with 0.
-* In a **maximum-growth condition** the uptake of the carbon source is unlimited, and only the
-  growth rate is compared. This is the maximal growth rate if the objective of the simulated model
-  is the growth; :func:`~raven_toolbox.experiments.simulate_conditions` warns if it is not.
-
-:func:`dataset_rmse` scores the conditions of one file, and :func:`experiment_distance`
-combines the two files into one value. A condition that the model cannot solve gets a fixed
-penalty (:data:`INFEASIBLE_PENALTY`), so that it counts as a poor condition and not as a
-missing one. A condition with weight 0 is left out.
-
-The simulations that the functions compare with the data come from
-:func:`~raven_toolbox.experiments.simulate_conditions`. The functions of this module read only
-numbers, so the distance can be computed without a model.
+:func:`dataset_rmse` scores one data set and :func:`experiment_distance` combines both. A condition
+that cannot be solved gets :data:`INFEASIBLE_PENALTY`; a condition with weight 0 is left out. The
+functions read only numbers, so the distance can be computed from stored simulations without a
+model.
 """
 from __future__ import annotations
 
@@ -42,14 +32,12 @@ if TYPE_CHECKING:
     from .data import ExperimentData
     from .flux_data import FluxData
 
-#: Assumed carbon content of biomass, 41 Cmmol/gDW (a carbon mass fraction of about 49%). It
-#: converts a growth rate (1/h) into Cmmol/gDW/h, so that the growth rate and the carbon-weighted
-#: exchange fluxes of a condition are on the same scale in the distance.
+#: Assumed carbon content of biomass (Cmmol/gDW), which converts a growth rate (1/h) to the
+#: Cmmol/gDW/h scale of the carbon-weighted fluxes.
 BIOMASS_CARBON_EQUIV = 41.0
 
-#: Error that a condition gets when the model cannot be solved in it. It is much larger than the
-#: error of a condition that is solved, so that a model that cannot grow in a condition has a
-#: worse distance than a model that grows with a large error. The value 99 is a convention.
+#: Error of a condition that cannot be solved: much larger than the error of a solved condition, so
+#: a model that cannot grow scores worse than one that grows with a large error.
 INFEASIBLE_PENALTY = 99.0
 
 
@@ -58,40 +46,37 @@ def compute_carbon_weights(
 ) -> dict[str, float]:
     """Weight of each reaction that puts its flux on a common carbon scale.
 
-    Multiplying an exchange flux by the number of carbon atoms of the metabolite that it exchanges
-    gives the flux in Cmmol/gDW/h, so that fluxes of different metabolites can be compared and
-    added in one distance. The biomass reaction gets :data:`BIOMASS_CARBON_EQUIV`, which converts
-    the growth rate to the same scale.
+    Multiplying an exchange flux by the number of carbon atoms of the exchanged metabolite gives
+    Cmmol/gDW/h, so that fluxes of different metabolites can be added in one distance. The biomass
+    reaction gets :data:`BIOMASS_CARBON_EQUIV`.
 
     Parameters
     ----------
     model : cobra.Model
         Model that provides the metabolite formulas.
     rxn_ids : iterable of str
-        Ids of the reactions to compute a weight for: the exchange reactions of the data sets, the
-        reactions of the zero-flux list and the biomass reaction.
+        Reactions to weight: the exchange reactions of the data sets, the zero-flux reactions and the
+        biomass reaction.
     bio_rxn_id : str
         Id of the biomass reaction.
 
     Returns
     -------
     dict of str to float
-        Weight per reaction id. The biomass reaction gets 41. Every other reaction gets the number
-        of carbon atoms in the formula of its single exchanged metabolite. A reaction with more
-        than one metabolite, a metabolite without a formula, a formula that cannot be read and a
-        metabolite with no carbon atoms (O2, water) get the weight 1, so that their flux
-        mismatches still count in the distance.
+        Weight per reaction id. The biomass reaction gets 41. Every other reaction gets the number of
+        carbon atoms in the formula of its single exchanged metabolite. A reaction with several
+        metabolites, a metabolite without a readable formula and a metabolite without carbon get 1, so
+        that mismatches in their fluxes still count.
 
-        The formula is read as cobra reads it: element symbols with an optional integer or decimal
-        count (``C6H12O6``, ``C2.5H5``), and a trailing charge sign or ``*`` between parts of the
-        formula (``C6H12O6*H2O``) is ignored. A formula with parentheses (``C6H12O6(H2O)2``,
-        the polymer ``(C5H8)n``) cannot be read, and neither can an empty one. The MATLAB function
+        Formulas are read as cobra reads them: element symbols with an optional integer or decimal
+        count (``C6H12O6``, ``C2.5H5``); charge signs and ``*`` are ignored (``C6H12O6*H2O``).
+        Parentheses (``C6H12O6(H2O)2``, ``(C5H8)n``) and empty formulas are not readable. The MATLAB
         ``computeCarbonWeights`` gives the same weights.
 
     Warns
     -----
     UserWarning
-        If no metabolite of the model has a formula; every exchange then gets the weight 1.
+        If no metabolite has a formula; every exchange then gets weight 1.
 
     Raises
     ------
@@ -160,59 +145,55 @@ def dataset_rmse(
 ) -> tuple[float, np.ndarray]:
     """Distance between the simulation of one data set and its measurements.
 
-    The error of a condition is the root mean square of the differences between the carbon-weighted
-    simulated and measured values. For a flux condition (``constrain=True``) the values are the
-    growth rate, every measured exchange flux, and every reaction of the zero-flux list (measured
-    as 0); a zero-flux reaction that is simulated at exactly 0 is left out so that correct
-    predictions do not dilute the error. For a maximum-growth condition (``constrain=False``) the
-    error is the absolute difference of the carbon-weighted growth rates. A condition that the
-    model could not solve gets ``penalty``. The distance of the data set is the mean of the errors
-    of its conditions, each multiplied by the weight of the condition if the data has weights (the
-    mean is over the conditions, not divided by the sum of the weights). A condition with weight 0
-    is left out: its error is NaN and it is not part of the mean.
+    The error of a flux condition (``constrain=True``) is the root mean square of the differences
+    between carbon-weighted simulated and measured values: the growth rate, every measured exchange
+    flux and every zero-flux reaction (measured as 0). Zero-flux reactions simulated at exactly 0 are
+    left out, so that correct predictions do not dilute the error. The error of a maximum-growth
+    condition (``constrain=False``) is the absolute difference of the carbon-weighted growth rates. A
+    condition that could not be solved gets ``penalty``. The distance is the mean of the condition
+    errors, each multiplied by the condition weight if the data has weights (the mean is over the
+    conditions, not divided by the sum of the weights). A condition with weight 0 has error NaN and is
+    not part of the mean.
 
     Parameters
     ----------
     flux_data : FluxData
-        The data set that was simulated: ``ExperimentData.flux_data`` or
-        ``ExperimentData.max_growth``.
+        The data set that was simulated.
     sims : list of ConditionSimResult
-        The simulation of ``flux_data`` from :func:`~raven_toolbox.experiments.simulate_conditions`,
-        one entry per condition. The entries of conditions with weight 0 are not read.
+        Result of :func:`~raven_toolbox.experiments.simulate_conditions` for that data set. Entries of
+        conditions with weight 0 are not read.
     constrain : bool
-        Must be the value that was given to ``simulate_conditions``: True compares growth and
-        exchange fluxes (flux conditions), False compares growth only (maximum-growth conditions).
+        The value given to ``simulate_conditions``: True compares growth and exchange fluxes, False
+        growth only.
     carbon_weights : dict of str to float
         Weights from :func:`compute_carbon_weights`. A reaction that is not in the dictionary gets
-        the weight 1.
+        weight 1.
     penalty : float, optional
-        Error of a condition that could not be solved. Default 99
-        (:data:`INFEASIBLE_PENALTY`).
+        Error of a condition that could not be solved. Default 99 (:data:`INFEASIBLE_PENALTY`), large
+        enough that a model that cannot grow scores worse than one that grows with a large error.
 
     Returns
     -------
     rmse : float
-        Weighted mean of the errors of the conditions with a weight other than 0, in
-        Cmmol/gDW/h. NaN if every condition has weight 0.
+        Weighted mean of the errors of the conditions with weight other than 0 (Cmmol/gDW/h). NaN if
+        every condition has weight 0.
     rmse_list : numpy.ndarray
-        Error of each condition, shape ``(n_conds,)``, with the penalty for unsolved conditions and
-        before the weighting; NaN for a condition with weight 0.
+        Error of each condition before weighting, shape ``(n_conds,)``, with the penalty for unsolved
+        conditions; NaN for weight 0.
 
     Raises
     ------
     ValueError
-        If ``sims`` has another length than ``flux_data`` has conditions.
+        If ``sims`` and ``flux_data`` have different numbers of conditions.
 
     See Also
     --------
-    simulate_conditions : Produces ``sims``.
-    compute_carbon_weights : Produces ``carbon_weights``.
-    experiment_distance : Combines the distances of the flux and the maximum-growth conditions.
+    simulate_conditions, compute_carbon_weights, experiment_distance
 
     Examples
     --------
-    One maximum-growth condition in which the organism grew at 0.4 1/h and the model at 0.5 1/h; the
-    error is 0.1 * 41:
+    One maximum-growth condition with measured growth 0.4 1/h and simulated growth 0.5 1/h; the error
+    is 0.1 * 41:
 
     >>> import numpy as np
     >>> from raven_toolbox.experiments import ConditionSimResult, FluxData, dataset_rmse
@@ -292,59 +273,51 @@ def experiment_distance(
 
     Combines the distance of the flux conditions (``ExperimentData.flux_data``) and of the
     maximum-growth conditions (``ExperimentData.max_growth``), each from :func:`dataset_rmse`, as
-    ``(d_flux + w * d_max_growth) / (1 + w)``, where ``w`` is ``max_growth_weight``. Use it to
-    compare model versions with the same data, or as the objective when parameters of a model are
-    adjusted to the data; a smaller distance is a better fit. Fluxes are compared in
-    Cmmol/gDW/h (see the module documentation).
+    ``(d_flux + w * d_max_growth) / (1 + w)`` with ``w = max_growth_weight``. A smaller distance is a
+    better fit. Use it to compare model versions on the same data or as the objective when fitting
+    parameters. Fluxes are compared in Cmmol/gDW/h (:func:`compute_carbon_weights`). A data set that
+    is absent, or in which every condition has weight 0, does not contribute.
 
-    A data set that is not in ``experiment_data`` does not contribute, and neither does a data set
-    in which every condition has weight 0.
+    The maximum-growth comparison is the maximal growth rate only if the simulated model has growth
+    as objective; :func:`~raven_toolbox.experiments.simulate_conditions` warns if it does not.
 
     Parameters
     ----------
     experiment_data : ExperimentData
-        The measured conditions, from :func:`load_experiment_data`.
+        Measured conditions, from :func:`load_experiment_data`.
     flux_sims : list of ConditionSimResult or None
-        Simulation of ``experiment_data.flux_data`` from
-        :func:`~raven_toolbox.experiments.simulate_conditions` with ``constrain=True``. ``None``
-        if ``experiment_data.flux_data`` is ``None``.
+        :func:`~raven_toolbox.experiments.simulate_conditions` result for ``flux_data`` with
+        ``constrain=True``; ``None`` if ``flux_data`` is ``None``.
     max_growth_sims : list of ConditionSimResult or None
-        Simulation of ``experiment_data.max_growth`` with ``constrain=False``. ``None`` if
-        ``experiment_data.max_growth`` is ``None``.
+        Result for ``max_growth`` with ``constrain=False``; ``None`` if ``max_growth`` is ``None``.
     carbon_weights : dict of str to float
         Weights from :func:`compute_carbon_weights`.
     penalty : float, optional
         Error of a condition that could not be solved. Default 99.
     max_growth_weight : float, optional
-        Weight of the maximum-growth conditions against the flux conditions in the combination.
-        Default 1, which averages the two distances. With 2 the maximum-growth conditions count
-        twice as much as the flux conditions.
+        Weight of the maximum-growth distance against the flux distance. Default 1 (the average).
 
     Returns
     -------
     rmse : float
-        The combined distance in Cmmol/gDW/h. NaN if neither data set is present or no condition has
-        a weight other than 0.
+        Combined distance (Cmmol/gDW/h). NaN if no condition has weight other than 0.
     detail : dict of str to numpy.ndarray
-        Error of each condition (see ``rmse_list`` of :func:`dataset_rmse`), under the keys
-        ``"flux_data"`` and ``"max_growth"`` for the data sets that were scored.
+        Error of each condition (``rmse_list`` of :func:`dataset_rmse`) under ``"flux_data"`` and
+        ``"max_growth"`` for the data sets that were scored.
 
     Raises
     ------
     ValueError
-        If a data set is present in ``experiment_data`` but its simulation is ``None``.
+        If a data set is present but its simulation is ``None``.
 
     See Also
     --------
-    dataset_rmse : The distance of one data set.
-    simulate_conditions : Produces the simulations.
-    load_experiment_data : Produces ``experiment_data``.
+    dataset_rmse, simulate_conditions, load_experiment_data
 
     Examples
     --------
-    Data with maximum-growth conditions only: the distance is that of the maximum-growth
-    conditions, here a growth rate of 0.5 1/h against a measured 0.4 1/h. The package documentation
-    of :mod:`raven_toolbox.experiments` has a complete example, from a model to a distance.
+    Maximum-growth conditions only: measured growth 0.4 1/h against simulated 0.5 1/h. See
+    :mod:`raven_toolbox.experiments` for a complete example from a model to a distance.
 
     >>> import numpy as np
     >>> from raven_toolbox.experiments import (

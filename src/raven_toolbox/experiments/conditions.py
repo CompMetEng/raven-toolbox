@@ -1,11 +1,10 @@
 """Simulate measured growth conditions in a model.
 
-:func:`simulate_conditions` is the simulation half of the distance between a model and
-measurements: it sets up each condition of a data set in the model, solves it and records the
-growth rate and the fluxes that are compared with the measurements. The comparison itself is
-done by :func:`~raven_toolbox.experiments.dataset_rmse` and
-:func:`~raven_toolbox.experiments.experiment_distance`. The two steps are separate so that the
-distance can be computed from stored simulations.
+:func:`simulate_conditions` sets up each condition of a data set, solves it and records the growth
+rate and the fluxes that are compared with the measurements. The comparison is done by
+:func:`~raven_toolbox.experiments.dataset_rmse` and
+:func:`~raven_toolbox.experiments.experiment_distance`, separately so that the distance can be
+computed from stored simulations.
 """
 from __future__ import annotations
 
@@ -29,21 +28,19 @@ class ConditionSimResult:
     Attributes
     ----------
     feasible : bool
-        False if the model could not be solved to optimality in the condition (infeasible or
-        unbounded), or if the condition was skipped. The other fields have no meaning then, and
-        :func:`~raven_toolbox.experiments.dataset_rmse` gives the condition a fixed penalty instead
-        of reading them.
+        False if the model could not be solved to optimality (infeasible or unbounded) or the condition
+        was skipped. The other fields have no meaning then, and
+        :func:`~raven_toolbox.experiments.dataset_rmse` gives the condition a penalty.
     growth : float
         Flux of the biomass reaction (1/h). NaN if not feasible.
     exch_fluxes : dict of str to float
-        Simulated flux (mmol/gDW/h) of every exchange reaction that was measured in the condition,
-        by reaction id. Empty for maximum-growth conditions.
+        Simulated flux (mmol/gDW/h) by reaction id of every exchange measured in the condition. Empty
+        for maximum-growth conditions.
     block_fluxes : dict of str to float
-        Simulated flux of every reaction of the ``zero_flux_rxns`` list, except the carbon source
-        of the condition, by reaction id. Empty for maximum-growth conditions.
+        Simulated flux of every ``zero_flux_rxns`` reaction except the carbon source of the condition.
+        Empty for maximum-growth conditions.
     skipped : bool
-        True for a condition with weight 0, which is not simulated. ``feasible`` is False then, and
-        the condition does not enter the distance.
+        True for a condition with weight 0, which is not simulated (``feasible`` is False).
     """
 
     feasible: bool
@@ -66,104 +63,78 @@ def simulate_conditions(
 ) -> list[ConditionSimResult]:
     """Simulate every condition of a data set in a model.
 
-    For each condition the model is set to the uptake of the condition's carbon source, solved, and
-    the growth rate and the fluxes that the measurements cover are recorded. The model is not
-    changed: every change is undone with ``with model:``.
+    For each condition the carbon-source uptake is set, the model is solved, and the growth rate and
+    the fluxes covered by the measurements are recorded. The model is not changed (every change is
+    undone with ``with model:``).
 
     .. important::
-       The model objective must be the maximisation of the growth. The function does not set the
-       objective: each condition is solved with the objective that the model has (in its
-       direction, normally maximisation), and the growth rate is the flux of the biomass reaction
-       ``bio_rxn_id`` in that solution. Set ``model.objective = bio_rxn_id`` before the
-       simulation. With another objective the biomass flux is the value in one of the optimal
-       solutions of that objective, not the maximal growth rate, and in a maximum-growth
-       condition the distance then compares a number that is not the maximal growth rate with the
-       measurement. A warning is issued once per call if the objective of the model is not the
-       maximisation of ``bio_rxn_id`` alone (a minimised objective, another reaction, several
-       reactions or no objective). The warning reads the model, so it is also issued when a
-       function is given as ``optimize``, which decides what is optimised: it solves the objective
-       of the model unless it sets its own.
+       The model objective must be the maximisation of growth. The function does not set it: each
+       condition is solved with the model objective and the growth rate is the flux of ``bio_rxn_id``
+       in that solution. Set ``model.objective = bio_rxn_id`` first. Otherwise the growth in a
+       maximum-growth condition is not the maximal growth rate. A warning is issued once per call if
+       the objective is not the maximisation of ``bio_rxn_id`` alone, also when ``optimize`` is given,
+       since the check reads the model.
 
-    A data set is either the flux conditions of ``ExperimentData.flux_data``
-    (``constrain=True``) or the maximum-growth conditions of ``ExperimentData.max_growth``
-    (``constrain=False``); see the package documentation.
+    ``flux_data`` is either the flux conditions of ``ExperimentData.flux_data`` (``constrain=True``) or
+    the maximum-growth conditions of ``ExperimentData.max_growth`` (``constrain=False``). The carbon
+    source of a condition is the exchange reaction whose metabolite name (``flux_data.exch_mets``) is
+    the condition name. For each condition:
 
-    The carbon source of a condition is the exchange reaction whose metabolite name
-    (``flux_data.exch_mets``) is the name of the condition.
+    1. The lower bound of every carbon-source exchange of a condition with weight other than 0 is
+       set to 0.
+    2. The lower bound of this condition's carbon source is set to the measured flux
+       (``constrain=True``) or to ``-1000`` (``constrain=False``).
+    3. If the measured oxygen flux is exactly 0 and ``make_anaerobic`` is given, the model is made
+       anaerobic. If ``p_tot`` is given and not 0 and ``change_protein_biomass`` is given, the protein
+       content is changed.
+    4. The model is solved. With ``constrain=True``, the fluxes of the measured exchanges and of
+       ``zero_flux_rxns`` (except this carbon source) are recorded.
 
-    For each condition:
-
-    1. The lower bound of every exchange reaction that is the carbon source of some condition with a
-       weight other than 0 is set to 0, so that the carbon source of one condition cannot take up
-       substrate in another.
-    2. The lower bound of the carbon source of this condition is set to the measured flux if
-       ``constrain`` is True, so that the model can take up at most the measured rate, and to
-       ``-1000`` if it is False (unlimited uptake, which gives the best possible growth on the
-       carbon source).
-    3. If the measured flux of the exchange metabolite named ``oxygen`` is exactly 0 and
-       ``make_anaerobic`` is given, the model is made anaerobic. If the protein content
-       ``p_tot`` of the condition is given and not 0 and ``change_protein_biomass`` is given,
-       the protein content of the model is changed.
-    4. The model is solved. If ``constrain`` is True, the simulated flux of every measured
-       exchange and of every reaction in ``zero_flux_rxns`` (except the carbon source of the
-       condition) is recorded.
-
-    A condition with weight 0 (``flux_data.weight``) is left out: it is not matched to an exchange
-    reaction, not simulated, and its result has ``skipped=True`` and ``feasible=False``. Its name
-    need not match an exchange metabolite.
+    A condition with weight 0 is skipped: it is not matched to an exchange reaction or simulated, and
+    its result has ``skipped=True`` and ``feasible=False``.
 
     Parameters
     ----------
     model : cobra.Model
-        The model, with every other constraint already applied.
+        Model with all other constraints already applied.
     flux_data : FluxData
         The data set to simulate.
     constrain : bool
-        True for flux conditions, which limit the uptake to the measured rate and record the
-        fluxes; False for maximum-growth conditions, which leave the uptake unlimited and record
-        only the growth rate.
+        True for flux conditions (uptake limited to the measured rate, fluxes recorded), False for
+        maximum-growth conditions (uptake unlimited, only growth recorded).
     zero_flux_rxns : list of str
-        Ids of reactions that carry no flux in any condition (``ExperimentData.zero_flux``). A flux
-        through them is counted as an error in the distance.
+        Ids of reactions that carry no flux in any condition (``ExperimentData.zero_flux``).
     bio_rxn_id : str
-        Id of the biomass reaction, whose flux in the solution is the growth rate. It should be the
-        objective of the model (see above).
+        Id of the growth reaction, whose flux is the growth rate.
     make_anaerobic : callable, optional
-        Function ``f(model)`` that changes the model in place to anaerobic growth. How a model is
-        made anaerobic depends on the organism, so there is no default; without the function the
-        oxygen flux of the data is ignored.
+        ``f(model)`` that changes the model in place to anaerobic growth. No default, since this
+        depends on the organism; without it the oxygen flux of the data is ignored.
     change_protein_biomass : callable, optional
-        Function ``f(model, p_tot)`` that changes the model in place to a protein content of
-        ``p_tot`` g/gDW. Without the function ``p_tot`` is ignored.
+        ``f(model, p_tot)`` that changes the model in place to a protein content of ``p_tot`` g/gDW.
+        Without it ``p_tot`` is ignored.
     optimize : callable, optional
-        Function ``f(model)`` that solves the model and returns a solution with ``status``,
-        ``objective_value`` and ``fluxes``, for example
-        :func:`~raven_toolbox.utils.solver.optimize_model`. Default ``model.optimize()``.
+        ``f(model)`` that solves the model and returns a solution with ``status``, ``objective_value``
+        and ``fluxes``, for example :func:`~raven_toolbox.utils.solver.optimize_model`. Default
+        ``model.optimize()``.
 
     Returns
     -------
     list of ConditionSimResult
-        One result per condition of ``flux_data``, in order.
+        One result per condition, in order.
 
     Raises
     ------
     ValueError
-        If the name of a condition with a weight other than 0 matches no exchange metabolite of
-        ``flux_data.exch_mets``, or if an exchange reaction of ``flux_data``, a reaction of
-        ``zero_flux_rxns`` or the biomass reaction is not in the model. The message names the
-        reactions that are missing, and nothing is solved.
+        If a condition with weight other than 0 matches no exchange metabolite, or if an exchange
+        reaction of ``flux_data``, a reaction of ``zero_flux_rxns`` or the biomass reaction is not in
+        the model. Nothing is solved then.
 
     See Also
     --------
-    load_experiment_data : Reads the data sets.
-    dataset_rmse : Compares the simulations of one data set with the measurements.
-    experiment_distance : Combines the flux and maximum-growth conditions into one distance.
+    load_experiment_data, dataset_rmse, experiment_distance
 
     Examples
     --------
-    Growth is 1.0 1/h when 10 mmol/gDW/h glucose can be taken up and 10 mmol glucose give one unit
-    of growth:
-
     >>> import cobra
     >>> import numpy as np
     >>> from raven_toolbox.experiments import FluxData, simulate_conditions

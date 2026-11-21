@@ -1,8 +1,7 @@
 """Measured growth rates and exchange fluxes of several conditions, and the parser of their file.
 
-A flux data file has one row per growth condition: the measured growth rate and exchange
-fluxes of an organism, for example in different carbon sources or dilution rates of a
-chemostat. :func:`load_flux_data` reads it into a :class:`FluxData`.
+A flux data file has one row per growth condition (for example a carbon source or a chemostat
+dilution rate). :func:`load_flux_data` reads it into a :class:`FluxData`.
 """
 from __future__ import annotations
 
@@ -22,34 +21,32 @@ logger = logging.getLogger(__name__)
 class FluxData:
     """Measured growth rates and exchange fluxes of several conditions.
 
-    One row per condition; the exchange columns are the exchange reactions that were measured in
-    at least one condition. All fluxes are in mmol/gDW/h, and a negative exchange flux is an
-    uptake. Create it with :func:`load_flux_data`, or directly from arrays.
+    One row per condition; the exchange columns are the exchanges measured in at least one condition.
+    Fluxes are in mmol/gDW/h, negative for uptake. Create it with :func:`load_flux_data` or directly
+    from arrays.
 
     Attributes
     ----------
     conds : list of str
-        Name of each condition. In the simulation of a condition, the carbon source of the
-        condition is the exchange metabolite (``exch_mets``) that has the name of the condition.
+        Condition names. The carbon source of a condition is the exchange metabolite (``exch_mets``)
+        with that name.
     p_tot : numpy.ndarray
-        Total protein content per condition, g/gDW. Shape ``(n_conds,)``. NaN means not measured.
+        Total protein content per condition (g/gDW), shape ``(n_conds,)``. NaN if not measured.
     gr_rate : numpy.ndarray
-        Measured growth rate per condition, 1/h. Shape ``(n_conds,)``.
+        Growth rate per condition (1/h), shape ``(n_conds,)``.
     exch_fluxes : numpy.ndarray
-        Measured exchange flux per condition (rows) and exchange reaction (columns), mmol/gDW/h.
-        Shape ``(n_conds, n_rxns)``. NaN means not measured. ``-1000`` and ``1000`` mean
-        unconstrained uptake and secretion.
+        Exchange fluxes, conditions in rows and exchange reactions in columns, shape
+        ``(n_conds, n_rxns)``. NaN if not measured; ``-1000`` and ``1000`` mean unconstrained uptake
+        and secretion.
     exch_mets : list of str
-        Name of the metabolite exchanged by each column of ``exch_fluxes``.
+        Metabolite name of each column of ``exch_fluxes``.
     exch_rxn_ids : list of str
         Exchange reaction id of each column of ``exch_fluxes``.
     weight : numpy.ndarray or None
-        Weight of each condition in the distance to the measurements, shape ``(n_conds,)``. A
-        weight of 0 leaves the condition out of the simulation and the distance. ``None`` if the
-        file has no ``weight`` column, which gives every condition the weight 1.
+        Weight of each condition in the distance, shape ``(n_conds,)``. 0 leaves the condition out of
+        the simulation and the distance. ``None`` if the file has no ``weight`` column (all weights 1).
     source : list of str or None
-        Where the measurements of each condition come from. ``None`` if the file has no
-        ``source`` column.
+        Origin of each condition. ``None`` if the file has no ``source`` column.
     """
 
     conds: list[str] = field(default_factory=list)
@@ -69,28 +66,25 @@ class FluxData:
 
 
 def load_flux_data(path: str | Path) -> FluxData:
-    r"""Read the measured growth rates and exchange fluxes of several conditions from a file.
+    r"""Read measured growth rates and exchange fluxes of several conditions from a file.
 
-    The file is tab-delimited with one header row and one row per condition. The first three
-    columns are the name of the condition, the total protein content ``Ptot`` (g/gDW) and the
-    growth rate ``grRate`` (1/h); every further column is an exchange flux (mmol/gDW/h, negative
-    for uptake) with a header of the form ``<metabolite name> (<reaction id>)``::
+    The file is tab-delimited with one row per condition. The first three columns are the condition
+    name, the total protein content ``Ptot`` (g/gDW) and the growth rate ``grRate`` (1/h). Every
+    further column is an exchange flux (mmol/gDW/h, negative for uptake) headed
+    ``<metabolite name> (<reaction id>)``::
 
         Condition   Ptot   grRate   glucose (EX_glc)   ethanol (EX_etoh)   weight   source
         glucose     0.40   0.40     -10.0              2.5                 1        study A
         ethanol     0.35   0.12     NaN                -8.0                1        study B
 
-    An empty or non-numeric cell is read as NaN, which means that the flux was not measured. A
-    flux of ``-1000`` or ``1000`` means unconstrained uptake or secretion.
+    An empty or non-numeric cell is NaN (not measured). A flux of ``-1000`` or ``1000`` means
+    unconstrained uptake or secretion. The optional columns ``weight`` and ``source`` may stand in any
+    position. ``weight`` is the weight of the condition in the distance; 0 leaves the condition out of
+    the simulation and the distance (see :func:`~raven_toolbox.experiments.simulate_conditions`).
+    ``source`` is free text.
 
-    The optional columns ``weight`` and ``source`` may stand in any position. ``weight`` is the
-    weight of the condition in the distance to the measurements, and 0 leaves the condition out
-    of the simulation and of the distance (see :func:`~raven_toolbox.experiments.simulate_conditions`).
-    ``source`` is free text. Both are taken out of the flux matrix.
-
-    The header of an exchange column is split at the parenthesis that matches the final closing
-    one, so a reaction id may contain parentheses (``X (EX_a(e))`` gives the metabolite ``X`` and
-    the reaction ``EX_a(e)``).
+    The header is split at the parenthesis matching the final closing one, so reaction ids may contain
+    parentheses (``X (EX_a(e))`` gives ``X`` and ``EX_a(e)``).
 
     Parameters
     ----------
@@ -100,21 +94,19 @@ def load_flux_data(path: str | Path) -> FluxData:
     Returns
     -------
     FluxData
-        The measurements, with one row per condition.
+        The measurements, one row per condition.
 
     Raises
     ------
     FileNotFoundError
         If ``path`` does not exist.
     ValueError
-        If the file is empty, has fewer than three header columns, has no exchange columns, or has a
-        row with another number of cells than the header.
+        If the file is empty, has fewer than three header columns or no exchange columns, or has a row
+        with another number of cells than the header.
 
     See Also
     --------
-    load_experiment_data : Reads this file and the other files of a folder.
-    simulate_conditions : Simulates the conditions of the file in a model.
-    apply_flux_data_constraints : Constrains a model to one condition of the file.
+    load_experiment_data, simulate_conditions, apply_flux_data_constraints
 
     Examples
     --------
