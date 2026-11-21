@@ -5,7 +5,6 @@ import pytest
 
 from raven_toolbox.experiments import FluxData, apply_flux_data_constraints
 
-
 # --------------------------------------------------------------------------- #
 # Fixture builders
 # --------------------------------------------------------------------------- #

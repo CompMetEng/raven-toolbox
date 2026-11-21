@@ -9,11 +9,11 @@ import numpy as np
 import pytest
 
 from raven_toolbox.utils.solver import (
-    constraint_shadow_prices,
     edit_on_fast_solver,
     repair_scipy_problem,
     switch_to_scipy,
 )
+
 
 @pytest.fixture
 def scipy_default():

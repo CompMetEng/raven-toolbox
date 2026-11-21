@@ -5,13 +5,12 @@ import math
 import pytest
 
 from raven_toolbox.utils.protein import (
-    calculate_mw,
     _RESIDUE_MASSES,
     _STANDARD_RESIDUE_MASSES,
     _WATER_MASS,
     _X_MASS,
+    calculate_mw,
 )
-
 
 # --------------------------------------------------------------------------- #
 # Trivial cases

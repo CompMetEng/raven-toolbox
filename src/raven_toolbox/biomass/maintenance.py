@@ -39,7 +39,7 @@ of the biomass of a chemostat, is a function that is passed as ``condition_setup
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import cobra
 import numpy as np

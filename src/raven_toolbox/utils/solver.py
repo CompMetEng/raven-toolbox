@@ -71,8 +71,9 @@ Duals
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterable
 from itertools import islice
-from typing import Iterable
+from typing import Any
 
 import cobra
 import numpy as np
@@ -297,7 +298,8 @@ if _scipy_interface is not None:
             self._matrix = None
             self._reset_solution()
 
-        def add_constraint(self, name, coefficients={}, ub=0):
+        def add_constraint(self, name, coefficients=None, ub=0):
+            coefficients = coefficients or {}
             if name in self._constraints:
                 raise ValueError("A constraint named " + name + " already exists.")
             self._constraints[name] = len(self._constraints)
@@ -445,7 +447,7 @@ def _adopt_dense_matrix(problem) -> None:
     row_names = list(problem._constraints)
     problem._init_sparse()
     problem._rows = {name: {} for name in row_names}
-    for r, c in zip(*np.nonzero(dense)):
+    for r, c in zip(*np.nonzero(dense), strict=True):
         problem._rows[row_names[r]][names[c]] = float(dense[r, c])
         problem._cols[names[c]].add(row_names[r])
 
@@ -503,8 +505,8 @@ def repair_scipy_problem(model) -> bool:
     --------
     switch_to_scipy : Moves a model to the scipy solver.
     """
-    solver = getattr(model, "_solver", None)
-    problem = getattr(solver, "problem", None)
+    solver: Any = getattr(model, "_solver", None)
+    problem: Any = getattr(solver, "problem", None)
     if not _is_scipy_problem(problem):
         return False
     if isinstance(problem, _SparseProblem):
@@ -590,7 +592,7 @@ def _populate_sparse(model, solver) -> None:
     for reaction in model.reactions:
         variables[reaction.id] = (problem.Variable(reaction.id), problem.Variable(reaction.reverse_id))
     solver.add([v for pair in variables.values() for v in pair])
-    terms = {metabolite.id: [] for metabolite in model.metabolites}
+    terms: dict[str, list[Any]] = {metabolite.id: [] for metabolite in model.metabolites}
     for reaction in model.reactions:
         forward, reverse = variables[reaction.id]
         for metabolite, coefficient in reaction.metabolites.items():
@@ -636,7 +638,7 @@ def edit_on_fast_solver(model):
     """
     from cobra import Model
 
-    solver = getattr(model, "_solver", None)
+    solver: Any = getattr(model, "_solver", None)
     if not _is_scipy_problem(getattr(solver, "problem", None)) or getattr(model, "_contexts", None):
         yield False
         return

@@ -4,7 +4,6 @@ from raven_toolbox.experiments import (
     load_experiment_data,
 )
 
-
 _FLUX_DATA_TSV = (
     "Condition\tPtot\tgrRate\tglucose (r_1714)\tethanol (r_1761)\t"
     "weight\tsource\n"

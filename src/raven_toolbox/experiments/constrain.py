@@ -8,7 +8,7 @@ It is independent of the distance functions of this package.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -18,18 +18,18 @@ if TYPE_CHECKING:
     from .flux_data import FluxData
 
 
-_LooseStrict = Union[Literal["loose"], float]
+_LooseStrict = Literal["loose"] | float
 
 
 def apply_flux_data_constraints(
-    model: "cobra.Model",
-    flux_data: "FluxData",
+    model: cobra.Model,
+    flux_data: FluxData,
     *,
     bio_rxn_id: str,
     condition: int | str = 0,
     max_min_growth: Literal["max", "min"] = "max",
     loose_strict_flux: _LooseStrict = "loose",
-    c_source: Optional[str] = None,
+    c_source: str | None = None,
 ) -> None:
     """Constrain the growth rate and exchange fluxes of a model to one measured condition.
 
@@ -166,7 +166,7 @@ def apply_flux_data_constraints(
         bio_rxn.lower_bound = gr
         bio_rxn.upper_bound = 1000.0
 
-    for rxn_id, flux in zip(flux_data.exch_rxn_ids, fluxes):
+    for rxn_id, flux in zip(flux_data.exch_rxn_ids, fluxes, strict=True):
         if np.isnan(flux):
             continue
         rxn = model.reactions.get_by_id(rxn_id)

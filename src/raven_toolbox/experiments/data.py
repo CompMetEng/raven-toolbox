@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from .flux_data import FluxData, load_flux_data
 
@@ -48,8 +47,8 @@ class ExperimentData:
         file is missing.
     """
 
-    flux_data: Optional[FluxData] = None
-    max_growth: Optional[FluxData] = None
+    flux_data: FluxData | None = None
+    max_growth: FluxData | None = None
     zero_flux: list[str] = field(default_factory=list)
 
 
@@ -92,7 +91,7 @@ def load_experiment_data(data_dir: str | Path) -> ExperimentData:
     )
 
 
-def _load_optional_flux_data(path: Path) -> Optional[FluxData]:
+def _load_optional_flux_data(path: Path) -> FluxData | None:
     if not path.is_file():
         return None
     return load_flux_data(path)

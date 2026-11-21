@@ -7,13 +7,13 @@ standard layout without arguments; consumers with different naming pass
 overrides.
 """
 from raven_toolbox.annotation.delta_g import load_delta_g_csv, save_delta_g_csv
-from raven_toolbox.annotation.smiles import find_met_smiles, met_smiles
 from raven_toolbox.annotation.sbo import (
     DEFAULT_BIOMASS_MET_NAMES,
     DEFAULT_BIOMASS_RXN_NAME,
     DEFAULT_NGAM_RXN_NAME,
     add_sbo_terms,
 )
+from raven_toolbox.annotation.smiles import find_met_smiles, met_smiles
 
 __all__ = [
     "DEFAULT_BIOMASS_MET_NAMES",

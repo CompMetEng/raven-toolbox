@@ -10,8 +10,9 @@ distance can be computed from stored simulations.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -53,15 +54,15 @@ class ConditionSimResult:
 
 
 def simulate_conditions(
-    model: "cobra.Model",
-    flux_data: "FluxData",
+    model: cobra.Model,
+    flux_data: FluxData,
     *,
     constrain: bool,
     zero_flux_rxns: list[str],
     bio_rxn_id: str,
-    make_anaerobic: Optional[Callable[["cobra.Model"], None]] = None,
-    change_protein_biomass: Optional[Callable[["cobra.Model", float], None]] = None,
-    optimize: Optional[Callable[["cobra.Model"], "cobra.Solution"]] = None,
+    make_anaerobic: Callable[[cobra.Model], None] | None = None,
+    change_protein_biomass: Callable[[cobra.Model, float], None] | None = None,
+    optimize: Callable[[cobra.Model], cobra.Solution] | None = None,
 ) -> list[ConditionSimResult]:
     """Simulate every condition of a data set in a model.
 
@@ -253,12 +254,12 @@ def simulate_conditions(
     return results
 
 
-def _default_optimize(model: "cobra.Model") -> "cobra.Solution":
+def _default_optimize(model: cobra.Model) -> cobra.Solution:
     return model.optimize()
 
 
 def _check_reactions(
-    model: "cobra.Model", flux_data: "FluxData", zero_flux_rxns: list[str], bio_rxn_id: str,
+    model: cobra.Model, flux_data: FluxData, zero_flux_rxns: list[str], bio_rxn_id: str,
 ) -> None:
     """Raise ``ValueError`` naming the reactions that the simulation needs and the model lacks."""
     needed = {*flux_data.exch_rxn_ids, *zero_flux_rxns, bio_rxn_id}
@@ -268,7 +269,7 @@ def _check_reactions(
         raise ValueError(f"The reactions {', '.join(missing)} are not in the model.")
 
 
-def _warn_unless_growth_is_the_objective(model: "cobra.Model", bio_rxn_id: str) -> None:
+def _warn_unless_growth_is_the_objective(model: cobra.Model, bio_rxn_id: str) -> None:
     """Warn once if the objective of the model is not the maximisation of ``bio_rxn_id`` alone."""
     from cobra.util.solver import linear_reaction_coefficients
 
@@ -287,7 +288,7 @@ def _warn_unless_growth_is_the_objective(model: "cobra.Model", bio_rxn_id: str) 
     )
 
 
-def _active_conditions(flux_data: "FluxData") -> list[int]:
+def _active_conditions(flux_data: FluxData) -> list[int]:
     """Indices of the conditions with a weight other than 0."""
     if flux_data.weight is None:
         return list(range(len(flux_data.conds)))
@@ -295,7 +296,7 @@ def _active_conditions(flux_data: "FluxData") -> list[int]:
 
 
 def _match_conditions_to_exch(
-    flux_data: "FluxData", active: list[int],
+    flux_data: FluxData, active: list[int],
 ) -> dict[int, int]:
     """Column index into ``exch_mets``/``exch_rxn_ids`` for each active
     condition, matched by name. Raises ``ValueError`` when a condition
@@ -315,7 +316,7 @@ def _match_conditions_to_exch(
     return {i: met_to_idx[flux_data.conds[i]] for i in active}
 
 
-def _find_col(exch_mets: list[str], name: str) -> Optional[int]:
+def _find_col(exch_mets: list[str], name: str) -> int | None:
     try:
         return exch_mets.index(name)
     except ValueError:

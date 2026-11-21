@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import requests
@@ -76,7 +77,7 @@ def met_smiles(metabolite) -> str:
 
 
 def find_met_smiles(
-    model: "cobra.Model",
+    model: cobra.Model,
     *,
     cache_path: str | Path,
     skip_prefixes: Iterable[str] = (),
@@ -192,12 +193,13 @@ def find_met_smiles(
     n_failed = 0
 
     for name in sorted(name_to_mets):
-        smiles = _fetch_one_smiles(session, name)
-        if smiles is None:
+        fetched = _fetch_one_smiles(session, name)
+        if fetched is None:
             # The request failed: nothing is cached, so a later call asks again.
             n_failed += 1
             time.sleep(_INTER_REQUEST_SLEEP)
             continue
+        smiles = fetched
         # Append to cache immediately, including a clean "no match" (empty
         # SMILES) so that it is not asked for again.
         _append_cache(cache_path, name, smiles)
@@ -232,7 +234,7 @@ def _load_cache(path: Path) -> dict[str, str]:
     cache: dict[str, str] = {}
     if not path.is_file():
         return cache
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= 2:
@@ -264,7 +266,7 @@ def _make_session() -> requests.Session:
     return session
 
 
-def _fetch_one_smiles(session: requests.Session, name: str) -> Optional[str]:
+def _fetch_one_smiles(session: requests.Session, name: str) -> str | None:
     """Fetch the SMILES from PubChem for one metabolite name.
 
     Returns the SMILES, an empty string if PubChem has no match (a final answer), or ``None`` if

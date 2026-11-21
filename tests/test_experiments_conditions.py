@@ -10,19 +10,18 @@ import cobra
 import numpy as np
 import pytest
 
-from raven_toolbox.experiments.data import ExperimentData
-from raven_toolbox.experiments.flux_data import FluxData
-from raven_toolbox.experiments.distance import (
-    BIOMASS_CARBON_EQUIV,
-    experiment_distance,
-    compute_carbon_weights,
-    dataset_rmse,
-)
 from raven_toolbox.experiments.conditions import (
     ConditionSimResult,
     simulate_conditions,
 )
-
+from raven_toolbox.experiments.data import ExperimentData
+from raven_toolbox.experiments.distance import (
+    BIOMASS_CARBON_EQUIV,
+    compute_carbon_weights,
+    dataset_rmse,
+    experiment_distance,
+)
+from raven_toolbox.experiments.flux_data import FluxData
 
 # --------------------------------------------------------------------------- #
 # Toy two-carbon-source model fixture

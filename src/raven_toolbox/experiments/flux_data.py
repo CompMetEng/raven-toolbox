@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -65,8 +64,8 @@ class FluxData:
     )
     exch_mets: list[str] = field(default_factory=list)
     exch_rxn_ids: list[str] = field(default_factory=list)
-    weight: Optional[np.ndarray] = None
-    source: Optional[list[str]] = None
+    weight: np.ndarray | None = None
+    source: list[str] | None = None
 
 
 def load_flux_data(path: str | Path) -> FluxData:
@@ -161,8 +160,8 @@ def load_flux_data(path: str | Path) -> FluxData:
     weight_idx = _index_of(header, "weight")
     source_idx = _index_of(header, "source")
 
-    weights: Optional[np.ndarray] = None
-    source_values: Optional[list[str]] = None
+    weights: np.ndarray | None = None
+    source_values: list[str] | None = None
 
     if weight_idx is not None:
         weights = np.array(
@@ -207,7 +206,7 @@ def load_flux_data(path: str | Path) -> FluxData:
     )
 
 
-def _index_of(header: list[str], name: str) -> Optional[int]:
+def _index_of(header: list[str], name: str) -> int | None:
     """Return the index of `name` in `header`, or None if absent."""
     for j, h in enumerate(header):
         if h.strip() == name:
@@ -226,7 +225,7 @@ def _parse_float(s: str) -> float:
         return float("nan")
 
 
-def _split_header(header: str) -> Optional[tuple[str, str]]:
+def _split_header(header: str) -> tuple[str, str] | None:
     """Split ``'<met> (<rxn>)'`` at the parenthesis that matches the final
     closing one; return None for a header of another form."""
     if not header.endswith(")"):
