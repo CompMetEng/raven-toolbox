@@ -1,4 +1,4 @@
-"""Annotation helpers: SBO term assignment and ΔG CSV persistence.
+"""Annotation helpers: SBO term assignment, ΔG CSV persistence and SMILES lookup.
 
 These are the parts of yeast-GEM's ``missingFields`` module that are
 organism-agnostic. Default parameter values
@@ -13,12 +13,15 @@ from raven_toolbox.annotation.sbo import (
     DEFAULT_NGAM_RXN_NAME,
     add_sbo_terms,
 )
+from raven_toolbox.annotation.smiles import find_met_smiles, met_smiles
 
 __all__ = [
     "DEFAULT_BIOMASS_MET_NAMES",
     "DEFAULT_BIOMASS_RXN_NAME",
     "DEFAULT_NGAM_RXN_NAME",
     "add_sbo_terms",
+    "find_met_smiles",
     "load_delta_g_csv",
+    "met_smiles",
     "save_delta_g_csv",
 ]

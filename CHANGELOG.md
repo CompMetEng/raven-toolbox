@@ -18,6 +18,24 @@
 * `export_to_excel`, `write_matlab_model` and the SBML file of `export_for_git` list the compartments sorted by abbreviation (was: in the order in which the metabolites first mention them; `export_to_excel` sorted them only with `sort_ids=True`).
 * The SBML file of `export_for_git` escapes `&`, `<` and `>` in the model notes (was: cobra dropped all model notes from the file when one of them held such a character, and only logged an error).
 
+### Experiments
+
+* New: the `experiments` package scores a model against measured growth rates and exchange fluxes. `load_experiment_data` reads `fluxData.tsv`, `maxGrowth.tsv` and `zeroFlux.tsv` from a folder, `load_flux_data` parses one flux file into a `FluxData` (with a per-condition `weight`), `simulate_conditions` fixes the uptake of each condition and solves the model, `compute_carbon_weights` gives each exchange the carbon count of its metabolite, `experiment_distance` combines the carbon-weighted RMSE of flux and max-growth conditions into one value, and `apply_flux_data_constraints` sets the exchange bounds of a model from one condition (loose, or a percentage band). The organism-specific steps, an anaerobic switch and a change of the protein content, and the solver call are passed as functions. A condition with weight 0 is left out of the simulation and the distance. `simulate_conditions` solves each condition with the objective of the model and reads the growth rate from the flux of the biomass reaction, so the objective must be the maximisation of the growth, and it warns once per call if it is not; it raises `ValueError` when a reaction of the data, the zero-flux list or the biomass reaction is not in the model. `compute_carbon_weights` reads a formula as cobra does, and gives the weight 1 to a formula with parentheses, an empty formula and a formula without carbon. `dataset_rmse` and `experiment_distance` do not take the biomass reaction.
+
+### Solver
+
+* New: `utils.solver` holds the support for optlang's scipy (HiGHS) interface, next to `set_raven_tolerance`. `repair_scipy_problem` renumbers the variable columns after a removal and rebuilds a stale coefficient matrix. `switch_to_scipy` and `edit_on_fast_solver` avoid the dense-matrix cost of building or editing a large model. `optimize_model` returns a solution with its status for an infeasible or unbounded LP instead of raising, and `constraint_shadow_prices` reads the row marginals on the scipy interface.
+
+### Biomass
+
+* New: `biomass.fit_maintenance` fits NGAM from a maintenance coefficient and GAM from chemostat substrate uptake, with a study-weighted Huber loss and a bootstrap over studies. The steps are also available separately (`fit_gam`, `bootstrap_gam`, `uptake_grid`, `min_uptake`, `ngam_from_maintenance_coefficient`, `study_weights`, `huber_loss`, `log_ratio`), and `MaintenanceConfig` holds the reaction ids and metabolite names.
+* New: `get_gam`, and `set_gam` takes `keep_offsets_of`: the coefficient of that metabolite becomes the value and the other GAM terms shift by the same amount, so a charge-balancing proton offset stays.
+
+### Proteins and annotation
+
+* New: `utils.protein.calculate_mw` computes the molecular weight of a protein from its amino acid sequence (average residue masses plus one water; the codes B, J, O, U, X and Z are recognised; an empty sequence gives NaN).
+* New: `annotation.find_met_smiles` fills `annotation["smiles"]` of the metabolites from PubChem, with a local TSV cache (`cache_path`) that is appended to after each lookup, and `annotation.met_smiles` reads the SMILES of a metabolite whether the annotation is a string or a list. `skip_prefixes` leaves out the metabolites whose name starts with one of the prefixes (for the enzyme pseudo-metabolites of enzyme-constrained models). A request that fails (no network, a timeout, a server error) is not written to the cache; only a final answer of PubChem (a match, or no compound of that name) is, and the requests are paused for 0.2 s to keep to the limit of 5 per second.
+
 ### Data
 
 * The KEGG assets are the `kegg120` release of `toolbox-assets` (was: `kegg118`): the reference model and tables, the taxonomy and the profile HMM libraries of 4246 prokaryotic and 2724 eukaryotic KOs. The baked registry and `data/manifest.json` list them.
