@@ -93,10 +93,17 @@ def test_all_five_formats_are_written_by_default(model, tmp_path):
         assert (root / fmt / f"model.{fmt}").exists()
 
 
+def test_dependencies_list_the_toolchain_only_by_default(model, tmp_path):
+    set_model_metadata(model, version="1.2.0", date="2026-10-05")
+    root = export_for_git(model, tmp_path, formats=("yml",))
+    names = [line.split("\t")[0] for line in (root / "dependencies.txt").read_text().splitlines()]
+    assert names == ["python", "cobra", "libSBML", "ruamel.yaml", "scipy", "openpyxl", "raven_toolbox"]
+
+
 def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     set_model_metadata(model, version="1.2.0", date="2026-10-05")
-    first = export_for_git(model, tmp_path / "a", formats=("yml",))
-    second = export_for_git(model, tmp_path / "b", formats=("yml",))
+    first = export_for_git(model, tmp_path / "a", formats=("yml",), model_version_in_dependencies=True)
+    second = export_for_git(model, tmp_path / "b", formats=("yml",), model_version_in_dependencies=True)
     text = (first / "dependencies.txt").read_text()
     assert text == (second / "dependencies.txt").read_text()
     names = [line.split("\t")[0] for line in text.splitlines()]
@@ -107,7 +114,9 @@ def test_dependencies_are_ordered_and_repeatable(model, tmp_path):
     assert "model_version\t1.2.0" in text
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize(
+    "flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies", "model_version_in_sbml"]
+)
 @pytest.mark.parametrize("value", ["false", "true", "", 0, 1, None])
 def test_export_for_git_refuses_a_flag_that_is_not_a_bool(model, tmp_path, flag, value):
     with pytest.raises(TypeError, match=flag):
@@ -235,7 +244,10 @@ def _consistency(path):
 
 
 def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
-    """RAVEN's importModel reads geneShortNames from fbc:label before fbc:name."""
+    """RAVEN's importModel reads geneShortNames from fbc:label and proteins from fbc:name.
+
+    A gene without a protein has no fbc:name, and its label is the short name or the gene id.
+    """
     model.reactions.R1.gene_reaction_rule = "ENSG1 or ENSG2"
     model.genes.ENSG1.name = "DPM1"
     root = export_for_git(model, tmp_path, formats=("xml",))
@@ -244,17 +256,28 @@ def test_sbml_gene_label_is_the_gene_name(model, tmp_path):
     doc = libsbml.readSBMLFromFile(str(path))
     products = doc.getModel().getPlugin("fbc").getListOfGeneProducts()
     labels = {gp.getId(): (gp.getName(), gp.getLabel()) for gp in products}
-    assert labels == {"G_ENSG1": ("DPM1", "DPM1"), "G_ENSG2": ("G_ENSG2", "G_ENSG2")}
+    assert labels == {"G_ENSG1": ("", "DPM1"), "G_ENSG2": ("", "ENSG2")}
 
     plain = tmp_path / "plain.xml"
     cobra.io.write_sbml_model(_for_sbml(model), str(plain))
     assert _consistency(path) == _consistency(plain)
 
-    back, plain_back = cobra.io.read_sbml_model(str(path)), cobra.io.read_sbml_model(str(plain))
-    assert sorted((g.id, g.name) for g in back.genes) == sorted(
-        (g.id, g.name) for g in plain_back.genes
-    )
+    back = cobra.io.read_sbml_model(str(path))
+    assert sorted(g.id for g in back.genes) == ["ENSG1", "ENSG2"]
     assert back.reactions.R1.gene_reaction_rule == "ENSG1 or ENSG2"
+
+
+def test_sbml_protein_is_the_gene_product_name(model, tmp_path):
+    model.reactions.R1.gene_reaction_rule = "ENSG1 or ENSG2"
+    model.genes.ENSG1.name = "DPM1"
+    model.genes.ENSG1.notes = {"protein": "dolichol-phosphate mannosyltransferase"}
+    root = export_for_git(model, tmp_path, formats=("xml",))
+    doc = libsbml.readSBMLFromFile(str(root / "xml" / "model.xml"))
+    products = {gp.getId(): gp for gp in doc.getModel().getPlugin("fbc").getListOfGeneProducts()}
+    assert products["G_ENSG1"].getName() == "dolichol-phosphate mannosyltransferase"
+    assert products["G_ENSG1"].getLabel() == "DPM1"
+    assert not products["G_ENSG2"].isSetName()
+    assert model.genes.ENSG1.notes == {"protein": "dolichol-phosphate mannosyltransferase"}
 
 
 def test_equation_leaves_out_a_coefficient_of_one(model, tmp_path):
@@ -378,7 +401,9 @@ def test_main_branch_check_raises_with_layout_and_project_name(tmp_path):
     assert out.returncode != 0 and "feature" in out.stderr
 
 
-@pytest.mark.parametrize("flag", ["main_branch_flag", "sub_dirs"])
+@pytest.mark.parametrize(
+    "flag", ["main_branch_flag", "sub_dirs", "model_version_in_dependencies", "model_version_in_sbml"]
+)
 def test_export_for_git_accepts_numpy_booleans(model, tmp_path, flag):
     import numpy as np
 
