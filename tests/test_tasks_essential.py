@@ -97,7 +97,8 @@ def test_cache_is_json_and_is_read_without_warning(tmp_path, recwarn):
         make_test_model(), [make_test_task()], cache_path=cache)
     assert resumed.reactions == {"R2": 1}
     assert first.reactions != resumed.reactions
-    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)
+                and "Gurobi parameters" not in str(w.message)]
 
 
 def test_pickle_cache_is_ignored_with_a_warning(tmp_path):
@@ -311,7 +312,7 @@ def test_knockout_rechecked_cold_after_infeasible_warm_start():
 
 
 def test_knockout_feasible_statuses_follow_raven_check_solution():
-    """Optimal and suboptimal count as feasible without a retry; time_limit gets one."""
+    """Optimal and suboptimal count as feasible without a retry; time_limit gets none."""
     from raven_toolbox.tasks.check import _knockout_feasible
     for status in ("optimal", "suboptimal"):
         p = _FakeProblem(feasible=False, warm_status=status)
@@ -319,7 +320,7 @@ def test_knockout_feasible_statuses_follow_raven_check_solution():
         assert p.resets == 0
     p = _FakeProblem(feasible=False, warm_status="time_limit")
     assert _knockout_feasible(_FakeModel(p)) is False
-    assert p.resets == 1
+    assert p.resets == 0
 
 
 def test_knockout_feasible_on_solver_model():
@@ -338,3 +339,12 @@ def test_knockout_feasible_on_solver_model():
     assert _knockout_feasible(m) is True       # R2 still carries the flux
     r2.bounds = (0.0, 0.0)
     assert _knockout_feasible(m) is False
+
+
+def test_solve_time_limit_keeps_the_result_and_warns_without_gurobi():
+    """The limit applies on any solver; a backend without Gurobi parameters says so."""
+    model = make_test_model()
+    model.solver = "glpk"
+    with pytest.warns(UserWarning, match="no Gurobi parameters"):
+        res = find_task_essential_reactions(model, [make_test_task()], solve_time_limit=60)
+    assert sorted(res.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE
