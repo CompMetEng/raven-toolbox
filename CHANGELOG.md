@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 3.0.0b3 (2026-11-22)
+
+Third beta toward 3.0. The main changes are the `experiments` package, scipy solver support, protein molecular weights, PubChem SMILES lookup and the maintenance fit, and a closer match of `export_for_git`, `get_model_from_homology` and `contract_model` to RAVEN. Changes below are relative to 3.0.0b2.
 
 ### Breaking changes
 
