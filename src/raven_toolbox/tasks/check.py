@@ -33,6 +33,7 @@ from optlang.symbolics import Zero, add
 from raven_toolbox.manipulation.add import add_reactions_from_equations
 from raven_toolbox.manipulation.boundary import close_model_in_place
 from raven_toolbox.tasks.tasklist import Task, parse_task_list
+from raven_toolbox.utils.solver import set_raven_tolerance
 
 _CACHE_VERSION = 1
 _ALLMETS = "ALLMETS"
@@ -287,26 +288,22 @@ def _set_deterministic_solver(model: cobra.Model, solve_time_limit: float | None
     """Configure the solver to match RAVEN's ``solveLP`` and to be deterministic.
 
     RAVEN's ``getEssentialRxns`` runs ``solveLP`` (Gurobi via ``optimizeProb``) with
-    ``FeasibilityTol`` and ``OptimalityTol`` set to 1e-9, single-threaded. Multi-threaded
+    ``FeasibilityTol`` and ``OptimalityTol`` set to 1e-9, single-threaded. The tolerance is set
+    on every backend (:func:`raven_toolbox.utils.solver.set_raven_tolerance`). Multi-threaded
     Gurobi selects among the degenerate min-flux optima non-deterministically, so the
     candidate set (and the number of essential reactions found) varies between runs;
-    ``Threads=1`` with a fixed ``Seed`` makes it reproducible. These parameters exist only
-    for Gurobi: on another backend the function warns that they are not set. A
-    ``solve_time_limit`` (seconds) applies to every solve of the task on any backend.
+    ``Threads=1`` with a fixed ``Seed`` makes it reproducible. These two exist only for Gurobi;
+    GLPK is single-threaded and deterministic. A ``solve_time_limit`` (seconds) applies to every
+    solve of the task on any backend.
     """
+    set_raven_tolerance(model)
     if solve_time_limit is not None:
         model.solver.configuration.timeout = max(1, int(solve_time_limit))
     try:
         model.solver.problem.Params.Threads = 1
         model.solver.problem.Params.Seed = 1234
-        model.solver.problem.Params.FeasibilityTol = 1e-9
-        model.solver.problem.Params.OptimalityTol = 1e-9
     except Exception:  # noqa: BLE001
-        warnings.warn(
-            f"The {model.solver.interface.__name__.rsplit('.', 1)[-1]} solver has no Gurobi "
-            "parameters: tolerances, thread count and seed are not set, so the essential "
-            "reactions may differ from RAVEN's and solves are slower. Pass solve_time_limit "
-            "to bound each solve.", stacklevel=2)
+        pass
 
 
 @dataclass

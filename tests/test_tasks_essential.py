@@ -341,10 +341,18 @@ def test_knockout_feasible_on_solver_model():
     assert _knockout_feasible(m) is False
 
 
-def test_solve_time_limit_keeps_the_result_and_warns_without_gurobi():
-    """The limit applies on any solver; a backend without Gurobi parameters says so."""
+def test_solve_time_limit_and_tolerance_apply_on_glpk():
+    """The RAVEN tolerance and the time limit are set on any backend, without a warning."""
+    import warnings
+
+    from raven_toolbox.tasks.check import _set_deterministic_solver
+
     model = make_test_model()
     model.solver = "glpk"
-    with pytest.warns(UserWarning, match="no Gurobi parameters"):
-        res = find_task_essential_reactions(model, [make_test_task()], solve_time_limit=60)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _set_deterministic_solver(model, 60)
+    assert model.tolerance == 1e-9
+    assert model.solver.configuration.timeout == 60
+    res = find_task_essential_reactions(model, [make_test_task()], solve_time_limit=60)
     assert sorted(res.reactions) == TEST_MODEL_TASK_ESSENTIAL_PREMERGE

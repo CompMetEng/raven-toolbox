@@ -43,7 +43,7 @@ Third beta toward 3.0. The main changes are the `experiments` package, scipy sol
 
 * `find_task_essential_reactions` takes `solve_time_limit`, a time limit in seconds for each solve on any solver, and `prep_init_model` passes it on. A knock-out solve that reaches the limit is not repeated and its reaction is not counted as essential, with one warning per task.
 * `find_task_essential_reactions` with `verbose=True` prints a progress line every 25 knock-out solves of a task in a sequential run (was: one line per finished task).
-* `find_task_essential_reactions` warns when the solver is not Gurobi, because the tolerances, thread count and seed are not set there.
+* `find_task_essential_reactions` sets the RAVEN tolerance of 1e-9 on every solver (was: on Gurobi only, so GLPK solved at its default of 1e-7).
 
 ### Biomass
 
