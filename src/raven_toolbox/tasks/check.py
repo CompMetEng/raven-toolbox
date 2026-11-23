@@ -33,6 +33,7 @@ from optlang.symbolics import Zero, add
 from raven_toolbox.manipulation.add import add_reactions_from_equations
 from raven_toolbox.manipulation.boundary import close_model_in_place
 from raven_toolbox.tasks.tasklist import Task, parse_task_list
+from raven_toolbox.utils.solver import set_raven_tolerance
 
 _CACHE_VERSION = 1
 _ALLMETS = "ALLMETS"
@@ -283,21 +284,24 @@ def _prepare_base(model: cobra.Model, close_boundaries: bool):
     return base, name_to_id, comp_to_ids
 
 
-def _set_deterministic_solver(model: cobra.Model) -> None:
+def _set_deterministic_solver(model: cobra.Model, solve_time_limit: float | None = None) -> None:
     """Configure the solver to match RAVEN's ``solveLP`` and to be deterministic.
 
     RAVEN's ``getEssentialRxns`` runs ``solveLP`` (Gurobi via ``optimizeProb``) with
-    ``FeasibilityTol`` and ``OptimalityTol`` set to 1e-9, single-threaded. Multi-threaded
+    ``FeasibilityTol`` and ``OptimalityTol`` set to 1e-9, single-threaded. The tolerance is set
+    on every backend (:func:`raven_toolbox.utils.solver.set_raven_tolerance`). Multi-threaded
     Gurobi selects among the degenerate min-flux optima non-deterministically, so the
     candidate set (and the number of essential reactions found) varies between runs;
-    ``Threads=1`` with a fixed ``Seed`` makes it reproducible. The function sets Gurobi
-    parameters and has no effect on other backends.
+    ``Threads=1`` with a fixed ``Seed`` makes it reproducible. These two exist only for Gurobi;
+    GLPK is single-threaded and deterministic. A ``solve_time_limit`` (seconds) applies to every
+    solve of the task on any backend.
     """
+    set_raven_tolerance(model)
+    if solve_time_limit is not None:
+        model.solver.configuration.timeout = max(1, int(solve_time_limit))
     try:
         model.solver.problem.Params.Threads = 1
         model.solver.problem.Params.Seed = 1234
-        model.solver.problem.Params.FeasibilityTol = 1e-9
-        model.solver.problem.Params.OptimalityTol = 1e-9
     except Exception:  # noqa: BLE001
         pass
 
@@ -323,7 +327,7 @@ class EssentialReactionsResult:
 
 
 def _task_essential_reactions(
-    task_model: cobra.Model, original_ids: set[str]
+    task_model: cobra.Model, original_ids: set[str], progress=None
 ) -> dict[str, int]:
     """Reactions whose removal makes the task infeasible, ported from ``getEssentialRxns``.
 
@@ -342,6 +346,10 @@ def _task_essential_reactions(
        essential, as ``solveLP`` does after a failed hot-started solve
        (:func:`_knockout_feasible`). Direction is the sign it carries in the min-flux
        solution (RAVEN's ``essentialFluxes``).
+
+    ``progress`` is called as ``progress(done, total)`` every 25 knock-out solves. A knock-out
+    solve that reaches the solver time limit is not proof of essentiality: the reaction is
+    not counted and one warning gives how many were cut off.
 
     Returns ``{reaction id: +1 forward | -1 reverse}``.
     """
@@ -372,13 +380,22 @@ def _task_essential_reactions(
     # Pure feasibility for the constrain-to-0 test (RAVEN solveLP with c = 0).
     task_model.objective = task_model.problem.Objective(Zero, direction="max")
     essential: dict[str, int] = {}
-    for rid in candidates:
+    timed_out = 0
+    for n, rid in enumerate(candidates, 1):
+        if progress is not None and n % 25 == 0:
+            progress(n, len(candidates))
         rxn = task_model.reactions.get_by_id(rid)
         saved = rxn.bounds
         rxn.bounds = (0.0, 0.0)
         if not _knockout_feasible(task_model):
-            essential[rid] = 1 if fluxes.get(rid, 0.0) >= 0 else -1
+            if task_model.solver.status == "time_limit":
+                timed_out += 1
+            else:
+                essential[rid] = 1 if fluxes.get(rid, 0.0) >= 0 else -1
         rxn.bounds = saved
+    if timed_out:
+        warnings.warn(f"{timed_out} knock-out solve(s) reached solve_time_limit and those "
+                      "reactions are not counted as essential.", stacklevel=2)
     return essential
 
 
@@ -406,18 +423,22 @@ def _knockout_feasible(model: cobra.Model) -> bool:
     Gurobi can declare a feasible LP infeasible (seen on Human-GEM tasks), so a status
     outside :data:`_FEASIBLE_STATUSES` is checked again from a cold start, as ``solveLP``
     re-solves without its hot-start basis when the hot-started solve is not feasible. Only a
-    problem that is not feasible on both solves counts as infeasible.
+    problem that is not feasible on both solves counts as infeasible. A solve that stops at the
+    time limit is not repeated and the status ``time_limit`` stays on the solver.
     """
     model.slim_optimize()
     if model.solver.status in _FEASIBLE_STATUSES:
         return True
+    if model.solver.status == "time_limit":   # a cold re-solve would only spend the limit again
+        return False
     _discard_basis(model)
     model.slim_optimize()
     return model.solver.status in _FEASIBLE_STATUSES
 
 
 def _compute_one_task(
-    base: cobra.Model, task: Task, name_to_id, comp_to_ids, original_ids: set[str]
+    base: cobra.Model, task: Task, name_to_id, comp_to_ids, original_ids: set[str],
+    solve_time_limit: float | None = None, progress=None,
 ) -> tuple[dict[str, int] | None, set[str], str | None]:
     """Essential reactions for one task, or ``(None, set(), error)`` if it could not run.
 
@@ -427,9 +448,9 @@ def _compute_one_task(
     task_model, task_mets, error = _build_task_model(base, task, name_to_id, comp_to_ids)
     if error is not None:
         return None, set(), error
-    _set_deterministic_solver(task_model)  # match RAVEN solveLP + reproducibility
+    _set_deterministic_solver(task_model, solve_time_limit)  # match RAVEN solveLP
     try:
-        return _task_essential_reactions(task_model, original_ids), task_mets, None
+        return _task_essential_reactions(task_model, original_ids, progress), task_mets, None
     except OptimizationError:
         return None, set(), "optimization error"
 
@@ -440,16 +461,19 @@ def _compute_one_task(
 _WORKER: dict = {}
 
 
-def _init_worker(base: cobra.Model, name_to_id, comp_to_ids, original_ids: set[str]) -> None:
+def _init_worker(base: cobra.Model, name_to_id, comp_to_ids, original_ids: set[str],
+                 solve_time_limit: float | None = None) -> None:
     _WORKER["base"] = base
     _WORKER["name_to_id"] = name_to_id
     _WORKER["comp_to_ids"] = comp_to_ids
     _WORKER["original_ids"] = original_ids
+    _WORKER["solve_time_limit"] = solve_time_limit
 
 
 def _essential_worker(i: int, task: Task) -> tuple[int, dict[str, int] | None, set[str], str | None]:
     essential, task_mets, error = _compute_one_task(
-        _WORKER["base"], task, _WORKER["name_to_id"], _WORKER["comp_to_ids"], _WORKER["original_ids"]
+        _WORKER["base"], task, _WORKER["name_to_id"], _WORKER["comp_to_ids"],
+        _WORKER["original_ids"], _WORKER["solve_time_limit"]
     )
     return i, essential, task_mets, error
 
@@ -482,6 +506,7 @@ def find_task_essential_reactions(
     verbose: bool = False,
     processes: int = 1,
     checkpoint_every: int = 10,
+    solve_time_limit: float | None = None,
 ) -> EssentialReactionsResult:
     """Find the reactions a model must use to satisfy a task list.
 
@@ -518,8 +543,10 @@ def find_task_essential_reactions(
         version, such as a pickle written by an earlier release, is ignored with a warning and
         overwritten by the first checkpoint. Default ``None``, which writes no cache.
     verbose : bool
-        Prints one line per task as it completes or is skipped because it is cached. In
-        parallel, lines print in completion order, not task order. Default ``False``.
+        Prints one line per task as it completes or is skipped because it is cached, and in
+        sequential runs a progress line every 25 knock-out solves of a task. In parallel, lines
+        print in completion order, not task order, and without progress lines. Default
+        ``False``.
     processes : int
         Number of worker processes. Default 1, which runs the tasks sequentially. A larger
         value runs the tasks in parallel with a ``ProcessPoolExecutor``. Each worker solves
@@ -532,6 +559,12 @@ def find_task_essential_reactions(
         ``n_tasks / checkpoint_every``, and fewer than ``checkpoint_every`` completed tasks are
         redone after an interruption. A value below 1 raises ``ValueError``, with or without
         ``cache_path``; without ``cache_path`` the value has no other effect.
+    solve_time_limit : float or None
+        Time limit in seconds for each solve, on any solver. A knock-out solve that reaches it
+        does not count its reaction as essential, with one warning per task; a min-flux or shrink
+        solve that reaches it makes the task fail as an optimization error. Default ``None``,
+        which sets no limit. On GLPK a single solve of a large model takes seconds, so a task
+        with hundreds of candidate reactions runs for tens of minutes.
     """
     if checkpoint_every < 1:
         raise ValueError(f"checkpoint_every must be at least 1, got {checkpoint_every}.")
@@ -597,14 +630,19 @@ def find_task_essential_reactions(
 
     if processes <= 1 or len(pending) <= 1:
         for i, task in pending:
+            progress = None
+            if verbose:
+                def progress(done, total, i=i, task=task):
+                    print(f"[{i + 1}/{n_tasks}] {task.id}: knock-out {done}/{total}", flush=True)
             essential, task_mets, error = _compute_one_task(
-                base, task, name_to_id, comp_to_ids, original_ids
+                base, task, name_to_id, comp_to_ids, original_ids, solve_time_limit, progress
             )
             record(i, task, essential, task_mets, error)
     else:
         with cf.ProcessPoolExecutor(
             max_workers=min(processes, len(pending)),
-            initializer=_init_worker, initargs=(base, name_to_id, comp_to_ids, original_ids),
+            initializer=_init_worker, initargs=(base, name_to_id, comp_to_ids, original_ids,
+                      solve_time_limit),
         ) as pool:
             futures = [pool.submit(_essential_worker, i, task) for i, task in pending]
             by_index = dict(pending)
