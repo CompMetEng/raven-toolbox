@@ -34,23 +34,23 @@ from raven_toolbox.binaries import _sha256
 # manifest with `python scripts/make_registry_snippet.py sync` (never hand-edit).
 _DATA_REGISTRY: dict = {
     "kegg": {
-        "version": "kegg118",
+        "version": "kegg120",
         "files": {
-            "kegg118_core.tar.gz": {
-                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_core.tar.gz",
-                "sha256": "520ba8bb09d6ca479ca1ab84ea70bf7c1d7f82d8f6406b717cee293b7c8609ca",
+            "kegg120_core.tar.gz": {
+                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg120/kegg120_core.tar.gz",
+                "sha256": "d988ba2901e12ab3ddf7e1b6dfcdd0336475a8d6050102af5409762c5129d27d",
             },
-            "kegg118_eukaryotes.hmm.gz": {
-                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_eukaryotes.hmm.gz",
-                "sha256": "05999a38f3a1a5186d19d4e415f5029c33af56a08edb75190bd98ea19437765a",
+            "kegg120_eukaryotes.hmm.gz": {
+                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg120/kegg120_eukaryotes.hmm.gz",
+                "sha256": "aa8293ca155221148cb5afe86d6598cec0f8643aa274f1e2bc2b85435ef7669d",
             },
-            "kegg118_prokaryotes.hmm.gz": {
-                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_prokaryotes.hmm.gz",
-                "sha256": "ff9f25389e4c9c1cd58c13ee8d48d68a23152d04761d2e5875a9b5de8051b7b4",
+            "kegg120_prokaryotes.hmm.gz": {
+                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg120/kegg120_prokaryotes.hmm.gz",
+                "sha256": "f0f37c14678da9b48c3f065b97d05294a2fe010266cf1310ec8f1b5520a0ec80",
             },
-            "kegg118_taxonomy.gz": {
-                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg118/kegg118_taxonomy.gz",
-                "sha256": "5499c9537ac2697592dd1b484f309027509472e25a9d39d925dc581b9eef46e2",
+            "kegg120_taxonomy.gz": {
+                "url": "https://github.com/CompMetEng/toolbox-assets/releases/download/kegg120/kegg120_taxonomy.gz",
+                "sha256": "bde8266dcebdfb22229255211f5ec73a91196e5d4f11cac5684c8e7b1001fd67",
             },
         },
     },

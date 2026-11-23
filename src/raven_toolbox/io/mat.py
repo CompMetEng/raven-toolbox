@@ -217,7 +217,8 @@ def _model_struct(model: cobra.Model) -> dict:
     rxns = list(model.reactions)
     mets = list(model.metabolites)
     genes = list(model.genes)
-    comps = list(model.compartments)
+    # cobra lists the compartments in the order in which the metabolites first mention them.
+    comps = sorted(model.compartments)
     meta = get_model_metadata(model)
 
     struct: dict = {}

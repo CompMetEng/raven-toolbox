@@ -12,8 +12,9 @@ Individual reduction modes (each acts in place):
   model (exchange reactions are opened by default), found by FVA (minimum and maximum flux both
   zero); RAVEN ``deleteMinMax``. It also removes blocked reactions that are not topological
   dead ends.
-* ``remove_duplicate_reactions``: removes all but one of each set of reactions with identical
-  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``deleteDuplicates``
+* ``contract_model``: removes all but one of each set of reactions with identical
+  stoichiometry and reversibility (bounds merged to the widest); RAVEN ``contractModel`` and
+  the ``deleteDuplicates`` mode of ``simplifyModel``
   (detection only: ``find_duplicate_reactions``).
 * ``constrain_reversible_reactions``: does not remove reactions; it tightens bounds and makes
   reversible reactions that can only carry flux in one direction irreversible (by FVA); RAVEN
@@ -190,12 +191,12 @@ def remove_no_flux_reactions(
     return blocked
 
 
-def _signature(rxn, met_index: dict[str, int]):
-    """Stoichiometry (reversible reactions written in the ``sort_model`` direction) and
-    reversibility, as RAVEN ``contractModel`` compares reactions."""
+def _signature(rxn, met_index: dict[str, int], dist_reverse: bool = True):
+    """Stoichiometry (reversible reactions written in the ``sort_model`` direction) and, with
+    ``dist_reverse``, reversibility, as RAVEN ``contractModel`` compares reactions."""
     sign = reversible_orientation(rxn, met_index)
     mets = frozenset((m.id, sign * c) for m, c in rxn.metabolites.items())
-    return (mets, rxn.reversibility)
+    return (mets, rxn.reversibility) if dist_reverse else (mets,)
 
 
 def _stoich_signature(rxn, *, ignore_direction: bool) -> frozenset:
@@ -220,7 +221,7 @@ def find_duplicate_reactions(
 ) -> list[list[cobra.Reaction]]:
     """Return groups of reactions that share identical stoichiometry.
 
-    This is the detection-only counterpart to :func:`remove_duplicate_reactions`.
+    This is the detection-only counterpart to :func:`contract_model`.
     Only the stoichiometry is compared; bounds, objective coefficients, GPRs and annotations
     are ignored, as in yeast-GEM ``findDuplicatedRxns``. The groups are reactions that could
     be merged.
@@ -247,15 +248,16 @@ def find_duplicate_reactions(
     return [g for g in groups.values() if len(g) >= 2]
 
 
-def remove_duplicate_reactions(
+def contract_model(
     model: cobra.Model,
     *,
+    dist_reverse: bool = True,
     restrict_to_metabolites: Iterable[cobra.Metabolite] | None = None,
 ) -> list[str]:
-    """Remove all but one of each set of duplicate reactions.
+    """Contract a model by merging identical reactions (RAVEN ``contractModel``).
 
-    Reactions are duplicates when they have identical stoichiometry and the same
-    reversibility, as in RAVEN ``contractModel``: reversible reactions are compared in the
+    Reactions are duplicates when they have identical stoichiometry and, with ``dist_reverse``,
+    the same reversibility, as in RAVEN ``contractModel``: reversible reactions are compared in the
     direction ``sort_model(sort_reversible=True)`` gives them, so ``A <=> B`` and ``B <=> A``
     are duplicates. Bounds and objective coefficients may differ; the survivor takes the
     lowest lower bound, the highest upper bound and the highest objective coefficient of its
@@ -269,13 +271,18 @@ def remove_duplicate_reactions(
     in ``contractModel``; an isozyme recorded on another duplicate is therefore kept.
     If every reaction in the set has an ``_EXP_<digits>`` suffix
     (the naming of :func:`~raven_toolbox.manipulation.expand.expand_model`), the suffix is removed
-    from the id of the survivor, so that ``expand_model`` followed by ``remove_duplicate_reactions``
+    from the id of the survivor, so that ``expand_model`` followed by ``contract_model``
     restores the original reaction id.
 
     Parameters
     ----------
     model : cobra.Model
         Model modified in place.
+    dist_reverse : bool
+        ``True`` (default) treats reactions with the same metabolites and a different
+        reversibility as different reactions. ``False`` compares the stoichiometry only, so an
+        irreversible and a reversible reaction with the same metabolites are duplicates, as with
+        ``distReverse=false`` in ``contractModel``.
     restrict_to_metabolites:
         If given, only reactions that contain at least one of these metabolites
         are checked for duplicates; every other reaction is left unchanged even
@@ -289,7 +296,8 @@ def remove_duplicate_reactions(
     met_index = {m.id: i for i, m in enumerate(model.metabolites)}
     groups: dict = {}
     for i, rxn in enumerate(model.reactions):
-        key = _signature(rxn, met_index) if touching is None or rxn in touching else (object(), i)
+        key = (_signature(rxn, met_index, dist_reverse)
+               if touching is None or rxn in touching else (object(), i))
         groups.setdefault(key, []).append(rxn)
 
     removed: list[str] = []
@@ -552,7 +560,7 @@ def simplify_model(
     delete_no_flux : bool
         Run :func:`remove_no_flux_reactions`. The default is ``False``.
     delete_duplicates : bool
-        Run :func:`remove_duplicate_reactions` on the whole model. The default is ``False``.
+        Run :func:`contract_model` on the whole model. The default is ``False``.
     group_linear : bool
         Run :func:`group_linear_reactions`, which clears all gene-reaction rules and removes all
         genes. The default is ``False``.
@@ -567,7 +575,7 @@ def simplify_model(
         Passed to the no-flux mode. The default is ``True``.
     """
     if delete_duplicates:
-        remove_duplicate_reactions(model)
+        contract_model(model)
     if delete_zero_interval:
         remove_zero_interval_reactions(model, reserved=reserved)
     if delete_dead_end:

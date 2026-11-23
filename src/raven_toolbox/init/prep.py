@@ -262,6 +262,7 @@ def prep_init_model(
     scale: bool = True,
     verbose: bool = False,
     processes: int = 1,
+    solve_time_limit: float | None = None,
 ) -> PrepData:
     """Build :class:`PrepData` from a template model, the work done once per template.
 
@@ -333,6 +334,10 @@ def prep_init_model(
     processes : int
         Keyword-only; default 1. Number of processes for the task-essential discovery across
         tasks; see :func:`find_task_essential_reactions`.
+    solve_time_limit : float or None
+        Keyword-only; default ``None``. Time limit in seconds for each solve of the
+        task-essential discovery, which ``time_limit`` of the ftINIT steps does not cover; see
+        :func:`find_task_essential_reactions`.
     """
     if tasks is not None:
         tasks = list(tasks)
@@ -394,7 +399,8 @@ def prep_init_model(
             print(f"[prep] finding task-essential reactions ({len(tasks)} task(s))", flush=True)
         ess = find_task_essential_reactions(ref_model, tasks, close_boundaries=True,
                                             cache_path=essential_cache_path, verbose=verbose,
-                                            processes=processes)
+                                            processes=processes,
+                                            solve_time_limit=solve_time_limit)
         essential_pre = ess.reactions
         task_mets = ess.task_metabolites
         failed_positions = set(ess.failed_indices)

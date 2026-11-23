@@ -130,9 +130,28 @@ def test_flagged_subunit_stays_beside_a_complete_isozyme_branch():
     assert _policy_draft("A or (B and C)", ["A", "C"], "keep") == {"R1": "nA or nC"}
 
 
-def test_complex_policy_drop_removes_reaction_with_any_flagged_subunit():
-    assert _policy_draft("A or (B and C)", ["A", "C"], "drop") == {}
-    assert _policy_draft("(A and B) or C", ["C"], "drop") == {}
+def test_complex_policy_drop_removes_each_complex_with_a_flagged_subunit():
+    assert _policy_draft("A or (B and C)", ["A", "C"], "drop") == {"R1": "nA"}
+    assert _policy_draft("(A and B) or C", ["C"], "drop") == {"R1": "nC"}
+    assert _policy_draft("A and B", ["A"], "drop") == {}
+    assert _policy_draft("(A and B) or (C and D)", ["A", "C", "D"], "drop") == {"R1": "nC and nD"}
+
+
+def test_complex_policy_drop_keeps_complete_complexes_of_a_shared_subunit():
+    rule = "(A and B) or (A and C) or (D and E) or (A and B and F)"
+    assert _policy_draft(rule, ["A", "B", "C", "D", "F"], "drop") == {
+        "R1": "(nA and nB) or (nA and nC) or (nA and nB and nF)"}
+    assert _policy_draft("(A and B) or B", ["B"], "drop") == {"R1": "nB"}
+    assert _policy_draft("(A and B) or B", ["A", "B"], "drop") == {"R1": "(nA and nB) or nB"}
+
+
+def test_complex_policy_drop_keeps_isozyme_groups_inside_a_complex():
+    hits = make_ortholog_hits([("A", "n1"), ("A", "n2"), ("B", "n3")], "T", "N")
+    draft = get_model_from_homology([_one_rule_template("T", "R1", "A and B")], hits, "N", complex_policy="drop")
+    assert _rules(draft) == {"R1": "(n1 or n2) and n3"}
+
+
+def test_complex_policy_flag_and_keep_on_an_incomplete_complex_beside_an_isozyme():
     assert _policy_draft("(A and B) or C", ["C"], "flag") == {"R1": "(OLD_T_A and OLD_T_B) or nC"}
     assert _policy_draft("(A and B) or C", ["C"], "keep") == {"R1": "nC"}
 
@@ -253,7 +272,7 @@ def test_preferred_order_without_shared_genes_merges_in_given_order():
     assert plain["R1"] == "N1"
 
 
-def test_preferred_order_keeps_a_reaction_that_survives_without_the_removed_gene():
+def test_preferred_order_retains_the_orphan_subunit_of_a_complex():
     t1 = _one_rule_template("T1", "R_T1", "Y")
     t2 = _one_rule_template("T2", "R_T2", "X or Z")
     add_reactions_from_equations(t2, [{"id": "R_T3", "equation": "b_c --> a_c", "gene_reaction_rule": "X and Z"}])
@@ -262,8 +281,55 @@ def test_preferred_order_keeps_a_reaction_that_survives_without_the_removed_gene
          make_ortholog_hits([("X", "N1"), ("Z", "N3")], "T2", "N")],
         ignore_index=True,
     )
+    flag = get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"])
+    assert _rules(flag) == {"R_T1": "N1", "R_T2": "N3", "R_T3": "OLD_T2_X and N3"}
+    keep = get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"], complex_policy="keep")
+    assert _rules(keep) == {"R_T1": "N1", "R_T2": "N3", "R_T3": "N3"}
+    drop = get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"], complex_policy="drop")
+    assert _rules(drop) == {"R_T1": "N1", "R_T2": "N3"}
+
+
+def test_preferred_order_follows_the_policy_for_a_taken_gene_in_a_complex_beside_an_isozyme():
+    t1 = _one_rule_template("T1", "R_T1", "Y")
+    t2 = _one_rule_template("T2", "R_T2", "(a and b) or x")
+    hits = pd.concat(
+        [make_ortholog_hits([("Y", "N1")], "T1", "N"),
+         make_ortholog_hits([("a", "N1"), ("b", "Nb"), ("x", "Nx")], "T2", "N")],
+        ignore_index=True,
+    )
+    rules = {
+        policy: _rules(get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"],
+                                               complex_policy=policy))["R_T2"]
+        for policy in ("flag", "keep", "drop")
+    }
+    assert rules == {"flag": "(OLD_T2_a and Nb) or Nx", "keep": "Nb or Nx", "drop": "Nx"}
+
+
+def test_preferred_order_chains_the_conflicts_of_three_templates():
+    t1 = _one_rule_template("T1", "R_T1", "Y")
+    t2 = _one_rule_template("T2", "R_T2", "X")
+    t3 = _one_rule_template("T3", "R_T3", "(p and q) or r")
+    hits = pd.concat(
+        [make_ortholog_hits([("Y", "N1")], "T1", "N"), make_ortholog_hits([("X", "N2")], "T2", "N"),
+         make_ortholog_hits([("p", "N1"), ("q", "N2"), ("r", "N3")], "T3", "N")],
+        ignore_index=True,
+    )
+    flag = get_model_from_homology([t1, t2, t3], hits, "N", preferred_order=["T1", "T2", "T3"])
+    assert _rules(flag)["R_T3"] == "(OLD_T3_p and OLD_T3_q) or N3"
+    keep = get_model_from_homology([t1, t2, t3], hits, "N", preferred_order=["T1", "T2", "T3"],
+                                   complex_policy="keep")
+    assert _rules(keep)["R_T3"] == "N3"
+
+
+def test_preferred_order_does_not_transfer_a_reaction_whose_genes_were_all_taken():
+    t1 = _one_rule_template("T1", "R_T1", "Y")
+    t2 = _one_rule_template("T2", "R_T2", "a and b")
+    hits = pd.concat(
+        [make_ortholog_hits([("Y", "N1")], "T1", "N"), make_ortholog_hits([("a", "N1")], "T2", "N")],
+        ignore_index=True,
+    )
     res = get_model_from_homology([t1, t2], hits, "N", preferred_order=["T1", "T2"])
-    assert _rules(res) == {"R_T1": "N1", "R_T2": "N3"}  # R_T3 needs the removed X
+    assert _rules(res) == {"R_T1": "N1"}
 
 
 # --- gene-free reactions, notes, duplicate genes, metadata ------------------------

@@ -109,7 +109,7 @@ jobs:
       # fixtures here, and it gives the cross-solver check a second solver to
       # compare against. Genome-scale work runs in parity-nightly.yml, which
       # uses a WLS licence.
-      - run: pip install -e ".[dev]" gurobipy
+      - run: pip install -e ".[dev,excel]" gurobipy
       # -rs reports what skipped: oracle-backed checks skip until someone runs
       # scripts/parity/generate_oracles.m in MATLAB, and that should be visible
       # in the log rather than looking like coverage that exists.

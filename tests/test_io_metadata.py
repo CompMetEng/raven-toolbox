@@ -87,7 +87,16 @@ def test_notes_version_wins_over_metadata_version(model, tmp_path):
     assert get_model_metadata(read_yaml_model(tmp_path / "m.yml"))["version"] == "2.0.0"
 
 
-def test_export_for_git_stamps_sbml_too(model, tmp_path):
-    root = export_for_git(model, tmp_path, prefix="m", formats=("xml",), version="2.0.0", date="2026-10-06")
+def test_export_for_git_stamps_sbml_on_request(model, tmp_path):
+    root = export_for_git(
+        model, tmp_path, prefix="m", formats=("xml",), version="2.0.0", date="2026-10-06",
+        model_version_in_sbml=True,
+    )
     xml = (root / "xml" / "m.xml").read_text()
     assert "2.0.0" in xml and "2026-10-06" in xml
+
+
+def test_export_for_git_leaves_version_and_date_out_of_sbml_by_default(model, tmp_path):
+    root = export_for_git(model, tmp_path, prefix="m", formats=("xml",), version="2.0.0", date="2026-10-06")
+    xml = (root / "xml" / "m.xml").read_text()
+    assert "2.0.0" not in xml and "2026-10-06" not in xml
