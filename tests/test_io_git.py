@@ -1,4 +1,5 @@
 """Tests for raven_toolbox.io.git (exportForGit port)."""
+import re
 from pathlib import Path
 
 import cobra
@@ -6,7 +7,7 @@ import libsbml
 import pytest
 from cobra.core import Group
 
-from raven_toolbox.io import export_for_git, read_matlab_model, set_model_metadata
+from raven_toolbox.io import export_for_git, read_matlab_model, read_yaml_model, set_model_metadata
 from raven_toolbox.io.git import _for_sbml
 from raven_toolbox.manipulation import add_reactions_from_equations
 
@@ -245,6 +246,50 @@ def test_sbml_members_of_an_existing_group_follow_the_reaction_order(tmp_path):
     m.add_groups([group])
     export_for_git(m, tmp_path, prefix="m", formats=("xml",), sub_dirs=False)
     assert _group_members(tmp_path / "m.xml") == {"Preset": ["R_R1", "R_R2", "G_g1"]}
+
+
+def _annotation_keys(path, reaction_id):
+    doc = libsbml.readSBMLFromFile(str(path))
+    xml = doc.getModel().getReaction(f"R_{reaction_id}").getAnnotationString()
+    keys = []
+    for key in re.findall(r'identifiers\.org/([^/"]+)/', xml):
+        if key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _annotated_model():
+    m = cobra.Model("annotatedGEM", name="annotated model")
+    m.compartments = {"c": "cytoplasm"}
+    m.add_metabolites([cobra.Metabolite("a_c", compartment="c"), cobra.Metabolite("b_c", compartment="c")])
+    add_reactions_from_equations(m, [{"id": "R1", "equation": "a_c <=> b_c"}])
+    r1 = m.reactions.R1
+    r1.annotation["kegg.reaction"] = "R00001"
+    r1.annotation["biocyc"] = "META:RXN-1"
+    r1.annotation["ec-code"] = ["1.1.1.1", "1.1.1.2"]
+    a_c = m.metabolites.a_c
+    a_c.annotation["kegg.compound"] = "C00001"
+    a_c.annotation["chebi"] = "CHEBI:15377"
+    return m
+
+
+def test_sbml_annotation_has_the_ec_code_first_and_the_other_keys_sorted(tmp_path):
+    """RAVEN's exportModel writes model.eccodes before rxnMiriams; cobra writes the keys of an annotation
+    in the order of its dict, which depends on the order in which they were added."""
+    m = _annotated_model()
+    export_for_git(m, tmp_path, prefix="m", formats=("xml",), sub_dirs=False)
+    assert _annotation_keys(tmp_path / "m.xml", "R1") == ["ec-code", "biocyc", "kegg.reaction"]
+    assert list(m.reactions.R1.annotation) == ["kegg.reaction", "biocyc", "ec-code"]
+    assert list(m.metabolites.a_c.annotation) == ["kegg.compound", "chebi"]
+
+
+def test_sbml_file_is_the_same_when_written_from_the_yaml_file(tmp_path):
+    """The YAML file lists the annotation keys sorted, so a model read back from it has them in another
+    order than the model that was exported."""
+    export_for_git(_annotated_model(), tmp_path / "a", prefix="m", formats=("yml", "xml"), sub_dirs=False)
+    back = read_yaml_model(tmp_path / "a" / "m.yml")
+    export_for_git(back, tmp_path / "b", prefix="m", formats=("xml",), sub_dirs=False)
+    assert (tmp_path / "a" / "m.xml").read_text() == (tmp_path / "b" / "m.xml").read_text()
 
 
 def test_sbml_exposes_the_model_note():

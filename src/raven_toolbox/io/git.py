@@ -65,6 +65,19 @@ def _sbml_id(identifier: str) -> str:
     return _SBML_ID_UNSAFE.sub(lambda match: f"__{ord(match.group())}__", identifier)
 
 
+def _annotation_order(annotation: dict) -> dict:
+    """``annotation`` with ``ec-code`` first and the other keys sorted.
+
+    RAVEN's exportModel writes the EC numbers of a reaction (``eccodes``) before its other
+    annotations (``rxnMiriams``), and the YAML file lists the other keys sorted. cobra writes the
+    keys of an annotation in the order of its dict.
+    """
+    keys = sorted(annotation)
+    if "ec-code" in annotation:
+        keys = ["ec-code", *(key for key in keys if key != "ec-code")]
+    return {key: annotation[key] for key in keys}
+
+
 def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
 
@@ -79,8 +92,10 @@ def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model
 
     The model id is escaped as in RAVEN's exportModel, each gene gets the SBO term
     ``SBO:0000243`` unless it has one of its own, and the protein of a gene leaves the gene's
-    notes because :func:`_write_sbml` writes it as ``fbc:name``. The model version and date
-    become notes only with ``model_version``, because RAVEN's exportModel writes neither.
+    notes because :func:`_write_sbml` writes it as ``fbc:name``. The annotation of each
+    metabolite, reaction and gene is ordered by :func:`_annotation_order`, so the file does not
+    depend on the order in which the keys were added. The model version and date become notes
+    only with ``model_version``, because RAVEN's exportModel writes neither.
 
     The model passed in is not changed.
     """
@@ -153,6 +168,12 @@ def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model
             groups.append(group)
         if groups:
             out.add_groups(groups)
+
+    # A new dict for each element: model.copy() shares the annotation dicts of the metabolites
+    # and genes with the original.
+    for element in (*out.metabolites, *out.reactions, *out.genes):
+        if element.annotation:
+            element.annotation = _annotation_order(element.annotation)
 
     return out
 

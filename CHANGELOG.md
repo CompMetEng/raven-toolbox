@@ -5,6 +5,7 @@
 ### Model I/O
 
 * The SBML file of `export_for_git` lists the members of each group in the order of the reactions, as RAVEN's `exportModel` does (was: in an order that changed from one Python process to the next, because cobra keeps the members of a group in a set).
+* The SBML file of `export_for_git` lists the annotations of each metabolite, reaction and gene with `ec-code` first and the other keys sorted, as RAVEN's `exportModel` does for a model whose annotations are sorted (was: in the order in which the keys were added to the annotation, so the file written from a model differed from the file written from its own YAML file read back).
 
 ## 3.0.0b3 (2026-11-22)
 
