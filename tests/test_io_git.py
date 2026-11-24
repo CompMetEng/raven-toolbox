@@ -238,14 +238,20 @@ def test_sbml_group_members_follow_the_reaction_order(tmp_path):
 
 
 def test_sbml_members_of_an_existing_group_follow_the_reaction_order(tmp_path):
-    """A gene member goes after the reactions, sorted by id."""
-    m = _sbml_model()
-    m.reactions.R1.gene_reaction_rule = "g1"
-    group = Group(id="g1", name="Preset", kind="partonomy")
-    group.add_members([m.genes.g1, m.reactions.R2, m.reactions.R1])
+    """A member that is not a reaction, here a gene, goes after the reactions, sorted by id."""
+    m = cobra.Model("presetGEM")
+    m.compartments = {"c": "cytoplasm"}
+    met = cobra.Metabolite("a_c", compartment="c")
+    reactions = [cobra.Reaction(f"R{i:02d}") for i in range(40)]
+    m.add_reactions(reactions)
+    for rxn in reactions:
+        rxn.add_metabolites({met: -1})
+    reactions[0].gene_reaction_rule = "g2 or g1"
+    group = Group(id="preset", name="Preset", kind="partonomy")
+    group.add_members([m.genes.g2, m.genes.g1, *reversed(reactions)])
     m.add_groups([group])
     export_for_git(m, tmp_path, prefix="m", formats=("xml",), sub_dirs=False)
-    assert _group_members(tmp_path / "m.xml") == {"Preset": ["R_R1", "R_R2", "G_g1"]}
+    assert _group_members(tmp_path / "m.xml") == {"Preset": [f"R_{r.id}" for r in reactions] + ["G_g1", "G_g2"]}
 
 
 def _annotation_keys(path, reaction_id):
