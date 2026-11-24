@@ -211,6 +211,42 @@ def test_sbml_keeps_existing_groups():
     assert [g.name for g in shaped.groups] == ["Preset"]
 
 
+def _group_members(path):
+    doc = libsbml.readSBMLFromFile(str(path))
+    groups = doc.getModel().getPlugin("groups").getListOfGroups()
+    return {g.getName(): [m.getIdRef() for m in g.getListOfMembers()] for g in groups}
+
+
+def test_sbml_group_members_follow_the_reaction_order(tmp_path):
+    """cobra keeps the members of a group in a set of objects hashed by identity, so the order it writes
+    changes from one process to the next. RAVEN's exportModel writes them in the order of the reactions."""
+    m = cobra.Model("groupGEM")
+    m.compartments = {"c": "cytoplasm"}
+    met = cobra.Metabolite("a_c", compartment="c")
+    reactions = [cobra.Reaction(f"R{i:03d}") for i in range(200)]
+    m.add_reactions(reactions)
+    for i, rxn in enumerate(reactions):
+        rxn.add_metabolites({met: -1})
+        rxn.subsystem = ["Transport"] if i % 2 else ["Transport", "Glycolysis"]
+    export_for_git(m, tmp_path, prefix="m", formats=("xml",), sub_dirs=False)
+    order = [f"R_{r.id}" for r in m.reactions]
+    assert _group_members(tmp_path / "m.xml") == {
+        "Transport": order,
+        "Glycolysis": [r for i, r in enumerate(order) if not i % 2],
+    }
+
+
+def test_sbml_members_of_an_existing_group_follow_the_reaction_order(tmp_path):
+    """A gene member goes after the reactions, sorted by id."""
+    m = _sbml_model()
+    m.reactions.R1.gene_reaction_rule = "g1"
+    group = Group(id="g1", name="Preset", kind="partonomy")
+    group.add_members([m.genes.g1, m.reactions.R2, m.reactions.R1])
+    m.add_groups([group])
+    export_for_git(m, tmp_path, prefix="m", formats=("xml",), sub_dirs=False)
+    assert _group_members(tmp_path / "m.xml") == {"Preset": ["R_R1", "R_R2", "G_g1"]}
+
+
 def test_sbml_exposes_the_model_note():
     """RAVEN reads annotation.note; cobra only writes what is in model.notes."""
     m = _sbml_model()

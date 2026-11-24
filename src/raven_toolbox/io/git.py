@@ -172,6 +172,30 @@ def _sort_sbml_compartments(sbml_model: libsbml.Model) -> None:
         sbml_model.addCompartment(compartment)
 
 
+def _sort_group_members(sbml_model: libsbml.Model) -> None:
+    """Order the members of each group of ``sbml_model`` as the reactions of the model.
+
+    cobra keeps the members of a group in a set of objects hashed by identity, so the order in
+    which it writes them changes from one Python process to the next. RAVEN's exportModel
+    writes them in the order of the reactions. A member that is not a reaction goes after the
+    reactions, sorted by id.
+    """
+    groups = sbml_model.getPlugin("groups")
+    if groups is None:
+        return
+    position = {reaction.getId(): i for i, reaction in enumerate(sbml_model.getListOfReactions())}
+    for group in groups.getListOfGroups():
+        listed = group.getListOfMembers()
+        members = sorted(
+            (listed.get(i).clone() for i in range(listed.size())),
+            key=lambda member: (position.get(member.getIdRef(), len(position)), member.getIdRef()),
+        )
+        while listed.size():
+            listed.remove(0)
+        for member in members:
+            listed.append(member)
+
+
 def _write_model_notes(sbml_model: libsbml.Model, notes: dict[str, str]) -> None:
     """Write the model notes the way RAVEN's exportModel and importModel handle them.
 
@@ -205,8 +229,9 @@ def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) 
     gene short name, or the gene id when there is none, goes into fbc:label, from which
     importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
     does not change what cobra reads back. The compartments are ordered by id, as in
-    RAVEN's sortIdentifiers. The model notes are written by :func:`_write_model_notes`; the
-    model version and date are notes only with ``model_version``.
+    RAVEN's sortIdentifiers, and the members of each group as the reactions
+    (:func:`_sort_group_members`). The model notes are written by :func:`_write_model_notes`;
+    the model version and date are notes only with ``model_version``.
     """
     shaped = _for_sbml(model, model_version=model_version)
     notes = dict(shaped.notes or {})
@@ -229,6 +254,7 @@ def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) 
         else:
             product.unsetName()
     _sort_sbml_compartments(sbml_model)
+    _sort_group_members(sbml_model)
     libsbml.writeSBMLToFile(doc, str(path))
 
 
