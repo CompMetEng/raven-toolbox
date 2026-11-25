@@ -65,6 +65,19 @@ def _sbml_id(identifier: str) -> str:
     return _SBML_ID_UNSAFE.sub(lambda match: f"__{ord(match.group())}__", identifier)
 
 
+def _annotation_order(annotation: dict) -> dict:
+    """``annotation`` with ``ec-code`` first and the other keys sorted.
+
+    RAVEN's exportModel writes the EC numbers of a reaction (``eccodes``) before its other
+    annotations (``rxnMiriams``), and the YAML file lists the other keys sorted. cobra writes the
+    keys of an annotation in the order of its dict.
+    """
+    keys = sorted(annotation)
+    if "ec-code" in annotation:
+        keys = ["ec-code", *(key for key in keys if key != "ec-code")]
+    return {key: annotation[key] for key in keys}
+
+
 def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model:
     """A copy of ``model`` shaped so RAVEN's importModel finds everything.
 
@@ -79,8 +92,10 @@ def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model
 
     The model id is escaped as in RAVEN's exportModel, each gene gets the SBO term
     ``SBO:0000243`` unless it has one of its own, and the protein of a gene leaves the gene's
-    notes because :func:`_write_sbml` writes it as ``fbc:name``. The model version and date
-    become notes only with ``model_version``, because RAVEN's exportModel writes neither.
+    notes because :func:`_write_sbml` writes it as ``fbc:name``. The annotation of each
+    metabolite, reaction and gene is ordered by :func:`_annotation_order`, so the file does not
+    depend on the order in which the keys were added. The model version and date become notes
+    only with ``model_version``, because RAVEN's exportModel writes neither.
 
     The model passed in is not changed.
     """
@@ -154,6 +169,12 @@ def _for_sbml(model: cobra.Model, *, model_version: bool = False) -> cobra.Model
         if groups:
             out.add_groups(groups)
 
+    # A new dict for each element: model.copy() shares the annotation dicts of the metabolites
+    # and genes with the original.
+    for element in (*out.metabolites, *out.reactions, *out.genes):
+        if element.annotation:
+            element.annotation = _annotation_order(element.annotation)
+
     return out
 
 
@@ -170,6 +191,30 @@ def _sort_sbml_compartments(sbml_model: libsbml.Model) -> None:
         sbml_model.removeCompartment(0)
     for compartment in compartments:
         sbml_model.addCompartment(compartment)
+
+
+def _sort_group_members(sbml_model: libsbml.Model) -> None:
+    """Order the members of each group of ``sbml_model`` as the reactions of the model.
+
+    cobra keeps the members of a group in a set of objects hashed by identity, so the order in
+    which it writes them changes from one Python process to the next. RAVEN's exportModel
+    writes them in the order of the reactions. A member that is not a reaction goes after the
+    reactions, sorted by id.
+    """
+    groups = sbml_model.getPlugin("groups")
+    if groups is None:
+        return
+    position = {reaction.getId(): i for i, reaction in enumerate(sbml_model.getListOfReactions())}
+    for group in groups.getListOfGroups():
+        listed = group.getListOfMembers()
+        members = sorted(
+            (listed.get(i).clone() for i in range(listed.size())),
+            key=lambda member: (position.get(member.getIdRef(), len(position)), member.getIdRef()),
+        )
+        while listed.size():
+            listed.remove(0)
+        for member in members:
+            listed.append(member)
 
 
 def _write_model_notes(sbml_model: libsbml.Model, notes: dict[str, str]) -> None:
@@ -205,8 +250,9 @@ def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) 
     gene short name, or the gene id when there is none, goes into fbc:label, from which
     importModel reads geneShortNames; cobra reads gene names from fbc:name, so the label
     does not change what cobra reads back. The compartments are ordered by id, as in
-    RAVEN's sortIdentifiers. The model notes are written by :func:`_write_model_notes`; the
-    model version and date are notes only with ``model_version``.
+    RAVEN's sortIdentifiers, and the members of each group as the reactions
+    (:func:`_sort_group_members`). The model notes are written by :func:`_write_model_notes`;
+    the model version and date are notes only with ``model_version``.
     """
     shaped = _for_sbml(model, model_version=model_version)
     notes = dict(shaped.notes or {})
@@ -229,6 +275,7 @@ def _write_sbml(model: cobra.Model, path: Path, *, model_version: bool = False) 
         else:
             product.unsetName()
     _sort_sbml_compartments(sbml_model)
+    _sort_group_members(sbml_model)
     libsbml.writeSBMLToFile(doc, str(path))
 
 
